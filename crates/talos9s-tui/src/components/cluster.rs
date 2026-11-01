@@ -266,6 +266,14 @@ fn offline_version(node: &str) -> VersionInfo {
     }
 }
 
+/// Each member's first address, by hostname
+fn node_ips_of(members: &[DiscoveryMember]) -> HashMap<String, String> {
+    members
+        .iter()
+        .filter_map(|m| Some((m.hostname.clone(), m.addresses.first()?.clone())))
+        .collect()
+}
+
 /// A per-node answer from the Talos API, named by the node it came from
 trait FromNode {
     fn node(&self) -> &str;
@@ -460,12 +468,10 @@ impl ClusterData {
         };
         match members {
             Ok(members) => {
-                cluster.node_ips.clear();
-                for member in &members {
-                    if let Some(ip) = member.ip_address() {
-                        cluster.node_ips.insert(member.hostname.clone(), ip);
-                    }
-                }
+                cluster.node_ips = members
+                    .iter()
+                    .filter_map(|m| Some((m.hostname.clone(), m.ip_address()?)))
+                    .collect();
                 cluster.etcd_members = members;
             }
             Err(e) => {
@@ -493,12 +499,7 @@ impl ClusterData {
                 let started = std::time::Instant::now();
                 prefer_reachable_addresses(&client, &mut members, &cluster.known_good_ips()).await;
                 tracing::debug!("{}: address probe in {:?}", cluster.name, started.elapsed());
-                cluster.node_ips.clear();
-                for member in &members {
-                    if let Some(ip) = member.addresses.first() {
-                        cluster.node_ips.insert(member.hostname.clone(), ip.clone());
-                    }
-                }
+                cluster.node_ips = node_ips_of(&members);
                 cluster.discovery_members = members;
                 cluster.discovery_warning = None;
             }
@@ -527,16 +528,7 @@ impl ClusterData {
                     // etcd membership alone would leave the list control-plane-only.
                     // Prefer an etcd member IP (a real control plane node) for the
                     // kubeconfig fetch; fall back to the configured endpoint IP.
-                    let cp_ip = cluster
-                        .etcd_members
-                        .iter()
-                        .find_map(|m| m.ip_address())
-                        .or_else(|| {
-                            cluster
-                                .endpoints
-                                .first()
-                                .map(|e| talos_rs::host_of(e).to_string())
-                        });
+                    let cp_ip = cluster.control_plane_ip();
 
                     match cp_ip {
                         Some(cp_ip) => {
@@ -548,14 +540,7 @@ impl ClusterData {
                                         &cluster.known_good_ips(),
                                     )
                                     .await;
-                                    cluster.node_ips.clear();
-                                    for member in &members {
-                                        if let Some(ip) = member.addresses.first() {
-                                            cluster
-                                                .node_ips
-                                                .insert(member.hostname.clone(), ip.clone());
-                                        }
-                                    }
+                                    cluster.node_ips = node_ips_of(&members);
                                     let count = members.len();
                                     cluster.discovery_members = members;
                                     cluster.discovery_warning = None;
