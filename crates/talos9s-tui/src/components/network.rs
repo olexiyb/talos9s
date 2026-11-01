@@ -102,6 +102,23 @@ fn port_to_service(port: u32) -> Option<&'static str> {
     talos9s_core::network::port_to_service_u32(port)
 }
 
+/// Ports whose LISTEN shows a Kubernetes component is up: all of them on a
+/// control plane node (or when the role isn't known), only the kubelet's
+/// on a worker
+fn service_ports(controlplane: Option<bool>) -> &'static [(&'static str, u16)] {
+    const ALL: [(&str, u16); 5] = [
+        ("API", 6443),
+        ("Etcd", 2379),
+        ("Kubelet", 10250),
+        ("Scheduler", 10259),
+        ("Controller", 10257),
+    ];
+    match controlplane {
+        Some(false) => &ALL[2..3],
+        _ => &ALL,
+    }
+}
+
 /// WireGuard renews a session's handshake every 2 minutes while traffic
 /// flows; well past that the peer has gone quiet
 const HANDSHAKE_STALE_SECS: i64 = 180;
@@ -314,6 +331,8 @@ pub struct NetworkData {
 pub struct NetworkStatsComponent {
     /// Node hostname
     hostname: String,
+    /// Whether the node is a control plane node; `None` when not known
+    controlplane: Option<bool>,
     /// Node address
     address: String,
     /// Talos context of the node's cluster, for talosctl calls
@@ -409,6 +428,12 @@ impl NetworkStatsComponent {
         }
     }
 
+    /// The node's role: a worker runs no API server, etcd, scheduler or
+    /// controller manager, so their ports aren't shown as down
+    pub fn set_controlplane(&mut self, controlplane: Option<bool>) {
+        self.controlplane = controlplane;
+    }
+
     pub fn set_settings(&mut self, settings: NetworkSettings) {
         self.sort_by = settings.sort_by;
         self.conn_sort_by = settings.conn_sort_by;
@@ -423,6 +448,7 @@ impl NetworkStatsComponent {
 
         Self {
             hostname,
+            controlplane: None,
             address,
             talos_context: None,
             config_path: None,
@@ -738,6 +764,10 @@ impl NetworkStatsComponent {
                 }
             }
         }
+
+        // A deleted interface (a pod's veth) keeps no rate in the totals
+        data.rates
+            .retain(|name, _| new_devices.iter().any(|d| &d.name == name));
 
         // Store current as previous for next calculation
         data.prev_devices.clear();
@@ -1304,26 +1334,20 @@ impl NetworkStatsComponent {
 
     /// Draw service health indicators
     fn draw_service_health(&self, frame: &mut Frame, area: Rect) {
-        // Define services with their expected ports
-        let services = [
-            ("API", 6443_u16),
-            ("Etcd", 2379),
-            ("Kubelet", 10250),
-            ("Scheduler", 10259),
-            ("Controller", 10257),
-        ];
-
-        let service_health = self
+        let (service_health, known) = self
             .data()
-            .map(|d| d.service_health.clone())
+            .map(|d| (d.service_health.clone(), !d.connections.is_empty()))
             .unwrap_or_default();
 
         let mut spans = Vec::new();
 
-        for (name, port) in services {
-            let is_healthy = service_health.get(&port).copied().unwrap_or(false);
-            let indicator = if is_healthy { "●" } else { "○" };
-            let color = if is_healthy { Color::Green } else { Color::Red };
+        for &(name, port) in service_ports(self.controlplane) {
+            // No connections read yet: unknown, not down
+            let (indicator, color) = match (known, service_health.get(&port).copied()) {
+                (false, _) => ("?", Color::DarkGray),
+                (true, Some(true)) => ("●", Color::Green),
+                (true, _) => ("○", Color::Red),
+            };
 
             if !spans.is_empty() {
                 spans.push(Span::raw("  "));
@@ -4140,6 +4164,44 @@ mod click_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_interfaces_leave_the_totals() {
+        let dev = |name: &str, rx: u64| NetDevStats {
+            name: name.to_string(),
+            rx_bytes: rx,
+            rx_packets: 0,
+            rx_errors: 0,
+            rx_dropped: 0,
+            tx_bytes: 0,
+            tx_packets: 0,
+            tx_errors: 0,
+            tx_dropped: 0,
+        };
+        let mut net = NetworkStatsComponent::new("n".into(), "10.0.0.1".into());
+        net.state.set_data(NetworkData::default());
+        let sample = |net: &mut NetworkStatsComponent, devices| {
+            net.data_mut().unwrap().last_sample =
+                Some(Instant::now() - std::time::Duration::from_secs(1));
+            net.update_devices(devices);
+        };
+        sample(&mut net, vec![dev("eth0", 0), dev("veth1", 0)]);
+        sample(&mut net, vec![dev("eth0", 1000), dev("veth1", 1000)]);
+        assert!(net.data().unwrap().total_rx_rate > 1500);
+        // veth1 is gone: only eth0 counts
+        sample(&mut net, vec![dev("eth0", 2000)]);
+        let data = net.data().unwrap();
+        assert_eq!(data.rates.len(), 1);
+        assert!(data.total_rx_rate < 1100, "{}", data.total_rx_rate);
+    }
+
+    #[test]
+    fn workers_show_only_the_kubelet_port() {
+        let names = |cp| -> Vec<&str> { service_ports(cp).iter().map(|(n, _)| *n).collect() };
+        assert_eq!(names(Some(false)), ["Kubelet"]);
+        assert_eq!(names(Some(true)).len(), 5);
+        assert_eq!(names(None).len(), 5);
+    }
 
     #[test]
     fn kubespan_handshake_age() {

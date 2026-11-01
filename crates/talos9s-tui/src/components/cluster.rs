@@ -2064,6 +2064,14 @@ impl ClusterComponent {
             .is_some_and(|c| c.is_controlplane(node))
     }
 
+    /// Whether `node` of the active cluster is a control plane node; `None`
+    /// without an active cluster
+    pub fn is_controlplane(&self, node: &str) -> Option<bool> {
+        self.clusters
+            .get(self.active_cluster)
+            .map(|c| c.is_controlplane(node))
+    }
+
     /// How long a node has not been answering, or `None` when it is online
     fn node_offline_for(&self, cluster_idx: usize, node: &str) -> Option<std::time::Duration> {
         self.clusters

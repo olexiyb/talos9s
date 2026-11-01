@@ -2282,8 +2282,9 @@ impl App {
                 );
 
                 // Create network component
-                let mut network = NetworkStatsComponent::new(hostname, address.clone());
+                let mut network = NetworkStatsComponent::new(hostname.clone(), address.clone());
                 network.set_settings(self.network_settings);
+                network.set_controlplane(self.cluster.is_controlplane(&hostname));
 
                 // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
