@@ -1,17 +1,17 @@
-//! talos-pilot: A terminal UI for managing Talos Linux clusters
+//! talos9s: A terminal UI for managing Talos Linux clusters
 
 use clap::Parser;
 use color_eyre::Result;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use talos_pilot_tui::App;
+use talos9s_tui::App;
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, prelude::*};
 
-/// talos-pilot: Terminal UI for Talos Linux clusters
+/// talos9s: Terminal UI for Talos Linux clusters
 #[derive(Parser, Debug)]
-#[command(name = "talos-pilot")]
+#[command(name = "talos9s")]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Talos context to use (from talosconfig)
@@ -26,7 +26,7 @@ struct Cli {
     #[arg(short, long)]
     debug: bool,
 
-    /// Log file path (default: <temp_dir>/talos-pilot-<pid>.log)
+    /// Log file path (default: <temp_dir>/talos9s-<pid>.log)
     #[arg(long)]
     log_file: Option<String>,
 
@@ -83,12 +83,12 @@ async fn main() -> Result<()> {
         .with(filter)
         .init();
 
-    tracing::info!("Starting talos-pilot");
+    tracing::info!("Starting talos9s");
 
     // Validate insecure mode requires endpoint
     if cli.insecure && cli.endpoint.is_none() {
         eprintln!("Error: --insecure requires --endpoint <ip>");
-        eprintln!("Usage: talos-pilot --insecure --endpoint 192.168.1.100");
+        eprintln!("Usage: talos9s --insecure --endpoint 192.168.1.100");
         std::process::exit(1);
     }
 
@@ -135,12 +135,12 @@ fn resolve_log_path(log_file: Option<String>) -> PathBuf {
 }
 
 fn default_log_name(pid: u32) -> String {
-    format!("talos-pilot-{pid}.log")
+    format!("talos9s-{pid}.log")
 }
 
-/// Whether `name` is a default log name (`talos-pilot-<pid>.log`)
+/// Whether `name` is a default log name (`talos9s-<pid>.log`)
 fn is_default_log_name(name: &str) -> bool {
-    name.strip_prefix("talos-pilot-")
+    name.strip_prefix("talos9s-")
         .and_then(|rest| rest.strip_suffix(".log"))
         .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -201,24 +201,24 @@ mod tests {
     #[test]
     fn default_log_path_uses_temp_dir() {
         let path = resolve_log_path(None);
-        let expected = std::env::temp_dir().join(format!("talos-pilot-{}.log", std::process::id()));
+        let expected = std::env::temp_dir().join(format!("talos9s-{}.log", std::process::id()));
         assert_eq!(path, expected);
     }
 
     #[test]
     fn recognises_default_log_names() {
         assert!(is_default_log_name(&default_log_name(86727)));
-        assert!(!is_default_log_name("talos-pilot.log"));
-        assert!(!is_default_log_name("talos-pilot-.log"));
-        assert!(!is_default_log_name("talos-pilot-12x.log"));
+        assert!(!is_default_log_name("talos9s.log"));
+        assert!(!is_default_log_name("talos9s-.log"));
+        assert!(!is_default_log_name("talos9s-12x.log"));
         assert!(!is_default_log_name("other-12.log"));
     }
 
     #[test]
     fn prunes_only_old_default_logs() {
         let dir = tempfile::tempdir().unwrap();
-        let old = dir.path().join("talos-pilot-1.log");
-        let fresh = dir.path().join("talos-pilot-2.log");
+        let old = dir.path().join("talos9s-1.log");
+        let fresh = dir.path().join("talos9s-2.log");
         let other = dir.path().join("notes-3.log");
         for path in [&old, &fresh, &other] {
             std::fs::write(path, "x").unwrap();
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn private_file_replaces_existing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("talos-pilot.log");
+        let path = dir.path().join("talos9s.log");
         std::fs::write(&path, "old").unwrap();
 
         create_private_file(&path).unwrap();
@@ -273,7 +273,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("victim");
         std::fs::write(&target, "keep").unwrap();
-        let link = dir.path().join("talos-pilot.log");
+        let link = dir.path().join("talos9s.log");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         create_private_file(&link).unwrap();

@@ -3,9 +3,9 @@
 # Nuke Script - Complete cleanup of Talos test clusters
 #
 # This script removes:
-# - All talos-pilot Docker containers
-# - All talos-pilot Docker networks
-# - All talos-pilot talosconfig contexts
+# - All talos9s Docker containers
+# - All talos9s Docker networks
+# - All talos9s talosconfig contexts
 # - The talos clusters state directory
 # - Generated output files
 #
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # Configuration
-CLUSTER_NAME="${TALOS_CLUSTER_NAME:-talos-pilot}"
+CLUSTER_NAME="${TALOS_CLUSTER_NAME:-talos9s}"
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,10 +47,10 @@ OPTIONS:
     --dry-run       Show what would be deleted without actually deleting
 
 WHAT GETS CLEANED:
-    - Docker containers matching 'talos-pilot*'
-    - Docker networks matching 'talos-pilot*'
-    - All talosconfig contexts matching 'talos-pilot*'
-    - ~/.talos/clusters/talos-pilot directory
+    - Docker containers matching 'talos9s*'
+    - Docker networks matching 'talos9s*'
+    - All talosconfig contexts matching 'talos9s*'
+    - ~/.talos/clusters/talos9s directory
     - test-clusters/output/ generated files
 
 EOF
@@ -59,7 +59,7 @@ EOF
 nuke_docker() {
     log_info "Cleaning up Docker containers..."
 
-    # Find and remove talos-pilot containers
+    # Find and remove talos9s containers
     local containers
     containers=$(docker ps -a --filter "name=${CLUSTER_NAME}" -q 2>/dev/null || true)
 
@@ -77,7 +77,7 @@ nuke_docker() {
 
     log_info "Cleaning up Docker networks..."
 
-    # Find and remove talos-pilot networks
+    # Find and remove talos9s networks
     local networks
     networks=$(docker network ls --filter "name=${CLUSTER_NAME}" -q 2>/dev/null || true)
 
@@ -99,7 +99,7 @@ nuke_docker() {
 nuke_talosconfig() {
     log_info "Cleaning up talosconfig contexts..."
 
-    # Get all talos-pilot contexts
+    # Get all talos9s contexts
     local contexts
     contexts=$(talosctl config contexts 2>/dev/null | grep "${CLUSTER_NAME}" | awk '{print $1}' | grep -v "^CURRENT$" || true)
 

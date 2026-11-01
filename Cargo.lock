@@ -3240,61 +3240,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "talos-pilot"
-version = "0.1.11"
-dependencies = [
- "clap",
- "color-eyre",
- "talos-pilot-tui",
- "talos-rs",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "talos-pilot-core"
-version = "0.1.11"
-dependencies = [
- "chrono",
- "serde",
- "talos-rs",
- "thiserror 2.0.21",
- "tonic",
-]
-
-[[package]]
-name = "talos-pilot-tui"
-version = "0.1.11"
-dependencies = [
- "arboard",
- "base64 0.23.1",
- "chrono",
- "color-eyre",
- "crossterm",
- "dirs-next",
- "futures",
- "http",
- "k8s-openapi",
- "kube",
- "ratatui",
- "rustls",
- "serde-saphyr 2.0.0",
- "serde_json",
- "talos-pilot-core",
- "talos-rs",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-stream",
- "tracing",
- "x509-parser",
-]
-
-[[package]]
 name = "talos-rs"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "dirs-next",
@@ -3317,6 +3264,59 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tracing",
+]
+
+[[package]]
+name = "talos9s"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "talos-rs",
+ "talos9s-tui",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "talos9s-core"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "talos-rs",
+ "thiserror 2.0.21",
+ "tonic",
+]
+
+[[package]]
+name = "talos9s-tui"
+version = "0.2.0"
+dependencies = [
+ "arboard",
+ "base64 0.23.1",
+ "chrono",
+ "color-eyre",
+ "crossterm",
+ "dirs-next",
+ "futures",
+ "http",
+ "k8s-openapi",
+ "kube",
+ "ratatui",
+ "rustls",
+ "serde-saphyr 2.0.0",
+ "serde_json",
+ "talos-rs",
+ "talos9s-core",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "x509-parser",
 ]
 
 [[package]]

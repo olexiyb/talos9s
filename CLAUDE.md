@@ -1,16 +1,16 @@
-# CLAUDE.md - Talos Pilot Development Guide
+# CLAUDE.md - talos9s Development Guide
 
 ## Project Overview
 
-**Talos Pilot** is a terminal UI (TUI) for managing and monitoring Talos Linux Kubernetes clusters. It provides real-time diagnostics, log streaming, network analysis, and cluster health monitoring.
+**talos9s** (a fork of [talos-pilot](https://github.com/Handfish/talos-pilot)) is a terminal UI (TUI) for managing and monitoring Talos Linux Kubernetes clusters. It provides real-time diagnostics, log streaming, network analysis, and cluster health monitoring.
 
 ### Crate Structure
 
 ```
 crates/
 ├── talos-rs/           # Low-level Talos gRPC client library
-├── talos-pilot-core/   # Shared business logic (~1,760 lines, 47 tests)
-└── talos-pilot-tui/    # Terminal UI application (ratatui-based)
+├── talos9s-core/       # Shared business logic (~1,760 lines, 47 tests)
+└── talos9s-tui/        # Terminal UI application (ratatui-based)
 ```
 
 ### Key Technologies
@@ -55,7 +55,7 @@ crates/
 
 ---
 
-## Core Modules (talos-pilot-core)
+## Core Modules (talos9s-core)
 
 | Module | Lines | Tests | Purpose |
 |--------|-------|-------|---------|
@@ -316,7 +316,7 @@ components/diagnostics/
 - Provide actionable fix suggestions
 - Degrade gracefully when sources unavailable
 - Add tests for new core functionality
-- Use constants from `talos_pilot_core::constants`
+- Use constants from `talos9s_core::constants`
 
 ### Don't
 
@@ -346,7 +346,7 @@ components/diagnostics/
 cargo test --all
 
 # Run specific crate tests
-cargo test --package talos-pilot-core
+cargo test --package talos9s-core
 
 # Current test counts
 # - Core: 47 unit tests + 10 doc tests
@@ -369,7 +369,7 @@ cargo test --package talos-pilot-core
 | Doc | Purpose |
 |-----|---------|
 | `README.md` | User-facing documentation |
-| `internal-docs/talos-pilot-design-doc.md` | Original design document |
+| `internal-docs/talos-pilot-design-doc.md` | Original design document (talos-pilot) |
 | `internal-docs/phase-2-features.md` | Feature implementation tracking |
 | `internal-docs/refactoring_report.md` | Code refactoring progress |
 | `internal-docs/*-plan.md` | Feature planning documents |

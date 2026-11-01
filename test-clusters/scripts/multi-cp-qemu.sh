@@ -23,7 +23,7 @@ set -e
 # Configuration
 CLUSTER_NAME="multi-cp-test"
 WORK_DIR="/tmp/talos-multi-cp"
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/talos-pilot"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/talos9s"
 TALOS_VERSION="v1.12.1"
 ISO_URL="https://factory.talos.dev/image/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba/${TALOS_VERSION}/metal-amd64.iso"
 ISO_PATH="$CACHE_DIR/talos-${TALOS_VERSION}.iso"
@@ -107,7 +107,7 @@ WORKFLOW:
     3. $0 apply           # Apply Talos configs to all nodes
     4. Wait for nodes to install and reboot (~2-3 min)
     5. $0 bootstrap       # Bootstrap etcd on first control plane
-    6. cargo run          # Test with talos-pilot
+    6. cargo run          # Test with talos9s
 
 ALTERNATIVELY (wizard mode):
     1. $0 create
@@ -481,7 +481,7 @@ create_cluster() {
     echo "4. Bootstrap the cluster:"
     echo "   $0 bootstrap"
     echo ""
-    echo "5. Test with talos-pilot:"
+    echo "5. Test with talos9s:"
     echo "   cargo run"
     echo ""
     echo -e "${CYAN}=== OR use wizard mode ===${NC}"
@@ -857,7 +857,7 @@ talosctl commands:
   talosctl --context $CLUSTER_NAME etcd members
   talosctl --context $CLUSTER_NAME dashboard
 
-talos-pilot:
+talos9s:
   cargo run
   # Select '$CLUSTER_NAME' context
   # Check etcd view - should show 3/3 members

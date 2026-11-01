@@ -1,5 +1,5 @@
 {
-  description = "A flake for talos-pilot, a Talos TUI for real-time node monitoring.";
+  description = "A flake for talos9s, a Talos TUI for real-time node monitoring.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -28,7 +28,7 @@
         rustPlatform.buildRustPackage rec {
           inherit (manifest.workspace.package) version;
 
-          pname = "talos-pilot";
+          pname = "talos9s";
           src = ./.;
 
           cargoDeps = rustPlatform.importCargoLock {
@@ -41,16 +41,16 @@
 
           meta = {
             description = "Talos TUI for real-time node monitoring, log streaming, etcd health, and diagnostics";
-            homepage = "https://github.com/Handfish/talos-pilot";
+            homepage = "https://github.com/olexiyb/talos9s";
             license = with lib.licenses; [ mit ];
-            mainProgram = "talos-pilot";
+            mainProgram = "talos9s";
           };
         };
     in
     {
       packages = forEachPkgs (pkgs: rec {
-        talos-pilot = pkgs.callPackage package { inherit (pkgs) protobuf; };
-        default = talos-pilot;
+        talos9s = pkgs.callPackage package { inherit (pkgs) protobuf; };
+        default = talos9s;
       });
       devShells = forEachPkgs (pkgs: {
         default = pkgs.mkShell {
@@ -59,7 +59,7 @@
         };
       });
       overlays.default = final: _: {
-        talos-pilot = final.callPackage package { };
+        talos9s = final.callPackage package { };
       };
     };
 }

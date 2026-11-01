@@ -2,7 +2,7 @@
 #
 # Multi-Cluster Test Script
 #
-# Creates 3 Talos clusters for testing the multi-cluster accordion UI in talos-pilot.
+# Creates 3 Talos clusters for testing the multi-cluster accordion UI in talos9s.
 # Each cluster has 1 control plane + 3 workers (4 nodes total).
 #
 # Usage:
@@ -67,8 +67,8 @@ TESTING MULTI-CLUSTER UI:
 After cluster creation:
 
 1. Your talosconfig will have all 3 cluster contexts
-2. Start talos-pilot:
-   cargo run --bin talos-pilot
+2. Start talos9s:
+   cargo run --bin talos9s
 
 3. You should see the accordion with all 3 clusters:
    ▸ ▼ ● cluster-alpha (3)
@@ -364,8 +364,8 @@ create_all() {
     echo ""
     echo -e "${CYAN}=== Next Steps ===${NC}"
     echo ""
-    echo "1. Start talos-pilot:"
-    echo "   cargo run --bin talos-pilot"
+    echo "1. Start talos9s:"
+    echo "   cargo run --bin talos9s"
     echo ""
     echo "2. The accordion should show all 3 clusters:"
     echo "   - cluster-alpha (3 nodes)"

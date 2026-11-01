@@ -3,12 +3,12 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.11"
+version = "0.2.0"
 edition = "2024"
-authors = ["Ken Udovic"]
+authors = ["Ken Udovic", "Olexiy Buyanskyy"]
 license = "MIT"
-repository = "https://github.com/Handfish/talos-pilot"
-homepage = "https://github.com/Handfish/talos-pilot"
+repository = "https://github.com/olexiyb/talos9s"
+homepage = "https://github.com/olexiyb/talos9s"
 
 [workspace.dependencies]
 # Async runtime
@@ -77,11 +77,11 @@ x509-parser = "0.18"
 
 # Internal crates
 talos-rs = { path = "crates/talos-rs" }
-talos-pilot-core = { path = "crates/talos-pilot-core" }
-talos-pilot-tui = { path = "crates/talos-pilot-tui" }
+talos9s-core = { path = "crates/talos9s-core" }
+talos9s-tui = { path = "crates/talos9s-tui" }
 
 [package]
-name = "talos-pilot"
+name = "talos9s"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -91,7 +91,7 @@ homepage.workspace = true
 description = "A terminal UI for managing and monitoring Talos Linux Kubernetes clusters"
 
 [dependencies]
-talos-pilot-tui.workspace = true
+talos9s-tui.workspace = true
 talos-rs.workspace = true
 clap.workspace = true
 tokio.workspace = true

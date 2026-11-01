@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+talos9s continues [talos-pilot](https://github.com/Handfish/talos-pilot) 0.1.11 under a new name: the binary is `talos9s`, the crates `talos9s-core` and `talos9s-tui`, and the audit log moves to `~/.talos9s/audit.log` (an existing `~/.talos-pilot/audit.log` is copied over on first use). Entries below are talos-pilot's.
+
 ## 0.1.11
 
 Reliability release: node enumeration no longer depends on the Talos discovery service, and Kubernetes views always target the launched cluster.

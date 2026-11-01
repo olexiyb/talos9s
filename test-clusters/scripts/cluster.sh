@@ -3,7 +3,7 @@
 # Talos Test Cluster Management Script
 #
 # Creates Docker-based Talos clusters with various CNI and networking
-# configurations for testing talos-pilot features.
+# configurations for testing talos9s features.
 #
 # Usage:
 #   ./cluster.sh create <profile>    Create cluster with specified profile
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 # Configuration
-CLUSTER_NAME="${TALOS_CLUSTER_NAME:-talos-pilot}"
+CLUSTER_NAME="${TALOS_CLUSTER_NAME:-talos9s}"
 WORKERS="${TALOS_WORKERS:-0}"
 PROVISIONER="${TALOS_PROVISIONER:-docker}"
 # Note: Docker provisioner always creates 1 control plane, this is only used for display
@@ -938,7 +938,7 @@ EOF
             echo "  ◐ High Restarts    - Pods with >5 restarts"
             echo ""
             echo "Wait ~30 seconds for pods to enter their error states, then run:"
-            echo "  cargo run --bin talos-pilot"
+            echo "  cargo run --bin talos9s"
             echo "  Press 'w' to view workload health"
             ;;
 
@@ -966,7 +966,7 @@ EOF
             echo "  test-mixed     - Mix of healthy and failing"
             echo ""
             echo "Wait ~30 seconds for pods to enter their error states, then run:"
-            echo "  cargo run --bin talos-pilot"
+            echo "  cargo run --bin talos9s"
             echo "  Press 'w' to view workload health"
             ;;
 
@@ -1110,7 +1110,7 @@ WORKLOAD TYPES:
     clean               Delete all test workloads
 
 ENVIRONMENT VARIABLES:
-    TALOS_CLUSTER_NAME  Cluster name (default: talos-pilot)
+    TALOS_CLUSTER_NAME  Cluster name (default: talos9s)
     TALOS_CONTROLPLANES Number of control plane nodes (default: 1)
     TALOS_WORKERS       Number of worker nodes (default: 0)
     TALOS_VERSION       Talos version (default: v1.9.0)

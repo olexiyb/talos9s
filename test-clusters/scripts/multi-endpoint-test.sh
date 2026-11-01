@@ -71,7 +71,7 @@ WHAT THIS TESTS:
 
 The duplicate node bug occurs when:
 1. A talosconfig context has multiple endpoints (e.g., VIP + individual node IPs)
-2. talos-pilot queries through each endpoint
+2. talos9s queries through each endpoint
 3. Each endpoint returns the same nodes
 4. Without deduplication, nodes appear multiple times in the UI
 
@@ -83,7 +83,7 @@ This mimics a production setup where users configure:
 - VIP endpoint (for HA)
 - Individual control plane endpoints (for direct access)
 
-Run talos-pilot and switch to this context to verify the deduplication fix.
+Run talos9s and switch to this context to verify the deduplication fix.
 
 PREREQUISITES:
     - cluster-alpha must be running (use multi-cluster-test.sh create first)
@@ -206,8 +206,8 @@ PYEOF
     echo "1. Verify the context is active:"
     echo "   talosctl config contexts"
     echo ""
-    echo "2. Run talos-pilot:"
-    echo "   cargo run --bin talos-pilot"
+    echo "2. Run talos9s:"
+    echo "   cargo run --bin talos9s"
     echo ""
     echo "3. Expected behavior (with deduplication fix):"
     echo "   - Should see 3 nodes total (not 9 or more)"
@@ -248,7 +248,7 @@ show_status() {
         echo ""
         echo "To test:"
         echo "  1. talosctl config context ${TEST_CONTEXT}"
-        echo "  2. cargo run --bin talos-pilot"
+        echo "  2. cargo run --bin talos9s"
     else
         echo -e "${YELLOW}Test context '${TEST_CONTEXT}' is not configured${NC}"
         echo ""

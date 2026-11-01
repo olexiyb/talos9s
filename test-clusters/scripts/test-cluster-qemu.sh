@@ -10,7 +10,7 @@ set -e
 # Configuration
 CLUSTER_NAME="talos-cluster"
 WORK_DIR="/tmp/talos-qemu-test"
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/talos-pilot"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/talos9s"
 DISK_SIZE="20G"
 MEMORY="2048"
 CPUS="2"
@@ -35,7 +35,7 @@ Options:
 Commands:
   create      - Create VM and generate config (script-managed flow)
   create-bg   - Same as create, but runs in background
-  wizard      - Create VM for talos-pilot wizard (no config generation)
+  wizard      - Create VM for talos9s wizard (no config generation)
   wizard-bg   - Same as wizard, but runs in background
   start       - Start VM from installed disk (after apply)
   destroy     - Destroy the cluster and clean up
@@ -201,7 +201,7 @@ create_cluster() {
         echo "========================================="
         echo "VM will boot into maintenance mode."
         echo ""
-        echo "Use talos-pilot wizard to configure:"
+        echo "Use talos9s wizard to configure:"
         echo "  cargo run -- --insecure --endpoint 127.0.0.1"
         echo "========================================="
         echo ""
@@ -288,7 +288,7 @@ bootstrap_cluster() {
     echo "  talosctl --context $CLUSTER_NAME get disks"
     echo "  talosctl --context $CLUSTER_NAME get members"
     echo ""
-    echo "Test in talos-pilot:"
+    echo "Test in talos9s:"
     echo "  cargo run"
     echo "  # Switch to '$CLUSTER_NAME' context, select node, press 's'"
 }
@@ -423,7 +423,7 @@ kubectl (after bootstrap):
   talosctl --context $CLUSTER_NAME kubeconfig
   kubectl --context admin@$CLUSTER_NAME get nodes
 
-talos-pilot:
+talos9s:
   cargo run
   # Switch to '$CLUSTER_NAME' context, select node, press 's' for Storage view
 

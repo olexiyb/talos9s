@@ -1,0 +1,18 @@
+[package]
+name = "talos9s-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core business logic for talos9s"
+
+[dependencies]
+talos-rs.workspace = true
+tonic.workspace = true
+
+# Serialization
+serde.workspace = true
+chrono.workspace = true
+
+# Error handling
+thiserror.workspace = true

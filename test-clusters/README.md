@@ -1,6 +1,6 @@
 # Test Clusters
 
-Test Talos clusters for developing and testing talos-pilot features.
+Test Talos clusters for developing and testing talos9s features.
 
 ## Cluster Types
 
@@ -30,7 +30,7 @@ sudo systemctl stop docker
 # 4. Wait for install to complete (watch QEMU window), then:
 ./test-clusters/scripts/test-cluster-qemu.sh bootstrap
 
-# 5. Test in talos-pilot
+# 5. Test in talos9s
 cargo run
 # Switch to 'talos-qemu' context, select node, press 's' for Storage
 
@@ -87,9 +87,9 @@ export KUBECONFIG=$(pwd)/output/kubeconfig
 # Add comprehensive test workloads (all scenarios)
 ./scripts/cluster.sh workloads kitchen-sink
 
-# Run talos-pilot against it
+# Run talos9s against it
 cd ../
-cargo run --bin talos-pilot-tui
+cargo run --bin talos9s-tui
 
 # Clean up when done
 ./scripts/cluster.sh destroy
@@ -114,8 +114,8 @@ cargo run --bin talos-pilot-tui
 # Create the problematic combination
 ./scripts/cluster.sh create cilium-kubespan
 
-# Run talos-pilot - should show warning in diagnostics
-cargo run --bin talos-pilot-tui
+# Run talos9s - should show warning in diagnostics
+cargo run --bin talos9s-tui
 # Navigate to Diagnostics (d) and check CNI section
 ```
 
@@ -188,11 +188,11 @@ For testing rolling drain/reboot across multiple nodes, use the dedicated script
 # Check node layout and workload distribution
 ./scripts/rolling-ops-test.sh status
 
-# Run talos-pilot
+# Run talos9s
 export KUBECONFIG=$(pwd)/output/kubeconfig
-cargo run --bin talos-pilot
+cargo run --bin talos9s
 
-# In talos-pilot:
+# In talos9s:
 # 1. Press 'O' (capital O) in cluster view
 # 2. Select nodes with Space/Enter - shows [1], [2], [3] order
 # 3. Press 'd' for rolling drain or 'r' for rolling reboot
@@ -205,7 +205,7 @@ cargo run --bin talos-pilot
 The rolling ops test cluster includes:
 - 4 nodes for realistic multi-node testing
 - Pre-configured `test-drainable` workloads with PDB
-- Audit logging to `~/.talos-pilot/audit.log`
+- Audit logging to `~/.talos9s/audit.log`
 
 ### Testing Pre-Operation Health Checks
 
@@ -244,7 +244,7 @@ test-clusters/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TALOS_CLUSTER_NAME` | `talos-pilot` | Name of the Docker cluster |
+| `TALOS_CLUSTER_NAME` | `talos9s` | Name of the Docker cluster |
 | `TALOS_CONTROLPLANES` | `1` | Number of control plane nodes |
 | `TALOS_WORKERS` | `0` | Number of worker nodes |
 | `TALOS_VERSION` | `v1.9.0` | Talos version to use |
