@@ -15,7 +15,7 @@
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::ui_ext::QuorumStateExt;
+use crate::ui_ext::{HealthIndicatorExt, QuorumStateExt};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use k8s_openapi::serde_json::{self, Value};
@@ -29,6 +29,7 @@ use ratatui::{
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use talos_rs::{EtcdAlarm, EtcdMemberInfo, EtcdMemberStatus, EtcdSpecInfo, TalosClient};
+use talos9s_core::HasHealth;
 use talos9s_core::{
     AsyncState, QuorumState, SelectableList, format_bytes_signed, format_talos_error,
 };
@@ -180,6 +181,16 @@ use talos9s_core::constants::etcd::{
 pub struct EtcdCheck {
     pub error: bool,
     pub text: String,
+}
+
+impl talos9s_core::HasHealth for EtcdCheck {
+    fn health(&self) -> talos9s_core::HealthIndicator {
+        if self.error {
+            talos9s_core::HealthIndicator::Error
+        } else {
+            talos9s_core::HealthIndicator::Warning
+        }
+    }
 }
 
 /// Checks of every reachable member's status, errors first
@@ -1125,13 +1136,9 @@ impl EtcdComponent {
             ]));
         }
         for check in checks {
-            let (symbol, color) = if check.error {
-                ("✗ ", Color::Red)
-            } else {
-                ("⚠ ", Color::Yellow)
-            };
+            let (symbol, color) = check.health().symbol_and_color();
             lines.push(Line::from(vec![
-                Span::styled(symbol, Style::default().fg(color)),
+                Span::styled(format!("{symbol} "), Style::default().fg(color)),
                 Span::styled(check.text, Style::default().fg(color)),
             ]));
         }

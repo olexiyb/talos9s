@@ -92,12 +92,15 @@ pub enum ItemStatus {
 }
 
 impl ItemStatus {
+    /// Symbol and color as everywhere else; a header has no symbol
     fn indicator(&self) -> (&'static str, Color) {
+        use crate::ui_ext::HealthIndicatorExt;
+        use talos9s_core::HealthIndicator;
         match self {
-            ItemStatus::Good => ("●", Color::Green),
-            ItemStatus::Warning => ("⚠", Color::Yellow),
-            ItemStatus::Critical => ("!", Color::Red),
-            ItemStatus::Info => ("○", Color::Cyan),
+            ItemStatus::Good => HealthIndicator::Healthy.symbol_and_color(),
+            ItemStatus::Warning => HealthIndicator::Warning.symbol_and_color(),
+            ItemStatus::Critical => HealthIndicator::Error.symbol_and_color(),
+            ItemStatus::Info => HealthIndicator::Info.symbol_and_color(),
             ItemStatus::Header => ("", Color::Cyan),
         }
     }

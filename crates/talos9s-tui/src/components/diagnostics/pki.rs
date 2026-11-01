@@ -19,28 +19,7 @@ pub enum CertStatus {
     Expired,
 }
 
-impl CertStatus {
-    /// Get display indicator and color
-    pub fn indicator(&self) -> (&'static str, ratatui::style::Color) {
-        use ratatui::style::Color;
-        match self {
-            CertStatus::Valid => ("●", Color::Green),
-            CertStatus::Warning => ("⚠", Color::Yellow),
-            CertStatus::Critical => ("!", Color::Red),
-            CertStatus::Expired => ("✗", Color::Red),
-        }
-    }
-
-    /// Get status label
-    pub fn label(&self) -> &'static str {
-        match self {
-            CertStatus::Valid => "Valid",
-            CertStatus::Warning => "Expiring Soon",
-            CertStatus::Critical => "Expiring Very Soon",
-            CertStatus::Expired => "Expired",
-        }
-    }
-}
+impl CertStatus {}
 
 /// Information about a parsed certificate
 #[derive(Debug, Clone)]
@@ -324,17 +303,6 @@ impl EncryptionProvider {
             EncryptionProvider::Static | EncryptionProvider::NodeID => "weak",
             EncryptionProvider::Tpm | EncryptionProvider::Kms => "strong",
             EncryptionProvider::Unknown(_) => "unknown",
-        }
-    }
-
-    /// Get indicator color
-    pub fn indicator(&self) -> (&'static str, ratatui::style::Color) {
-        use ratatui::style::Color;
-        match self {
-            EncryptionProvider::None => ("○", Color::DarkGray),
-            EncryptionProvider::Static | EncryptionProvider::NodeID => ("◐", Color::Yellow),
-            EncryptionProvider::Tpm | EncryptionProvider::Kms => ("●", Color::Green),
-            EncryptionProvider::Unknown(_) => ("?", Color::DarkGray),
         }
     }
 }
