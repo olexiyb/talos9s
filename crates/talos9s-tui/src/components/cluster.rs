@@ -12,6 +12,7 @@ use crate::ui_ext::HealthIndicatorExt;
 use crate::zfs::{ZfsPool, fetch_zfs_pools};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use futures::stream::{FuturesUnordered, StreamExt};
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -26,6 +27,19 @@ use talos_rs::{
     NodeNetworkInfo, NodeServices, NodeSystemStat, ServiceInfo, TalosClient, TalosConfig,
     VersionInfo, get_discovery_members_with_retry,
 };
+
+/// What one node answered in a cluster refresh
+#[derive(Clone)]
+struct NodeFetch {
+    /// `Err` when the node didn't answer (the error, or none on a timeout)
+    version: Result<Vec<VersionInfo>, Option<String>>,
+    services: Option<Vec<NodeServices>>,
+    memory: Option<Vec<NodeMemory>>,
+    load_avg: Option<Vec<NodeLoadAvg>>,
+    cpu_info: Option<Vec<NodeCpuInfo>>,
+    system_stat: Option<Vec<NodeSystemStat>>,
+    mounts: Option<Vec<NodeMounts>>,
+}
 
 /// The value occurring most often (ties go to the first seen), or `None` if empty
 fn most_common<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
@@ -212,6 +226,10 @@ const NODE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// is never retried: the cluster would show "connecting…" for good.
 const CLUSTER_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// How often a running cluster refresh hands what it has so far to the
+/// dashboard
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Bound on the first call of a refresh. A connection that died silently
 /// (network change, tailnet switch) or stalled makes it hang; dropping the
 /// client then redials within [`RECONNECT_INTERVAL`] instead of waiting out
@@ -276,6 +294,10 @@ struct ClusterData {
     system_stat: Vec<NodeSystemStat>,
     /// Filesystem usage from nodes
     mounts: Vec<NodeMounts>,
+    /// The last refresh fetched the node table's columns and the Kubernetes
+    /// data too (only the cluster being looked at does; the rest fetch what
+    /// the tree's status dots need)
+    detailed: bool,
     /// Etcd members (control plane nodes only)
     etcd_members: Vec<EtcdMemberInfo>,
     /// Discovery members (ALL cluster nodes)
@@ -343,7 +365,12 @@ impl ClusterData {
     ///
     /// Operates only on this `ClusterData`, so it can run on a clone in a
     /// background task while the UI keeps drawing (see `start_background_refresh`).
-    async fn refresh(&mut self, config_path: Option<&str>) {
+    async fn refresh(
+        &mut self,
+        config_path: Option<&str>,
+        detailed: bool,
+        progress: Option<&tokio::sync::watch::Sender<Option<ClusterData>>>,
+    ) {
         let cluster = self;
         cluster.loading = false;
 
@@ -383,6 +410,7 @@ impl ClusterData {
             .collect();
 
         // First, fetch etcd members via gRPC
+        let started = std::time::Instant::now();
         let members = match tokio::time::timeout(MEMBERS_TIMEOUT, client.etcd_members()).await {
             Ok(members) => members,
             Err(_) => {
@@ -421,9 +449,16 @@ impl ClusterData {
             .iter()
             .filter_map(|m| m.ip_address())
             .collect();
-        match get_discovery_members_with_retry(&context_name, config_path, &fallback_ips).await {
+        tracing::debug!("{}: etcd members in {:?}", cluster.name, started.elapsed());
+        let started = std::time::Instant::now();
+        let discovered =
+            get_discovery_members_with_retry(&context_name, config_path, &fallback_ips).await;
+        tracing::debug!("{}: discovery in {:?}", cluster.name, started.elapsed());
+        match discovered {
             Ok(mut members) if !members.is_empty() => {
+                let started = std::time::Instant::now();
                 prefer_reachable_addresses(&client, &mut members, &cluster.known_good_ips()).await;
+                tracing::debug!("{}: address probe in {:?}", cluster.name, started.elapsed());
                 cluster.node_ips.clear();
                 for member in &members {
                     if let Some(ip) = member.addresses.first() {
@@ -612,122 +647,166 @@ impl ClusterData {
                 .or_insert_with(|| ip.clone());
         }
 
-        // Query each node
-        if !nodes_to_query.is_empty() {
-            let mut versions = Vec::new();
-            let mut services = Vec::new();
-            let mut memory = Vec::new();
-            let mut load_avg = Vec::new();
-            let mut cpu_info = Vec::new();
-            let mut system_stat = Vec::new();
-            let mut mounts = Vec::new();
-            let mut offline = HashMap::new();
-
-            for (node_name, ip) in &nodes_to_query {
-                let node_client = client.with_node(ip);
-
-                match tokio::time::timeout(NODE_PROBE_TIMEOUT, node_client.version()).await {
-                    Ok(Ok(mut nv)) => {
-                        for v in &mut nv {
-                            v.node = node_name.clone();
-                        }
-                        versions.extend(nv);
-                    }
-                    outcome => {
-                        // Not answering: keep it listed as offline and skip the
-                        // remaining calls, which would only time out as well.
-                        if let Ok(Err(e)) = &outcome {
-                            tracing::debug!("Node {} ({}) is offline: {}", node_name, ip, e);
-                        }
-                        let since = cluster
-                            .offline
-                            .get(node_name)
-                            .map_or_else(std::time::Instant::now, |o| o.since);
-                        let controlplane = previous
-                            .iter()
-                            .find(|(n, _, _)| n == node_name)
-                            .map_or_else(|| cluster.is_controlplane(node_name), |p| p.2);
-                        offline.insert(
-                            node_name.clone(),
-                            OfflineNode {
-                                since,
-                                controlplane,
-                            },
-                        );
-                        versions.push(offline_version(node_name));
-                        continue;
-                    }
-                }
-                if let Ok(mut ns) = node_client.services().await {
-                    for s in &mut ns {
-                        s.node = node_name.clone();
-                    }
-                    services.extend(ns);
-                }
-                if let Ok(mut nm) = node_client.memory().await {
-                    for m in &mut nm {
-                        m.node = node_name.clone();
-                    }
-                    memory.extend(nm);
-                }
-                if let Ok(mut nl) = node_client.load_avg().await {
-                    for l in &mut nl {
-                        l.node = node_name.clone();
-                    }
-                    load_avg.extend(nl);
-                }
-                if let Ok(mut nc) = node_client.cpu_info().await {
-                    for c in &mut nc {
-                        c.node = node_name.clone();
-                    }
-                    cpu_info.extend(nc);
-                }
-                if let Ok(mut ns) = node_client.system_stat().await {
-                    for s in &mut ns {
-                        s.node = node_name.clone();
-                    }
-                    system_stat.extend(ns);
-                }
-                if let Ok(mut nm) = node_client.mounts().await {
-                    for m in &mut nm {
-                        m.node = node_name.clone();
-                    }
-                    mounts.extend(nm);
-                }
+        // Query the nodes, all at once, and alongside them the etcd summary
+        // and (for the cluster being looked at) the Kubernetes data. Every
+        // node answers what the tree's status dot needs (version, services,
+        // memory); the node table's other columns only when `detailed`.
+        // Snapshots go out as answers arrive, so the dashboard lists the
+        // nodes at once and fills in each one when it answers instead of
+        // waiting for the slowest.
+        let before = cluster.clone();
+        let mut results: Vec<Option<NodeFetch>> = vec![None; nodes_to_query.len()];
+        let publish = |cluster: &mut ClusterData, results: &[Option<NodeFetch>]| {
+            cluster.assemble_nodes(&before, &nodes_to_query, results, &previous, detailed);
+            if let Some(progress) = progress {
+                progress.send_replace(Some(cluster.clone()));
             }
+        };
+        publish(cluster, &results);
 
-            // Need to re-borrow cluster mutably after async calls
-            {
-                cluster.versions = versions;
-                cluster.offline = offline;
-                cluster.services = services;
-                cluster.memory = memory;
-                cluster.load_avg = load_avg;
-                cluster.cpu_info = cpu_info;
-                cluster.system_stat = system_stat;
-                cluster.mounts = mounts;
+        let started = std::time::Instant::now();
+        let mut pending: FuturesUnordered<_> = nodes_to_query
+            .iter()
+            .enumerate()
+            .map(|(i, (_, ip))| {
+                let node_client = client.with_node(ip);
+                async move {
+                    let version =
+                        match tokio::time::timeout(NODE_PROBE_TIMEOUT, node_client.version()).await
+                        {
+                            Ok(Ok(versions)) => Ok(versions),
+                            Ok(Err(e)) => Err(Some(e.to_string())),
+                            Err(_) => Err(None),
+                        };
+                    let mut fetch = NodeFetch {
+                        version,
+                        services: None,
+                        memory: None,
+                        load_avg: None,
+                        cpu_info: None,
+                        system_stat: None,
+                        mounts: None,
+                    };
+                    // Not answering: the remaining calls would only time out too
+                    if fetch.version.is_err() {
+                        return (i, fetch);
+                    }
+                    let (services, memory) =
+                        tokio::join!(node_client.services(), node_client.memory());
+                    fetch.services = services.ok();
+                    fetch.memory = memory.ok();
+                    if detailed {
+                        let (load_avg, cpu_info, system_stat, mounts) = tokio::join!(
+                            node_client.load_avg(),
+                            node_client.cpu_info(),
+                            node_client.system_stat(),
+                            node_client.mounts()
+                        );
+                        fetch.load_avg = load_avg.ok();
+                        fetch.cpu_info = cpu_info.ok();
+                        fetch.system_stat = system_stat.ok();
+                        fetch.mounts = mounts.ok();
+                    }
+                    (i, fetch)
+                }
+            })
+            .collect();
 
-                // Fetch etcd status for header summary (target all control planes)
-                if let Some(client) = &cluster.client {
-                    // Use IPs instead of hostnames (hostnames may not be resolvable)
-                    let cp_ips: Vec<String> = cluster
-                        .etcd_members
-                        .iter()
-                        .filter_map(|m| m.ip_address())
-                        .collect();
-                    if let Ok(statuses) = client.etcd_status_for_nodes(&cp_ips).await {
-                        let total = cluster.etcd_members.len();
+        // etcd health for the cluster row (all control planes, by IP since
+        // hostnames may not resolve)
+        let cp_ips: Vec<String> = cluster
+            .etcd_members
+            .iter()
+            .filter_map(|m| m.ip_address())
+            .collect();
+        let etcd_total = cluster.etcd_members.len();
+        let etcd_client = client.clone();
+        let etcd = async move {
+            if cp_ips.is_empty() {
+                return None;
+            }
+            etcd_client.etcd_status_for_nodes(&cp_ips).await.ok()
+        };
+
+        // ZFS pool capacity, kubelet versions and LINSTOR nodes from the
+        // Kubernetes API. Bounded so an unreachable kube-apiserver can't stall
+        // the refresh; on failure the previous values are kept.
+        let cp_ip = cluster.control_plane_ip();
+        let k8s_client = cluster.k8s_client.clone();
+        let k8s_talos = client.clone();
+        let k8s = async move {
+            let started = std::time::Instant::now();
+            let outcome = tokio::time::timeout(K8S_QUERY_TIMEOUT, async {
+                let k8s = match k8s_client {
+                    Some(k8s) => k8s,
+                    None => {
+                        k8s::create_k8s_client_with_source(&k8s_talos, cp_ip.as_deref(), None)
+                            .await
+                            .ok()?
+                            .0
+                    }
+                };
+                let data = tokio::join!(
+                    fetch_zfs_pools(&k8s),
+                    fetch_kubelet_versions(&k8s),
+                    fetch_linstor(&k8s)
+                );
+                Some((k8s, data))
+            })
+            .await;
+            (outcome, started.elapsed())
+        };
+        tokio::pin!(etcd, k8s);
+        let mut etcd_done = false;
+        let mut k8s_done = !detailed;
+        let mut last_publish = std::time::Instant::now();
+        let mut unpublished = false;
+        loop {
+            // At most a few redraws a second, however many nodes answer; the
+            // final state comes with the finished job
+            let done = pending.is_empty() && etcd_done && k8s_done;
+            let next_publish = tokio::time::Instant::from_std(last_publish + PROGRESS_INTERVAL);
+            tokio::select! {
+                _ = tokio::time::sleep_until(next_publish), if unpublished && !done => {
+                    publish(cluster, &results);
+                    last_publish = std::time::Instant::now();
+                    unpublished = false;
+                }
+                Some((i, fetch)) = pending.next() => {
+                    results[i] = Some(fetch);
+                    unpublished = true;
+                    if pending.is_empty() {
+                        tracing::debug!(
+                            "{}: {} nodes answered in {:?} (detailed: {})",
+                            cluster.name,
+                            results.len(),
+                            started.elapsed(),
+                            detailed
+                        );
+                    }
+                }
+                statuses = &mut etcd, if !etcd_done => {
+                    etcd_done = true;
+                    if let Some(statuses) = statuses {
                         let healthy = statuses.len();
-                        let quorum_needed = total / 2 + 1;
                         cluster.etcd_summary = Some(EtcdSummary {
                             healthy,
-                            total,
-                            has_quorum: healthy >= quorum_needed,
+                            total: etcd_total,
+                            has_quorum: healthy > etcd_total / 2,
                         });
                     }
+                    unpublished = true;
                 }
+                (outcome, took) = &mut k8s, if !k8s_done => {
+                    k8s_done = true;
+                    tracing::debug!("{}: Kubernetes stage took {:?}", cluster.name, took);
+                    cluster.apply_k8s_data(outcome);
+                    unpublished = true;
+                }
+                else => break,
             }
         }
+        cluster.assemble_nodes(&before, &nodes_to_query, &results, &previous, detailed);
 
         // Reflect real reachability so the UI shows a clear error instead of an
         // empty/blank cluster when no endpoint can be reached. Healthy clusters
@@ -750,49 +829,169 @@ impl ClusterData {
                 );
             }
         }
+        cluster.detailed = detailed;
+    }
 
-        let cp_ip = cluster.control_plane_ip();
-
-        // ZFS pool capacity, kubelet versions and LINSTOR nodes from the
-        // Kubernetes API.
-        // Bounded so an unreachable kube-apiserver can't stall the refresh; on
-        // failure the previous values are kept.
-        let k8s_data = tokio::time::timeout(K8S_QUERY_TIMEOUT, async {
-            if cluster.k8s_client.is_none() {
-                cluster.k8s_client =
-                    k8s::create_k8s_client_with_source(&client, cp_ip.as_deref(), None)
-                        .await
-                        .ok()
-                        .map(|(client, _)| client);
-            }
-            let k8s = cluster.k8s_client.as_ref()?;
-            Some(tokio::join!(
-                fetch_zfs_pools(k8s),
-                fetch_kubelet_versions(k8s),
-                fetch_linstor(k8s)
-            ))
-        })
-        .await;
-        match k8s_data {
-            Ok(Some((zfs, kubelets, linstor))) => {
+    /// Store what the Kubernetes stage fetched; anything that failed keeps
+    /// its previous value
+    #[allow(clippy::type_complexity)]
+    fn apply_k8s_data(
+        &mut self,
+        outcome: Result<
+            Option<(
+                kube::Client,
+                (
+                    Result<HashMap<String, Vec<ZfsPool>>, kube::Error>,
+                    Result<HashMap<String, String>, kube::Error>,
+                    Result<Option<LinstorStatus>, kube::Error>,
+                ),
+            )>,
+            tokio::time::error::Elapsed,
+        >,
+    ) {
+        match outcome {
+            Ok(Some((k8s, (zfs, kubelets, linstor)))) => {
+                self.k8s_client = Some(k8s);
                 match linstor {
-                    Ok(status) => cluster.linstor = status,
-                    Err(e) => tracing::debug!("LINSTOR unavailable for {}: {}", cluster.name, e),
+                    Ok(status) => self.linstor = status,
+                    Err(e) => tracing::debug!("LINSTOR unavailable for {}: {}", self.name, e),
                 }
                 match zfs {
-                    Ok(pools) => cluster.zfs_pools = pools,
-                    Err(e) => tracing::debug!("ZFS pools unavailable for {}: {}", cluster.name, e),
+                    Ok(pools) => self.zfs_pools = pools,
+                    Err(e) => tracing::debug!("ZFS pools unavailable for {}: {}", self.name, e),
                 }
                 match kubelets {
-                    Ok(versions) => cluster.kubelet_versions = versions,
+                    Ok(versions) => self.kubelet_versions = versions,
                     Err(e) => {
-                        tracing::debug!("Kubelet versions unavailable for {}: {}", cluster.name, e)
+                        tracing::debug!("Kubelet versions unavailable for {}: {}", self.name, e)
                     }
                 }
             }
-            Ok(None) => tracing::debug!("Kubernetes API unavailable for {}", cluster.name),
-            Err(_) => tracing::debug!("Kubernetes query timed out for {}", cluster.name),
+            Ok(None) => tracing::debug!("Kubernetes API unavailable for {}", self.name),
+            Err(_) => tracing::debug!("Kubernetes query timed out for {}", self.name),
         }
+    }
+
+    /// Node data from what the nodes answered so far, in roster order. A node
+    /// that hasn't answered yet keeps what `before` had for it, or gets a
+    /// placeholder row so it is listed from the start; one that didn't
+    /// answer at all is offline. Columns not fetched in a light refresh keep
+    /// their previous values.
+    fn assemble_nodes(
+        &mut self,
+        before: &ClusterData,
+        nodes: &[(String, String)],
+        results: &[Option<NodeFetch>],
+        previous: &[(String, String, bool)],
+        detailed: bool,
+    ) {
+        fn keep<T: Clone>(from: &[T], node: &str, node_of: impl Fn(&T) -> &str) -> Vec<T> {
+            from.iter()
+                .filter(|x| node_of(x) == node)
+                .cloned()
+                .collect()
+        }
+        fn named<T>(mut items: Vec<T>, node: &str, set: impl Fn(&mut T, String)) -> Vec<T> {
+            for item in &mut items {
+                set(item, node.to_string());
+            }
+            items
+        }
+        let mut versions = Vec::new();
+        let mut services = Vec::new();
+        let mut memory = Vec::new();
+        let mut load_avg = Vec::new();
+        let mut cpu_info = Vec::new();
+        let mut system_stat = Vec::new();
+        let mut mounts = Vec::new();
+        let mut offline = HashMap::new();
+        for ((node, _), result) in nodes.iter().zip(results) {
+            let node = node.as_str();
+            let kept_details = |load_avg: &mut Vec<NodeLoadAvg>,
+                                cpu_info: &mut Vec<NodeCpuInfo>,
+                                system_stat: &mut Vec<NodeSystemStat>,
+                                mounts: &mut Vec<NodeMounts>| {
+                load_avg.extend(keep(&before.load_avg, node, |x| &x.node));
+                cpu_info.extend(keep(&before.cpu_info, node, |x| &x.node));
+                system_stat.extend(keep(&before.system_stat, node, |x| &x.node));
+                mounts.extend(keep(&before.mounts, node, |x| &x.node));
+            };
+            match result {
+                // Not answered yet: what was shown before, or a placeholder
+                None => {
+                    let shown = keep(&before.versions, node, |v| &v.node);
+                    if shown.is_empty() {
+                        versions.push(offline_version(node));
+                    }
+                    versions.extend(shown);
+                    services.extend(keep(&before.services, node, |x| &x.node));
+                    memory.extend(keep(&before.memory, node, |x| &x.node));
+                    kept_details(&mut load_avg, &mut cpu_info, &mut system_stat, &mut mounts);
+                    if let Some(o) = before.offline.get(node) {
+                        offline.insert(node.to_string(), o.clone());
+                    }
+                }
+                Some(NodeFetch {
+                    version: Err(error),
+                    ..
+                }) => {
+                    if let Some(e) = error {
+                        tracing::debug!("Node {} is offline: {}", node, e);
+                    }
+                    let since = before
+                        .offline
+                        .get(node)
+                        .map_or_else(std::time::Instant::now, |o| o.since);
+                    let controlplane = previous
+                        .iter()
+                        .find(|(n, _, _)| n == node)
+                        .map_or_else(|| before.is_controlplane(node), |p| p.2);
+                    offline.insert(
+                        node.to_string(),
+                        OfflineNode {
+                            since,
+                            controlplane,
+                        },
+                    );
+                    versions.push(offline_version(node));
+                }
+                Some(fetch) => {
+                    if let Ok(nv) = &fetch.version {
+                        versions.extend(named(nv.clone(), node, |v, n| v.node = n));
+                    }
+                    if let Some(x) = &fetch.services {
+                        services.extend(named(x.clone(), node, |v, n| v.node = n));
+                    }
+                    if let Some(x) = &fetch.memory {
+                        memory.extend(named(x.clone(), node, |v, n| v.node = n));
+                    }
+                    if detailed {
+                        if let Some(x) = &fetch.load_avg {
+                            load_avg.extend(named(x.clone(), node, |v, n| v.node = n));
+                        }
+                        if let Some(x) = &fetch.cpu_info {
+                            cpu_info.extend(named(x.clone(), node, |v, n| v.node = n));
+                        }
+                        if let Some(x) = &fetch.system_stat {
+                            system_stat.extend(named(x.clone(), node, |v, n| v.node = n));
+                        }
+                        if let Some(x) = &fetch.mounts {
+                            mounts.extend(named(x.clone(), node, |v, n| v.node = n));
+                        }
+                    } else {
+                        kept_details(&mut load_avg, &mut cpu_info, &mut system_stat, &mut mounts);
+                    }
+                }
+            }
+        }
+        self.versions = versions;
+        self.services = services;
+        self.memory = memory;
+        self.load_avg = load_avg;
+        self.cpu_info = cpu_info;
+        self.system_stat = system_stat;
+        self.mounts = mounts;
+        self.offline = offline;
     }
 
     /// Whether a node is a control plane node.
@@ -929,6 +1128,8 @@ pub struct ClusterComponent {
     /// In-flight background refresh per cluster, same order as `clusters`
     /// (see `start_background_refresh`)
     background_refresh: Vec<Option<tokio::task::JoinHandle<ClusterData>>>,
+    /// What each running refresh has fetched so far, adopted while it runs
+    refresh_progress: Vec<Option<tokio::sync::watch::Receiver<Option<ClusterData>>>>,
     /// When each cluster's last background refresh finished
     cluster_refreshed_at: Vec<Option<std::time::Instant>>,
     /// Network summary per (context, node name), with the time of the last fetch attempt
@@ -1091,6 +1292,66 @@ fn service_ok(s: &ServiceInfo) -> bool {
         "Finished" => true,
         _ => false,
     }
+}
+
+/// A node's KubeSpan links as it sees them: how many peers are up, and the
+/// ones that aren't
+struct KubeSpanLinks {
+    up: usize,
+    total: usize,
+    /// Peers not up, with their state (`down`, `unknown`, ...)
+    down: Vec<(String, String)>,
+}
+
+fn kubespan_links(peers: &[talos_rs::KubeSpanPeerStatus]) -> KubeSpanLinks {
+    let mut down: Vec<(String, String)> = peers
+        .iter()
+        .filter(|p| p.state != "up")
+        .map(|p| (p.label.clone(), p.state.clone()))
+        .collect();
+    down.sort();
+    KubeSpanLinks {
+        up: peers.len() - down.len(),
+        total: peers.len(),
+        down,
+    }
+}
+
+/// Columns the KubeSpan matrix needs
+fn kubespan_matrix_width(nodes: &[String]) -> u16 {
+    let name_width = nodes.iter().map(|n| n.chars().count()).max().unwrap_or(0);
+    matrix_width(name_width.max("KubeSpan".len()), nodes)
+}
+
+/// Columns a node × node or service × node matrix needs: the name column,
+/// then one per node (two spaces apart)
+fn matrix_width(name_width: usize, nodes: &[String]) -> u16 {
+    let columns: usize = nodes.iter().map(|n| n.chars().count().max(1) + 2).sum();
+    (name_width + columns) as u16
+}
+
+/// What the service symbols mean, for a window's bottom border: it stays while
+/// the content scrolls. `absent` adds the matrix-only entry for a service a
+/// node doesn't have.
+fn services_legend(absent: bool) -> Line<'static> {
+    let dim = Style::default().dim();
+    let mut spans = vec![
+        Span::styled(" ●", Style::default().fg(Color::Green)),
+        Span::styled(" healthy  ", dim),
+        Span::styled("●", Style::default().fg(Color::DarkGray)),
+        Span::styled(" no check  ", dim),
+        Span::styled("✓", Style::default().fg(Color::Green)),
+        Span::styled(" finished  ", dim),
+        Span::styled("○", Style::default().fg(Color::Red)),
+        Span::styled(" unhealthy  ", dim),
+        Span::styled("✗", Style::default().fg(Color::Red)),
+        Span::styled(" not running ", dim),
+    ];
+    if absent {
+        spans.push(Span::styled(" ·", dim));
+        spans.push(Span::styled(" absent ", dim));
+    }
+    Line::from(spans)
 }
 
 /// Matrix symbol and style for one service on one node
@@ -1405,6 +1666,7 @@ impl ClusterComponent {
             config_path,
             context_filter,
             background_refresh: Vec::new(),
+            refresh_progress: Vec::new(),
             cluster_refreshed_at: Vec::new(),
             network_info: HashMap::new(),
             network_fetch: None,
@@ -1522,16 +1784,102 @@ impl ClusterComponent {
     /// The KubeSpan peer matrix of `nodes` of the active cluster, from the
     /// peer status the dashboard already keeps per node
     pub fn draw_kubespan_matrix_pane(&self, frame: &mut Frame, area: Rect, nodes: &[String]) {
-        let [caption, matrix] =
+        let [caption, body] =
             Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
+        // The node × node matrix shows asymmetric failures but needs a column
+        // per node, so past the pane's width it becomes one row per node
+        let fits = kubespan_matrix_width(nodes) <= body.width && (nodes.len() as u16) < body.height;
+        let text = if fits {
+            " Each row: the node's WireGuard peers (● up, ✗ down, · not a peer, … not read yet)"
+        } else {
+            " Each row: the node's WireGuard peers that are up, and the ones that aren't"
+        };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " Each row: the node's WireGuard peers (● up, ✗ down, · not a peer, … not read yet)",
+                text,
                 Style::default().fg(Color::DarkGray),
             ))),
             caption,
         );
-        self.draw_kubespan_matrix(frame.buffer_mut(), matrix, self.active_cluster, nodes);
+        if fits {
+            self.draw_kubespan_matrix(frame.buffer_mut(), body, self.active_cluster, nodes);
+        } else {
+            self.draw_kubespan_list(frame.buffer_mut(), body, self.active_cluster, nodes);
+        }
+    }
+
+    /// One row per node: peers up out of all, and the peers that aren't up
+    fn draw_kubespan_list(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        cluster_idx: usize,
+        nodes: &[String],
+    ) {
+        let dim = Style::default().dim();
+        let rows: Vec<Row> = nodes
+            .iter()
+            .map(|node| {
+                let peers = self
+                    .get_node_network_info_for(cluster_idx, node)
+                    .and_then(|net| net.kubespan_peers.as_ref());
+                let (up, down) = match peers {
+                    None => (Cell::from(Span::styled("…", dim)), Cell::default()),
+                    Some(peers) if peers.is_empty() => (
+                        Cell::from(Span::styled("no peers", Style::default().fg(Color::Yellow))),
+                        Cell::default(),
+                    ),
+                    Some(peers) => {
+                        let links = kubespan_links(peers);
+                        (
+                            Cell::from(Span::styled(
+                                format!("{}/{}", links.up, links.total),
+                                Style::default().fg(if links.down.is_empty() {
+                                    Color::Green
+                                } else {
+                                    Color::Red
+                                }),
+                            )),
+                            Cell::from(Line::from(
+                                links
+                                    .down
+                                    .iter()
+                                    .flat_map(|(peer, state)| {
+                                        [
+                                            Span::styled(
+                                                format!("{peer} {state}"),
+                                                Style::default().fg(Color::Red),
+                                            ),
+                                            Span::raw("  "),
+                                        ]
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )),
+                        )
+                    }
+                };
+                Row::new(vec![Cell::from(node.clone()), up, down])
+            })
+            .collect();
+        let name_width = nodes
+            .iter()
+            .map(|n| n.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(4) as u16;
+        let header = Row::new(vec!["Node", "Peers up", "Not up"])
+            .style(Style::default().fg(Color::Gray).bold());
+        Table::new(
+            rows,
+            [
+                Constraint::Length(name_width),
+                Constraint::Length(8),
+                Constraint::Fill(1),
+            ],
+        )
+        .header(header)
+        .column_spacing(2)
+        .render(area, buf);
     }
 
     /// Containers, machine config or extensions of the selected node
@@ -1705,6 +2053,12 @@ impl ClusterComponent {
                 Color::Red,
                 format!("  offline {}", format_uptime(down.as_secs())),
             );
+        }
+        // Listed but not answered yet: unknown, not healthy
+        if self.get_node_memory_for(cluster_idx, node).is_none()
+            && self.get_node_services_for(cluster_idx, node).is_none()
+        {
+            return ("●", Color::DarkGray, String::new());
         }
         let mem_pct = self
             .get_node_memory_for(cluster_idx, node)
@@ -1931,6 +2285,7 @@ impl ClusterComponent {
             self.clusters.push(cluster);
         }
         self.background_refresh = self.clusters.iter().map(|_| None).collect();
+        self.refresh_progress = self.clusters.iter().map(|_| None).collect();
         self.cluster_refreshed_at = self.clusters.iter().map(|_| None).collect();
         self.start_background_refresh();
 
@@ -1982,10 +2337,17 @@ impl ClusterComponent {
             // The first load always runs, and so does reconnecting a cluster
             // whose connection was dropped (views take their client from
             // here); otherwise only with auto-refresh on
+            // The cluster being looked at gets the full node table; the others
+            // only what the tree needs. Looking at a cluster whose last
+            // refresh was the light one refreshes it right away.
+            let detailed = idx == self.active_cluster;
             let due = match self.cluster_refreshed_at[idx] {
                 None => true,
                 Some(at) if cluster.client.is_none() => at.elapsed() >= RECONNECT_INTERVAL,
-                Some(at) => self.auto_refresh && at.elapsed() >= interval,
+                Some(at) => {
+                    (detailed && !cluster.detailed)
+                        || (self.auto_refresh && at.elapsed() >= interval)
+                }
             };
             if !due {
                 continue;
@@ -1993,8 +2355,12 @@ impl ClusterComponent {
             let previous = cluster.clone();
             let mut cluster = cluster.clone();
             let config_path = self.config_path.clone();
+            let (progress, progress_rx) = tokio::sync::watch::channel(None);
+            if let Some(slot) = self.refresh_progress.get_mut(idx) {
+                *slot = Some(progress_rx);
+            }
             self.background_refresh[idx] = Some(tokio::spawn(async move {
-                let refresh = cluster.refresh(config_path.as_deref());
+                let refresh = cluster.refresh(config_path.as_deref(), detailed, Some(&progress));
                 match tokio::time::timeout(CLUSTER_REFRESH_TIMEOUT, refresh).await {
                     Ok(()) => cluster,
                     // Half-done state is inconsistent: keep what was shown
@@ -2009,11 +2375,27 @@ impl ClusterComponent {
     pub fn apply_background_refresh(&mut self) {
         let mut changed = false;
         for idx in 0..self.background_refresh.len() {
-            if !self.background_refresh[idx]
+            let running = self.background_refresh[idx]
                 .as_ref()
-                .is_some_and(|handle| handle.is_finished())
-            {
+                .is_some_and(|handle| !handle.is_finished());
+            // A running refresh: show what it has so far
+            if running {
+                let snapshot = self
+                    .refresh_progress
+                    .get_mut(idx)
+                    .and_then(Option::as_mut)
+                    .filter(|rx| rx.has_changed().unwrap_or(false))
+                    .and_then(|rx| rx.borrow_and_update().clone());
+                if let Some(snapshot) = snapshot {
+                    changed |= self.adopt_cluster(idx, snapshot);
+                }
                 continue;
+            }
+            if self.background_refresh[idx].is_none() {
+                continue;
+            }
+            if let Some(slot) = self.refresh_progress.get_mut(idx) {
+                *slot = None;
             }
             let Some(handle) = self.background_refresh[idx].take() else {
                 continue;
@@ -2022,7 +2404,7 @@ impl ClusterComponent {
             // schedule, not on every tick.
             self.cluster_refreshed_at[idx] = Some(std::time::Instant::now());
 
-            let mut fresh = match crate::task::poll_finished(handle) {
+            let fresh = match crate::task::poll_finished(handle) {
                 Some(Ok(fresh)) => fresh,
                 Some(Err(e)) => {
                     // A panicked refresh: don't leave the cluster "connecting…"
@@ -2034,22 +2416,28 @@ impl ClusterComponent {
                 }
                 None => continue,
             };
-            let Some(current) = self.clusters.get_mut(idx) else {
-                continue;
-            };
-            if current.name != fresh.name {
-                continue;
-            }
-            fresh.expanded = current.expanded;
-            fresh.controlplane_expanded = current.controlplane_expanded;
-            fresh.workers_expanded = current.workers_expanded;
-            *current = fresh;
-            changed = true;
+            changed |= self.adopt_cluster(idx, fresh);
         }
         if changed {
             self.last_refresh = Some(std::time::Instant::now());
             self.ensure_selection_visible();
         }
+    }
+
+    /// Replace a cluster's data with a refresh's, keeping the UI state
+    /// (expand/collapse) the user may have changed while it ran
+    fn adopt_cluster(&mut self, idx: usize, mut fresh: ClusterData) -> bool {
+        let Some(current) = self.clusters.get_mut(idx) else {
+            return false;
+        };
+        if current.name != fresh.name {
+            return false;
+        }
+        fresh.expanded = current.expanded;
+        fresh.controlplane_expanded = current.controlplane_expanded;
+        fresh.workers_expanded = current.workers_expanded;
+        *current = fresh;
+        true
     }
 
     /// Node names covered by the current selection: the selected node, or
@@ -3766,30 +4154,13 @@ impl ClusterComponent {
             .background_refresh
             .get(cluster_idx)
             .is_some_and(|h| h.is_some());
-        // The legend sits on the bottom border, so it stays while the
-        // content scrolls
-        let dim = Style::default().dim();
-        let legend = Line::from(vec![
-            Span::styled(" ●", Style::default().fg(Color::Green)),
-            Span::styled(" healthy  ", dim),
-            Span::styled("●", Style::default().fg(Color::DarkGray)),
-            Span::styled(" no check  ", dim),
-            Span::styled("✓", Style::default().fg(Color::Green)),
-            Span::styled(" finished  ", dim),
-            Span::styled("○", Style::default().fg(Color::Red)),
-            Span::styled(" unhealthy  ", dim),
-            Span::styled("✗", Style::default().fg(Color::Red)),
-            Span::styled(" not running  ", dim),
-            Span::styled("·", dim),
-            Span::styled(" absent ", dim),
-        ]);
         let block = Block::default()
             .title(crate::ui_ext::title_with_refresh(
                 &format!("{} · {} nodes", group, nodes.len()),
                 refreshing,
                 Color::White,
             ))
-            .title_bottom(legend)
+            .title_bottom(services_legend(true))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
@@ -3806,6 +4177,11 @@ impl ClusterComponent {
         let has_tailscale = nodes.iter().any(|n| {
             self.get_node_network_info_for(cluster_idx, n)
                 .is_some_and(|net| net.tailscale.is_some())
+        });
+        let has_kubespan = nodes.iter().any(|n| {
+            self.get_node_network_info_for(cluster_idx, n)
+                .and_then(|net| net.kubespan_peers.as_ref())
+                .is_some_and(|peers| !peers.is_empty())
         });
 
         // A version differing from the group's most common one is highlighted,
@@ -3826,7 +4202,8 @@ impl ClusterComponent {
                 v.to_string(),
                 Style::default().fg(Color::Yellow),
             )),
-            None => Cell::from(Span::styled("-", dim)),
+            // Not fetched yet (an offline node has no version at all)
+            None => pending(),
         };
 
         let rows: Vec<Row> = nodes
@@ -3953,6 +4330,23 @@ impl ClusterComponent {
                     Some(false) => Cell::from(Span::styled("✗", Style::default().fg(Color::Red))),
                     None => pending(),
                 };
+                // Peers up out of all: a node whose links are down shows red
+                let kspan = match net.map(|n| n.kubespan_peers.as_ref()) {
+                    None => pending(),
+                    Some(None) => Cell::from(Span::styled("…", dim)),
+                    Some(Some(peers)) if peers.is_empty() => Cell::from(Span::styled("-", dim)),
+                    Some(Some(peers)) => {
+                        let links = kubespan_links(peers);
+                        Cell::from(Span::styled(
+                            format!("{}/{}", links.up, links.total),
+                            Style::default().fg(if links.down.is_empty() {
+                                Color::Green
+                            } else {
+                                Color::Red
+                            }),
+                        ))
+                    }
+                };
                 let tailscale = match net.map(|n| n.tailscale.as_ref()) {
                     None => pending(),
                     Some(None) => Cell::from(Span::styled("-", dim)),
@@ -4013,6 +4407,9 @@ impl ClusterComponent {
                     cells.push(cores);
                 }
                 cells.extend([uptime, conn, svc]);
+                if has_kubespan {
+                    cells.push(kspan);
+                }
                 if has_tailscale {
                     cells.push(tailscale);
                 }
@@ -4068,6 +4465,10 @@ impl ClusterComponent {
             Constraint::Length(4),
             Constraint::Length(5),
         ]);
+        if has_kubespan {
+            header.push("KSpan");
+            widths.push(Constraint::Length(5));
+        }
         if has_tailscale {
             header.push("Tailscale");
             widths.push(Constraint::Length(15));
@@ -4091,16 +4492,12 @@ impl ClusterComponent {
             Some(Err(_)) => 2,
             None => 0,
         };
-        let has_kubespan = nodes.iter().any(|n| {
-            self.get_node_network_info_for(cluster_idx, n)
-                .and_then(|net| net.kubespan_peers.as_ref())
-                .is_some_and(|peers| !peers.is_empty())
-        });
-        let kubespan_height = if has_kubespan && nodes.len() > 1 {
-            nodes.len() as u16 + 2 // header + rows + spacer
+        let kubespan = if has_kubespan {
+            self.kubespan_summary_lines(cluster_idx, &nodes)
         } else {
-            0
+            Vec::new()
         };
+        let kubespan_height = kubespan.len() as u16;
         // One row per service seen on any node, plus the header
         let services_height = {
             let mut ids: Vec<&str> = nodes
@@ -4115,8 +4512,8 @@ impl ClusterComponent {
         let heights = [
             nodes.len() as u16 + 2, // header + rows + spacer
             linstor_height,
+            services_height + u16::from(kubespan_height > 0), // spacer before KubeSpan
             kubespan_height,
-            services_height,
         ];
         let max_scroll = crate::ui_ext::render_scrolled(
             frame,
@@ -4124,14 +4521,14 @@ impl ClusterComponent {
             heights.iter().sum(),
             self.details_scroll as u16,
             |buf, full| {
-                let [table_area, linstor_area, kubespan_area, services_area] =
+                let [table_area, linstor_area, services_area, kubespan_area] =
                     Layout::vertical(heights.map(Constraint::Length)).areas(full);
                 table.render(table_area, buf);
                 if let Some(linstor) = linstor {
                     draw_linstor_table(buf, linstor_area, linstor);
                 }
                 if kubespan_height > 0 {
-                    self.draw_kubespan_matrix(buf, kubespan_area, cluster_idx, &nodes);
+                    Paragraph::new(kubespan.clone()).render(kubespan_area, buf);
                 }
                 self.draw_services_matrix(buf, services_area, cluster_idx, &nodes);
             },
@@ -4164,9 +4561,72 @@ impl ClusterComponent {
         }
     }
 
+    /// KubeSpan on the dashboard: one line when every link is up, otherwise
+    /// the links that aren't, one per line. Grows with the problems, not
+    /// with the nodes. Node-to-node traffic such as DRBD replication and
+    /// etcd runs over these links.
+    fn kubespan_summary_lines(&self, cluster_idx: usize, nodes: &[String]) -> Vec<Line<'static>> {
+        let dim = Style::default().dim();
+        let mut up = 0;
+        let mut total = 0;
+        let mut unread = 0;
+        let mut problems: Vec<Line<'static>> = Vec::new();
+        for node in nodes {
+            let peers = self
+                .get_node_network_info_for(cluster_idx, node)
+                .and_then(|net| net.kubespan_peers.as_ref());
+            match peers {
+                None => unread += 1,
+                Some(peers) if peers.is_empty() => problems.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{node} has no peers"),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ])),
+                Some(peers) => {
+                    let links = kubespan_links(peers);
+                    up += links.up;
+                    total += links.total;
+                    for (peer, state) in links.down {
+                        problems.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                format!("{node} → {peer} {state}"),
+                                Style::default().fg(Color::Red),
+                            ),
+                        ]));
+                    }
+                }
+            }
+        }
+        let title_style = if problems.is_empty() {
+            Style::default().fg(Color::Gray).bold()
+        } else {
+            Style::default().fg(Color::Red).bold()
+        };
+        let mut head = vec![
+            Span::styled("KubeSpan", title_style),
+            Span::raw("  "),
+            Span::styled(
+                format!("{up}/{total} links up"),
+                Style::default().fg(if up == total {
+                    Color::Green
+                } else {
+                    Color::Red
+                }),
+            ),
+        ];
+        if unread > 0 {
+            head.push(Span::styled(format!("  {unread} nodes not read yet"), dim));
+        }
+        let mut lines = vec![Line::from(head)];
+        lines.extend(problems);
+        lines
+    }
+
     /// KubeSpan peer state between the group's nodes: one row per node (as
-    /// it sees its peers), one column per peer. Node-to-node traffic such as
-    /// DRBD replication and etcd runs over these links.
+    /// it sees its peers), one column per peer.
     fn draw_kubespan_matrix(
         &self,
         buf: &mut Buffer,
@@ -4287,6 +4747,88 @@ impl ClusterComponent {
         let problem_count = problems.len();
         problems.extend(ok);
 
+        let title = if problem_count == 0 {
+            "Services".to_string()
+        } else {
+            format!("Services ({problem_count} with issues)")
+        };
+        let name_width = problems
+            .iter()
+            .map(|id| id.len())
+            .max()
+            .unwrap_or(0)
+            .max(title.len());
+        let header_style = Style::default().fg(Color::Gray).bold();
+
+        // One column per node doesn't fit past a dozen nodes: then each
+        // service gets a row with the nodes it is healthy on out of the nodes
+        // that have it, and the others by name. Grows with the problems.
+        if matrix_width(name_width, nodes) > area.width {
+            let rows: Vec<Row> = problems
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let name_style = if i < problem_count {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let mut total = 0;
+                    let mut bad: Vec<Span> = Vec::new();
+                    for (node, services) in nodes.iter().zip(&per_node) {
+                        let Some(s) = find(*services, id) else {
+                            continue;
+                        };
+                        total += 1;
+                        if !service_ok(&s) {
+                            let (symbol, style) = service_symbol(&s);
+                            bad.push(Span::styled(format!("{symbol} {node}"), style));
+                            bad.push(Span::raw("  "));
+                        }
+                    }
+                    let healthy = total - bad.len() / 2;
+                    Row::new(vec![
+                        Cell::from(Span::styled(id.to_string(), name_style)),
+                        Cell::from(Span::styled(
+                            format!("{healthy}/{total}"),
+                            Style::default().fg(if healthy == total {
+                                Color::Green
+                            } else {
+                                Color::Red
+                            }),
+                        )),
+                        Cell::from(Line::from(bad)),
+                    ])
+                })
+                .collect();
+            // The problem count goes with the problem column here, which
+            // keeps the name column at the names' width
+            let not_healthy = if problem_count == 0 {
+                "Not healthy".to_string()
+            } else {
+                format!("Not healthy ({problem_count})")
+            };
+            let name_width = problems.iter().map(|id| id.len()).max().unwrap_or(0).max(8);
+            let header = Row::new(vec![
+                "Services".to_string(),
+                "Healthy".to_string(),
+                not_healthy,
+            ])
+            .style(header_style);
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(name_width as u16),
+                    Constraint::Length(7),
+                    Constraint::Fill(1),
+                ],
+            )
+            .header(header)
+            .column_spacing(2)
+            .render(area, buf);
+            return;
+        }
+
         let dim = Style::default().dim();
         let rows: Vec<Row> = problems
             .iter()
@@ -4313,22 +4855,15 @@ impl ClusterComponent {
             })
             .collect();
 
-        let name_width = problems.iter().map(|id| id.len()).max().unwrap_or(7).max(7);
         let mut widths = vec![Constraint::Length(name_width as u16)];
         widths.extend(
             nodes
                 .iter()
                 .map(|n| Constraint::Length(n.chars().count().max(1) as u16)),
         );
-        let mut header = vec![Cell::from(format!(
-            "Services ({} with issues)",
-            problem_count
-        ))];
-        if problem_count == 0 {
-            header[0] = Cell::from("Services");
-        }
+        let mut header = vec![Cell::from(title)];
         header.extend(nodes.iter().map(|n| Cell::from(n.clone())));
-        let header = Row::new(header).style(Style::default().fg(Color::Gray).bold());
+        let header = Row::new(header).style(header_style);
         Table::new(rows, widths)
             .header(header)
             .column_spacing(2)
@@ -4612,6 +5147,7 @@ impl ClusterComponent {
         );
         let block = Block::default()
             .title(title)
+            .title_bottom(services_legend(false))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 
@@ -4800,26 +5336,27 @@ impl ClusterComponent {
                     ]));
                 }
             }
+            // Peers up out of all, and only the ones that aren't by name:
+            // readable at a hundred peers
             if let Some(peers) = net.kubespan_peers.as_ref().filter(|p| !p.is_empty()) {
-                let mut spans = vec![Span::styled(" KSpan:  ", Style::default().dim())];
-                let mut peers: Vec<_> = peers.iter().collect();
-                peers.sort_by(|a, b| a.label.cmp(&b.label));
-                for (i, p) in peers.iter().enumerate() {
-                    if i > 0 {
-                        spans.push(Span::raw("  "));
-                    }
-                    let color = match p.state.as_str() {
-                        "up" => Color::Green,
-                        "down" => Color::Red,
-                        _ => Color::Yellow,
-                    };
+                let links = kubespan_links(peers);
+                let mut spans = vec![
+                    Span::styled(" KSpan:  ", Style::default().dim()),
+                    Span::styled(
+                        format!("{}/{} peers up", links.up, links.total),
+                        Style::default().fg(if links.down.is_empty() {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        }),
+                    ),
+                ];
+                for (peer, state) in &links.down {
+                    spans.push(Span::raw("  "));
                     spans.push(Span::styled(
-                        format!("{} {}", p.label, p.state),
-                        Style::default().fg(color),
+                        format!("{peer} {state}"),
+                        Style::default().fg(Color::Red),
                     ));
-                    if let Some(rtt) = p.rtt_ms {
-                        spans.push(Span::styled(format!(" {rtt:.0}ms"), Style::default().dim()));
-                    }
                 }
                 resource_lines.push(Line::from(spans));
             }
@@ -4855,12 +5392,8 @@ impl ClusterComponent {
             )]));
 
             for (i, svc) in services.iter().enumerate() {
-                let (health_symbol, health_color) = match svc.is_healthy() {
-                    Some(true) => ("●", Color::Green),
-                    Some(false) => ("○", Color::Red),
-                    // No health check defined - not a failure
-                    None => ("●", Color::DarkGray),
-                };
+                // The same symbols as the group table and its legend
+                let (health_symbol, health_style) = service_symbol(svc);
 
                 // Highlight selected service when services pane is focused
                 let is_selected =
@@ -4876,7 +5409,7 @@ impl ClusterComponent {
 
                 lines.push(Line::from(vec![
                     Span::raw(format!(" {}", selector)),
-                    Span::styled(health_symbol, Style::default().fg(health_color)),
+                    Span::styled(health_symbol, health_style),
                     Span::raw(" "),
                     Span::styled(svc.id.clone(), name_style),
                     Span::styled(format!(" ({})", svc.state), Style::default().dim()),
@@ -5185,6 +5718,116 @@ mod tests {
             ClickTarget::None
         );
         assert_eq!(comp.click_target(tree.x, tree.y), ClickTarget::None);
+    }
+
+    /// A refresh in progress: answered nodes show their data, the others
+    /// keep what was shown or get a placeholder row, and a node that didn't
+    /// answer is offline. Light refreshes keep the detailed columns.
+    #[test]
+    fn assembling_nodes_while_a_refresh_runs() {
+        let before = ClusterData {
+            versions: vec![ver("cp1")],
+            services: vec![services_with("cp1", &["apid"])],
+            load_avg: vec![NodeLoadAvg {
+                node: "cp1".to_string(),
+                load1: 1.0,
+                load5: 1.0,
+                load15: 1.0,
+            }],
+            ..Default::default()
+        };
+        let nodes = [
+            ("cp1".to_string(), "10.0.0.1".to_string()),
+            ("w1".to_string(), "10.0.0.2".to_string()),
+            ("w2".to_string(), "10.0.0.3".to_string()),
+        ];
+        let answered = NodeFetch {
+            version: Ok(vec![ver("10.0.0.2")]),
+            services: Some(vec![services_with("10.0.0.2", &["kubelet"])]),
+            memory: None,
+            load_avg: None,
+            cpu_info: None,
+            system_stat: None,
+            mounts: None,
+        };
+        let offline = NodeFetch {
+            version: Err(None),
+            ..answered.clone()
+        };
+
+        // Nothing answered yet: cp1 as before, w1 and w2 listed as placeholders
+        let mut cluster = before.clone();
+        let results = vec![None, None, None];
+        cluster.assemble_nodes(&before, &nodes, &results, &[], false);
+        let listed: Vec<&str> = cluster.versions.iter().map(|v| v.node.as_str()).collect();
+        assert_eq!(listed, ["cp1", "w1", "w2"]);
+        assert_eq!(cluster.versions[1].version, "");
+        assert_eq!(cluster.services.len(), 1);
+        assert!(cluster.offline.is_empty());
+
+        // w1 answered (named by the roster), w2 didn't, cp1 still pending
+        let results = vec![None, Some(answered), Some(offline)];
+        cluster.assemble_nodes(&before, &nodes, &results, &[], false);
+        assert_eq!(cluster.versions[1].node, "w1");
+        assert!(cluster.services.iter().any(|s| s.node == "w1"));
+        assert!(cluster.offline.contains_key("w2"));
+        assert!(!cluster.offline.contains_key("w1"));
+        // A light refresh keeps cp1's load
+        assert_eq!(cluster.load_avg.len(), 1);
+    }
+
+    /// The service × node matrix gives way to one row per service when the
+    /// nodes don't fit side by side, with the unhealthy nodes by name
+    #[test]
+    fn services_matrix_becomes_a_list_when_the_nodes_do_not_fit() {
+        let mut comp = two_node_cluster();
+        comp.clusters[0].connected = true;
+        comp.clusters[0].services = vec![
+            services_with("cp1", &["apid", "etcd"]),
+            NodeServices {
+                node: "worker1".to_string(),
+                services: vec![ServiceInfo {
+                    id: "apid".to_string(),
+                    state: "Failed".to_string(),
+                    health: None,
+                }],
+            },
+        ];
+        comp.selected_item = NodeListItem::ClusterHeader(0);
+        let nodes = ["cp1".to_string(), "worker1".to_string()];
+        let render = |comp: &ClusterComponent, width: u16| {
+            let area = Rect::new(0, 0, width, 4);
+            let mut buf = Buffer::empty(area);
+            comp.draw_services_matrix(&mut buf, area, 0, &nodes);
+            (0..4)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        // Wide enough: the matrix, the failed service first
+        let wide = render(&comp, 60);
+        assert!(
+            wide[0].contains("cp1") && wide[0].contains("worker1"),
+            "{wide:?}"
+        );
+        assert!(
+            wide[1].starts_with("apid") && wide[1].contains('✗'),
+            "{wide:?}"
+        );
+        // Too narrow for a column per node: healthy count and the failed node
+        let narrow = render(&comp, 30);
+        assert!(narrow[0].contains("Healthy"), "{narrow:?}");
+        assert!(
+            narrow[1].contains("1/2") && narrow[1].contains("✗ worker1"),
+            "{narrow:?}"
+        );
+        assert!(
+            narrow[2].contains("etcd") && narrow[2].contains("1/1"),
+            "{narrow:?}"
+        );
     }
 
     /// On the dashboard, clicking another node keeps the services list
@@ -5518,5 +6161,33 @@ mod tests {
         assert!(service_ok(&svc("Running", Some((false, true)))));
         assert!(!service_ok(&svc("Running", Some((false, false)))));
         assert!(!service_ok(&svc("Failed", None)));
+    }
+
+    #[test]
+    fn kubespan_links_count_peers_and_name_the_ones_not_up() {
+        let peer = |label: &str, state: &str| talos_rs::KubeSpanPeerStatus {
+            id: label.to_string(),
+            label: label.to_string(),
+            state: state.to_string(),
+            ..Default::default()
+        };
+        let links = kubespan_links(&[
+            peer("kpd2", "down"),
+            peer("kpc1", "up"),
+            peer("kpc2", "unknown"),
+            peer("kpc3", "up"),
+        ]);
+        assert_eq!((links.up, links.total), (2, 4));
+        assert_eq!(
+            links.down,
+            vec![
+                ("kpc2".to_string(), "unknown".to_string()),
+                ("kpd2".to_string(), "down".to_string())
+            ]
+        );
+
+        // Name column (at least the title) plus one column per node, two apart
+        let nodes = ["kpc1".to_string(), "worker-long-name".to_string()];
+        assert_eq!(kubespan_matrix_width(&nodes), 16 + (4 + 2) + (16 + 2));
     }
 }

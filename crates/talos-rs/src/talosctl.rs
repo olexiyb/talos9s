@@ -134,7 +134,7 @@ pub struct ExtensionInfo {
 }
 
 /// KubeSpan peer status from KubeSpanPeerStatus resource
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct KubeSpanPeerStatus {
     /// Peer ID (usually the node name or public key)
     pub id: String,
