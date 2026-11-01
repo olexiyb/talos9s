@@ -8,7 +8,7 @@ use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::Component;
 use crate::components::diagnostics::k8s::{
     DrainOptions, DrainProgressCallback, NodeReadyProgressCallback, cordon_node,
-    drain_node_with_progress, uncordon_node, wait_for_node_ready,
+    drain_node_with_progress, get_node_boot_id, uncordon_node, wait_for_node_ready,
 };
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -296,6 +296,39 @@ impl RollingOperationsComponent {
 }
 
 /// Run the rolling operation across all selected nodes
+/// How long to wait for etcd to allow taking a control plane node down
+const ETCD_SAFE_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Wait until taking `node` down keeps etcd quorum. A control plane node
+/// needs a known Safe verdict; a worker only stops on a known Unsafe one (it
+/// is checked at all in case its role was mislabeled).
+async fn wait_for_etcd_safe(
+    client: &TalosClient,
+    node: &RollingNodeInfo,
+    progress: &Arc<Mutex<RollingProgress>>,
+) -> std::result::Result<(), String> {
+    use talos9s_core::SafetyStatus;
+    let start = std::time::Instant::now();
+    loop {
+        let safety = crate::components::node_operations::fetch_etcd_info(client, &node.address)
+            .await
+            .map(|info| info.safety);
+        let reason = match safety {
+            Some(SafetyStatus::Safe) => return Ok(()),
+            None if !node.is_controlplane => return Ok(()),
+            Some(SafetyStatus::Unsafe(msg)) => msg,
+            _ => "etcd member health unknown".to_string(),
+        };
+        if start.elapsed() >= ETCD_SAFE_WAIT {
+            return Err(reason);
+        }
+        if let Ok(mut p) = progress.lock() {
+            p.message = format!("{}: waiting for etcd ({})", node.hostname, reason);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_rolling_operation(
     progress: Arc<Mutex<RollingProgress>>,
@@ -336,6 +369,22 @@ async fn run_rolling_operation(
             let mut p = progress.lock().unwrap();
             p.current_node_idx = idx;
             p.message = format!("Processing {}/{}: {}", idx + 1, total, node.hostname);
+        }
+
+        // Step 0: a reboot must leave etcd its quorum. Waits for the
+        // previous node to rejoin etcd before taking the next one down.
+        if operation == RollingOperationType::Reboot
+            && let Some(ref client) = talos_client
+            && let Err(msg) = wait_for_etcd_safe(client, node, &progress).await
+        {
+            let msg = format!("Not rebooting {}: {}", node.hostname, msg);
+            audit_failure(op_name, &node.hostname, &msg);
+            return RollingOperationResult {
+                success: false,
+                completed_nodes: completed,
+                failed_node: Some(node.hostname.clone()),
+                message: msg,
+            };
         }
 
         // Step 1: Cordon
@@ -417,6 +466,13 @@ async fn run_rolling_operation(
             }
 
             if let Some(ref client) = talos_client {
+                // Read before the request, so the wait can tell the new boot
+                // from the old one
+                let boot_id_before = if options.wait_for_node_ready {
+                    get_node_boot_id(&k8s, &node.hostname).await
+                } else {
+                    None
+                };
                 let node_client = client.with_node(&node.address);
                 if let Err(e) = node_client.reboot(RebootMode::Default).await {
                     let _ = uncordon_node(&k8s, &node.hostname).await;
@@ -457,7 +513,7 @@ async fn run_rolling_operation(
                         &k8s,
                         &node.hostname,
                         options.post_reboot_timeout_secs,
-                        true,
+                        boot_id_before,
                         Some(ready_callback),
                     )
                     .await;

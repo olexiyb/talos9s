@@ -22,13 +22,31 @@ use ratatui::{
 };
 use std::time::Duration;
 use talos_rs::{
-    DiscoveryMember, NodeTimeInfo, TalosClient, TalosConfig, VersionInfo,
+    DiscoveryMember, EtcdMemberInfo, NodeTimeInfo, TalosClient, TalosConfig, VersionInfo,
     get_discovery_members_with_retry,
 };
-use talos9s_core::{AsyncState, HasHealth, HealthIndicator, SelectableList};
+use talos9s_core::{AsyncState, EtcdQuorum, HasHealth, HealthIndicator, SelectableList};
 
 /// Auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
+
+/// How long one Talos, Kubernetes or `talosctl` call may take; a dead node
+/// must not hold up the refresh
+const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Discovery retries internally, so it gets longer
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `call` bounded by `limit`; a timeout is an error like any other
+async fn bounded<T, E: std::fmt::Display>(
+    limit: Duration,
+    call: impl std::future::Future<Output = std::result::Result<T, E>>,
+) -> std::result::Result<T, String> {
+    match tokio::time::timeout(limit, call).await {
+        Ok(result) => result.map_err(|e| e.to_string()),
+        Err(_) => Err(format!("timed out after {}s", limit.as_secs())),
+    }
+}
 
 /// Query Talos version and time-sync info for every roster node individually.
 ///
@@ -54,13 +72,13 @@ async fn enumerate_roster_node_info(
             member.hostname.clone()
         };
         let node_client = client.with_node(ip);
-        if let Ok(mut vs) = node_client.version().await {
+        if let Ok(mut vs) = bounded(CALL_TIMEOUT, node_client.version()).await {
             for v in &mut vs {
                 v.node = name.clone();
             }
             versions.extend(vs);
         }
-        if let Ok(mut ts) = node_client.time().await {
+        if let Ok(mut ts) = bounded(CALL_TIMEOUT, node_client.time()).await {
             for t in &mut ts {
                 t.node = name.clone();
             }
@@ -135,31 +153,56 @@ impl AlertSeverity {
 /// etcd quorum information for pre-operation checks
 #[derive(Debug, Clone, Default)]
 pub struct EtcdQuorumInfo {
-    /// Total etcd members
+    /// Voting etcd members
     pub total_members: usize,
-    /// Healthy etcd members
-    pub healthy_members: usize,
-    /// How many nodes can be lost while maintaining quorum
-    pub can_lose: usize,
-    /// Whether the cluster is healthy
-    pub is_healthy: bool,
+    /// Voters that answered the status call; `None` when unknown
+    pub healthy_members: Option<usize>,
+    /// How many more voters can go down before quorum is lost; `None` when
+    /// unknown
+    pub can_lose: Option<usize>,
+    /// Whether quorum holds; `None` when unknown
+    pub has_quorum: Option<bool>,
+}
+
+impl From<EtcdQuorum> for EtcdQuorumInfo {
+    fn from(q: EtcdQuorum) -> Self {
+        EtcdQuorumInfo {
+            total_members: q.voters,
+            healthy_members: q.healthy,
+            can_lose: q.can_lose(),
+            has_quorum: q.has_quorum(),
+        }
+    }
+}
+
+impl HasHealth for EtcdQuorumInfo {
+    /// A node can be taken down only while one more can be lost
+    fn health(&self) -> HealthIndicator {
+        match (self.has_quorum, self.can_lose) {
+            (Some(false), _) => HealthIndicator::Error,
+            (Some(true), Some(0)) => HealthIndicator::Warning,
+            (Some(true), Some(_)) => HealthIndicator::Healthy,
+            _ => HealthIndicator::Unknown,
+        }
+    }
 }
 
 impl EtcdQuorumInfo {
     /// Get summary message
     pub fn summary(&self) -> String {
         if self.total_members == 0 {
-            "No etcd members found".to_string()
-        } else if self.is_healthy {
-            format!(
+            return "No etcd members found".to_string();
+        }
+        match (self.healthy_members, self.has_quorum, self.can_lose) {
+            (Some(healthy), Some(true), Some(can_lose)) => format!(
                 "{}/{} members, can lose {}",
-                self.healthy_members, self.total_members, self.can_lose
-            )
-        } else {
-            format!(
+                healthy, self.total_members, can_lose
+            ),
+            (Some(healthy), _, _) => format!(
                 "{}/{} members healthy (quorum at risk)",
-                self.healthy_members, self.total_members
-            )
+                healthy, self.total_members
+            ),
+            _ => format!("{} members, health unknown", self.total_members),
         }
     }
 }
@@ -173,8 +216,40 @@ pub struct PreOpChecks {
     pub pdb_health: Option<PdbHealthInfo>,
     /// etcd quorum info
     pub etcd_quorum: Option<EtcdQuorumInfo>,
-    /// Whether all checks passed
-    pub all_passed: bool,
+    /// Worst of the checks; a check that couldn't run is unknown, not passed
+    pub overall: HealthIndicator,
+}
+
+impl PreOpChecks {
+    fn new(
+        pod_health: Option<PodHealthInfo>,
+        pdb_health: Option<PdbHealthInfo>,
+        etcd_quorum: Option<EtcdQuorumInfo>,
+    ) -> Self {
+        let pod = pod_health.as_ref().map_or(HealthIndicator::Unknown, |p| {
+            if p.has_issues() {
+                HealthIndicator::Warning
+            } else {
+                HealthIndicator::Healthy
+            }
+        });
+        let pdb = pdb_health.as_ref().map_or(HealthIndicator::Unknown, |p| {
+            if p.has_blocking_pdbs() {
+                HealthIndicator::Warning
+            } else {
+                HealthIndicator::Healthy
+            }
+        });
+        let etcd = etcd_quorum
+            .as_ref()
+            .map_or(HealthIndicator::Unknown, |e| e.health());
+        PreOpChecks {
+            pod_health,
+            pdb_health,
+            etcd_quorum,
+            overall: pod.worst(pdb).worst(etcd),
+        }
+    }
 }
 
 /// Loaded lifecycle data (wrapped by AsyncState)
@@ -293,7 +368,7 @@ impl LifecycleComponent {
         // sources and can still succeed. Previously this early-returned after
         // set_data() (which clears the just-set error), leaving every section
         // stuck on "unknown"/"unavailable" with no error and no further fetches.
-        let version_error = match client.version().await {
+        let version_error = match bounded(CALL_TIMEOUT, client.version()).await {
             Ok(versions) => {
                 // Get context name from talosconfig if not already set
                 if !versions.is_empty() && data.context_name.is_empty() {
@@ -323,7 +398,7 @@ impl LifecycleComponent {
         };
 
         // Fetch time sync status
-        match client.time().await {
+        match bounded(CALL_TIMEOUT, client.time()).await {
             Ok(times) => {
                 data.time_info = times;
             }
@@ -333,6 +408,10 @@ impl LifecycleComponent {
                 data.time_info.clear();
             }
         }
+
+        // Used for the Kubernetes fallback, reachability hints and the quorum
+        // check, so fetched once
+        let etcd_members = bounded(CALL_TIMEOUT, client.etcd_members()).await;
 
         // Fetch discovery members using context-aware async version
         let context_name = if !data.context_name.is_empty() {
@@ -357,10 +436,13 @@ impl LifecycleComponent {
                 .iter()
                 .map(|v| v.node.split(':').next().unwrap_or(&v.node).to_string())
                 .collect();
-            match get_discovery_members_with_retry(
-                &context_name,
-                self.config_path.as_deref(),
-                &fallback_ips,
+            match bounded(
+                DISCOVERY_TIMEOUT,
+                get_discovery_members_with_retry(
+                    &context_name,
+                    self.config_path.as_deref(),
+                    &fallback_ips,
+                ),
             )
             .await
             {
@@ -383,14 +465,15 @@ impl LifecycleComponent {
                     // workers too — not just the endpoint. Mirrors the cluster
                     // node-list fallback.
                     if data.discovery_members.is_empty() {
-                        let cp_ip = client
-                            .etcd_members()
-                            .await
+                        let cp_ip = etcd_members
+                            .as_ref()
                             .ok()
                             .and_then(|ms| ms.iter().find_map(|m| m.ip_address()))
                             .or_else(|| fallback_ips.first().cloned());
                         if let Some(cp_ip) = cp_ip {
-                            match discovery_members_via_k8s(&client, &cp_ip).await {
+                            match bounded(CALL_TIMEOUT, discovery_members_via_k8s(&client, &cp_ip))
+                                .await
+                            {
                                 Ok(members) if !members.is_empty() => {
                                     tracing::info!(
                                         "Enumerated {} node(s) via the Kubernetes API for \
@@ -413,12 +496,16 @@ impl LifecycleComponent {
             // table covers workers, not just the endpoint the base client
             // targets. Keep the previously fetched data if the roster query
             // yields nothing (graceful degradation).
-            let hints: Vec<String> = client
-                .etcd_members()
-                .await
+            let hints: Vec<String> = etcd_members
+                .as_ref()
                 .map(|ms| ms.iter().filter_map(|m| m.ip_address()).collect())
                 .unwrap_or_default();
-            prefer_reachable_addresses(&client, &mut data.discovery_members, &hints).await;
+            // Probes are bounded per address; this bounds the whole pass
+            let _ = tokio::time::timeout(
+                CALL_TIMEOUT,
+                prefer_reachable_addresses(&client, &mut data.discovery_members, &hints),
+            )
+            .await;
             let (roster_versions, roster_times) =
                 enumerate_roster_node_info(&client, &data.discovery_members).await;
             if !roster_versions.is_empty() {
@@ -437,10 +524,17 @@ impl LifecycleComponent {
             futures::future::join_all(data.versions.iter().map(|v| {
                 let node_addr = roster_ip_for(&data.discovery_members, &v.node);
                 async move {
-                    talos_rs::get_machine_config_for_node(talos_context, &node_addr, config_path)
-                        .await
-                        .ok()
-                        .map(|config| config.version)
+                    bounded(
+                        CALL_TIMEOUT,
+                        talos_rs::get_machine_config_for_node(
+                            talos_context,
+                            &node_addr,
+                            config_path,
+                        ),
+                    )
+                    .await
+                    .ok()
+                    .map(|config| config.version)
                 }
             }))
             .await;
@@ -475,7 +569,8 @@ impl LifecycleComponent {
             .select(Some(data.node_statuses.selected_index()));
 
         // Fetch pre-operation health checks
-        self.fetch_pre_op_checks_into(&mut data, &client).await;
+        self.fetch_pre_op_checks_into(&mut data, &client, etcd_members)
+            .await;
 
         // Generate alerts
         Self::generate_alerts_into(&mut data);
@@ -508,17 +603,26 @@ impl LifecycleComponent {
     }
 
     /// Fetch pre-operation health checks into data
-    async fn fetch_pre_op_checks_into(&mut self, data: &mut LifecycleData, client: &TalosClient) {
-        // Get a control plane node IP for kubeconfig fetch
-        // We try to get this from etcd members (only control plane nodes run etcd)
-        let cp_node_ip = match client.etcd_members().await {
-            Ok(members) => members.first().and_then(|m| m.ip_address()),
-            Err(_) => None,
-        };
+    async fn fetch_pre_op_checks_into(
+        &mut self,
+        data: &mut LifecycleData,
+        client: &TalosClient,
+        etcd_members: std::result::Result<Vec<EtcdMemberInfo>, String>,
+    ) {
+        // Only control plane nodes run etcd: fetch the kubeconfig from one
+        let cp_node_ip = etcd_members
+            .as_ref()
+            .ok()
+            .and_then(|ms| ms.first())
+            .and_then(|m| m.ip_address());
 
-        // Initialize K8s client if not already done
         if self.k8s_client.is_none() {
-            match create_k8s_client_with_source(client, cp_node_ip.as_deref(), None).await {
+            match bounded(
+                CALL_TIMEOUT,
+                create_k8s_client_with_source(client, cp_node_ip.as_deref(), None),
+            )
+            .await
+            {
                 Ok((k8s, source)) => {
                     tracing::info!("K8s client created from: {:?}", source);
                     self.k8s_client = Some(k8s);
@@ -526,38 +630,23 @@ impl LifecycleComponent {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create K8s client: {}", e);
-                    self.k8s_source = Some(KubeconfigSource::Unavailable(e.to_string()));
+                    self.k8s_source = Some(KubeconfigSource::Unavailable(e));
                 }
             }
         }
 
-        // Fetch etcd quorum info
-        let etcd_quorum = match client.etcd_members().await {
+        let etcd_quorum = match etcd_members {
             Ok(members) => {
-                let total = members.len();
-                // Extract control plane IPs to target status calls (hostnames may not be resolvable)
+                // Target the status call by IP: hostnames may not resolve
                 let cp_ips: Vec<String> = members.iter().filter_map(|m| m.ip_address()).collect();
-                // Try to get status from all control planes
-                let healthy = match client.etcd_status_for_nodes(&cp_ips).await {
-                    Ok(statuses) => {
-                        // Count members with status
-                        members
-                            .iter()
-                            .filter(|m| statuses.iter().any(|s| s.member_id == m.id))
-                            .count()
-                    }
-                    Err(_) => total, // Assume all healthy if we can't get status
-                };
-
-                let quorum_needed = total / 2 + 1;
-                let can_lose = healthy.saturating_sub(quorum_needed);
-
-                Some(EtcdQuorumInfo {
-                    total_members: total,
-                    healthy_members: healthy,
-                    can_lose,
-                    is_healthy: healthy >= quorum_needed,
-                })
+                let statuses = bounded(CALL_TIMEOUT, client.etcd_status_for_nodes(&cp_ips))
+                    .await
+                    .inspect_err(|e| tracing::warn!("Failed to fetch etcd status: {}", e))
+                    .ok();
+                Some(EtcdQuorumInfo::from(EtcdQuorum::assess(
+                    &members,
+                    statuses.as_deref(),
+                )))
             }
             Err(e) => {
                 tracing::warn!("Failed to fetch etcd members: {}", e);
@@ -565,36 +654,17 @@ impl LifecycleComponent {
             }
         };
 
-        // Fetch pod and PDB health from K8s
         let (pod_health, pdb_health) = if let Some(k8s) = &self.k8s_client {
-            let pod_result = check_pod_health(k8s, None).await;
-            let pdb_result = check_pdb_health(k8s).await;
-
-            (pod_result.ok(), pdb_result.ok())
+            let (pods, pdbs) = tokio::join!(
+                bounded(CALL_TIMEOUT, check_pod_health(k8s, None)),
+                bounded(CALL_TIMEOUT, check_pdb_health(k8s)),
+            );
+            (pods.ok(), pdbs.ok())
         } else {
             (None, None)
         };
 
-        // Determine if all checks passed
-        let all_passed = {
-            let pod_ok = pod_health.as_ref().map(|p| !p.has_issues()).unwrap_or(true);
-            let pdb_ok = pdb_health
-                .as_ref()
-                .map(|p| !p.has_blocking_pdbs())
-                .unwrap_or(true);
-            let etcd_ok = etcd_quorum
-                .as_ref()
-                .map(|e| e.is_healthy && e.can_lose > 0)
-                .unwrap_or(true);
-            pod_ok && pdb_ok && etcd_ok
-        };
-
-        data.pre_op_checks = PreOpChecks {
-            pod_health,
-            pdb_health,
-            etcd_quorum,
-            all_passed,
-        };
+        data.pre_op_checks = PreOpChecks::new(pod_health, pdb_health, etcd_quorum);
     }
 
     /// Generate alerts based on current state (static method operating on data)
@@ -909,36 +979,23 @@ impl LifecycleComponent {
         let mut lines = Vec::new();
 
         // Overall status indicator
-        let (overall_indicator, overall_color) = if pre_op_checks.all_passed {
-            ("✓", Color::Green)
-        } else {
-            ("!", Color::Yellow)
+        let (overall_indicator, overall_color) = pre_op_checks.overall.symbol_and_color();
+        let overall_text = match pre_op_checks.overall {
+            HealthIndicator::Healthy => "All checks passed",
+            HealthIndicator::Unknown => "Some checks could not run",
+            HealthIndicator::Error => "Some checks failed",
+            _ => "Some checks have warnings",
         };
-
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(overall_indicator, Style::default().fg(overall_color)),
             Span::raw(" "),
-            Span::styled(
-                if pre_op_checks.all_passed {
-                    "All checks passed"
-                } else {
-                    "Some checks have warnings"
-                },
-                Style::default().fg(overall_color),
-            ),
+            Span::styled(overall_text, Style::default().fg(overall_color)),
         ]));
 
         // etcd quorum check
         if let Some(ref etcd) = pre_op_checks.etcd_quorum {
-            let (indicator, color) = if etcd.is_healthy && etcd.can_lose > 0 {
-                ("✓", Color::Green)
-            } else if etcd.is_healthy {
-                ("!", Color::Yellow)
-            } else {
-                ("✗", Color::Red)
-            };
-
+            let (indicator, color) = etcd.health().symbol_and_color();
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(indicator, Style::default().fg(color)),
@@ -1260,11 +1317,54 @@ mod tests {
         let mut data = LifecycleData::default();
         data.pre_op_checks.etcd_quorum = Some(EtcdQuorumInfo {
             total_members: 3,
-            healthy_members: 3,
-            can_lose: 1,
-            is_healthy: true,
+            healthy_members: Some(3),
+            can_lose: Some(1),
+            has_quorum: Some(true),
         });
         assert!(!LifecycleComponent::gathered_nothing(&data));
+    }
+
+    fn quorum(voters: usize, healthy: Option<usize>) -> EtcdQuorumInfo {
+        let has_quorum = healthy.map(|h| h > voters / 2);
+        EtcdQuorumInfo {
+            total_members: voters,
+            healthy_members: healthy,
+            can_lose: healthy.map(|h| h.saturating_sub(voters / 2 + 1)),
+            has_quorum,
+        }
+    }
+
+    #[test]
+    fn etcd_quorum_health() {
+        assert_eq!(quorum(3, Some(3)).health(), HealthIndicator::Healthy);
+        // Quorum holds but one more loss breaks it
+        assert_eq!(quorum(3, Some(2)).health(), HealthIndicator::Warning);
+        assert_eq!(quorum(3, Some(1)).health(), HealthIndicator::Error);
+        // Status call failed: unknown, never assumed healthy
+        assert_eq!(quorum(3, None).health(), HealthIndicator::Unknown);
+        assert_eq!(quorum(3, None).summary(), "3 members, health unknown");
+    }
+
+    #[test]
+    fn pre_op_checks_that_could_not_run_are_not_passed() {
+        let checks = PreOpChecks::new(None, None, Some(quorum(3, Some(3))));
+        assert_eq!(checks.overall, HealthIndicator::Unknown);
+        let checks = PreOpChecks::new(None, None, None);
+        assert_eq!(checks.overall, HealthIndicator::Unknown);
+    }
+
+    #[test]
+    fn pre_op_checks_worst_wins() {
+        let pods = PodHealthInfo::default();
+        let pdbs = PdbHealthInfo::default();
+        let checks = PreOpChecks::new(
+            Some(pods.clone()),
+            Some(pdbs.clone()),
+            Some(quorum(3, Some(3))),
+        );
+        assert_eq!(checks.overall, HealthIndicator::Healthy);
+        let checks = PreOpChecks::new(Some(pods), Some(pdbs), Some(quorum(3, Some(1))));
+        assert_eq!(checks.overall, HealthIndicator::Error);
     }
 
     /// Versions present (the happy path) is likewise not "nothing".

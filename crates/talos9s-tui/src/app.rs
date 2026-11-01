@@ -1,6 +1,7 @@
 //! Application state and main loop
 
 use crate::action::Action;
+use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::BackgroundRefresh;
 use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth, TreeSelection};
 use crate::components::rolling_operations::RollingNodeInfo;
@@ -131,6 +132,10 @@ const FOLLOW_DELAY: Duration = Duration::from_millis(300);
 const FOLLOW_DELAY_LOGS: Duration = Duration::from_millis(500);
 /// Views kept for coming back to them
 const VIEW_CACHE_SIZE: usize = 4;
+
+/// How long the wizard waits for `talosctl apply-config` / `bootstrap`
+const APPLY_TIMEOUT: Duration = Duration::from_secs(60);
+const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A view put aside when another replaced it, by (view, selection)
 enum CachedView {
@@ -276,6 +281,15 @@ impl App {
         insecure: bool,
         insecure_endpoint: Option<String>,
     ) -> Self {
+        // Operations log to ~/.talos9s/audit.log; the node of each entry
+        // tells the cluster apart when no context is given
+        let audit_scope = match (&context, insecure) {
+            (Some(ctx), _) => ctx.clone(),
+            (None, true) => "maintenance".to_string(),
+            (None, false) => "-".to_string(),
+        };
+        crate::audit::init_audit_logger(&audit_scope);
+
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         Self {
             should_quit: false,
@@ -557,19 +571,42 @@ impl App {
         };
 
         if let Some(path) = config_path {
-            match apply_config_insecure(&endpoint, &path).await {
+            let disk = wizard
+                .data()
+                .selected_disk
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |d| d.dev_path.clone());
+            audit_start(
+                "INSTALL",
+                &endpoint,
+                &format!("cluster {cluster_name}, disk {disk}, config {path}"),
+            );
+            let applied =
+                tokio::time::timeout(APPLY_TIMEOUT, apply_config_insecure(&endpoint, &path))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(talos_rs::TalosError::Connection(format!(
+                            "timed out after {}s",
+                            APPLY_TIMEOUT.as_secs()
+                        )))
+                    });
+            match applied {
                 Ok(result) => {
                     if result.success {
+                        audit_success("INSTALL", &endpoint, "config applied, node installing");
                         // Start waiting for reboot
                         wizard.data_mut().wait_started = Some(Instant::now());
                         wizard.data_mut().context_name = Some(cluster_name);
                         wizard.transition(WizardState::WaitingReboot);
                     } else {
+                        audit_failure("INSTALL", &endpoint, &result.message);
                         wizard.set_error(result.message);
                     }
                 }
                 Err(e) => {
-                    wizard.set_error(format!("Failed to apply config: {}", e));
+                    let msg = format!("Failed to apply config: {}", e);
+                    audit_failure("INSTALL", &endpoint, &msg);
+                    wizard.set_error(msg);
                 }
             }
         } else {
@@ -587,23 +624,37 @@ impl App {
         let context = wizard.data().context_name.clone();
 
         if let Some(ctx) = context {
-            let output = Command::new("talosctl")
-                .args(["--context", &ctx, "bootstrap"])
-                .output()
-                .await;
+            let endpoint = wizard.data().endpoint.clone();
+            audit_start("BOOTSTRAP", &endpoint, &format!("context {ctx}"));
+            let output = tokio::time::timeout(
+                BOOTSTRAP_TIMEOUT,
+                Command::new("talosctl")
+                    .args(["--context", &ctx, "bootstrap"])
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await;
 
-            match output {
-                Ok(out) if out.status.success() => {
+            let failure = match output {
+                Ok(Ok(out)) if out.status.success() => {
+                    audit_success("BOOTSTRAP", &endpoint, "etcd bootstrapped");
                     wizard.data_mut().wait_started = Some(Instant::now());
                     wizard.transition(WizardState::WaitingHealthy);
+                    None
                 }
-                Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    wizard.set_error(format!("Bootstrap failed: {}", stderr));
-                }
-                Err(e) => {
-                    wizard.set_error(format!("Failed to run bootstrap: {}", e));
-                }
+                Ok(Ok(out)) => Some(format!(
+                    "Bootstrap failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                )),
+                Ok(Err(e)) => Some(format!("Failed to run bootstrap: {}", e)),
+                Err(_) => Some(format!(
+                    "Bootstrap timed out after {}s",
+                    BOOTSTRAP_TIMEOUT.as_secs()
+                )),
+            };
+            if let Some(msg) = failure {
+                audit_failure("BOOTSTRAP", &endpoint, &msg);
+                wizard.set_error(msg);
             }
         } else {
             wizard.set_error("No context available for bootstrap".to_string());
@@ -2173,25 +2224,6 @@ impl App {
                 if let Some((selection, title)) = from_group {
                     self.cluster.set_back_hint(Some(title.clone()));
                     self.drill_return = Some((selection, title));
-                }
-            }
-            Action::ApplyDiagnosticFix => {
-                // Apply a diagnostic fix (from confirmation dialog)
-                // Applied on a clone in the background, then refreshed; the
-                // view shows the fix as in progress until it lands
-                self.cancel_refresh_job();
-                if let Some(diagnostics) = &mut self.diagnostics {
-                    let mut worker = diagnostics.clone();
-                    diagnostics.begin_apply_fix();
-                    self.refresh_job = Some(RefreshJob::Diagnostics(tokio::spawn(async move {
-                        if let Err(e) = worker.apply_pending_fix().await {
-                            worker.set_error(e.to_string());
-                        }
-                        if let Err(e) = worker.refresh().await {
-                            worker.set_error(e.to_string());
-                        }
-                        worker
-                    })));
                 }
             }
             Action::ShowEtcd => {

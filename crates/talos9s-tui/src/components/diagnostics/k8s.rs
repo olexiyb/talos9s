@@ -937,12 +937,75 @@ pub async fn uncordon_node(client: &Client, node_name: &str) -> Result<CordonRes
 pub type DrainProgressCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Information about a pod to evict
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct PodToEvict {
     namespace: String,
     name: String,
     /// Whether this pod is managed by a controller (ReplicaSet, Deployment, etc.)
     is_managed: bool,
+}
+
+/// Pods to evict from a node: everything except mirror pods and (with
+/// `ignore_daemonsets`) DaemonSet pods. Pods with emptyDir volumes are an
+/// error unless `delete_emptydir_data`: `Err` lists them as `ns/name`.
+fn select_pods_to_evict(
+    pods: &[Pod],
+    options: &DrainOptions,
+) -> std::result::Result<Vec<PodToEvict>, Vec<String>> {
+    let mut pods_to_evict = Vec::new();
+    let mut blocking = Vec::new();
+
+    for pod in pods {
+        let pod_name = pod.metadata.name.clone().unwrap_or_default();
+        let namespace = pod.metadata.namespace.clone().unwrap_or_default();
+
+        // Mirror pods are created by kubelet, not managed by the API server
+        if pod
+            .metadata
+            .annotations
+            .as_ref()
+            .is_some_and(|a| a.contains_key("kubernetes.io/config.mirror"))
+        {
+            continue;
+        }
+
+        let owner_refs = pod.metadata.owner_references.as_ref();
+        let is_daemonset_pod =
+            owner_refs.is_some_and(|refs| refs.iter().any(|r| r.kind == "DaemonSet"));
+        if is_daemonset_pod && options.ignore_daemonsets {
+            continue;
+        }
+        let is_managed = owner_refs.is_some_and(|refs| {
+            refs.iter().any(|r| {
+                matches!(
+                    r.kind.as_str(),
+                    "ReplicaSet" | "Deployment" | "StatefulSet" | "Job" | "DaemonSet"
+                )
+            })
+        });
+
+        let has_emptydir = pod.spec.as_ref().is_some_and(|spec| {
+            spec.volumes
+                .as_ref()
+                .is_some_and(|volumes| volumes.iter().any(|v| v.empty_dir.is_some()))
+        });
+        if has_emptydir && !options.delete_emptydir_data {
+            blocking.push(format!("{namespace}/{pod_name}"));
+            continue;
+        }
+
+        pods_to_evict.push(PodToEvict {
+            namespace,
+            name: pod_name,
+            is_managed,
+        });
+    }
+
+    if blocking.is_empty() {
+        Ok(pods_to_evict)
+    } else {
+        Err(blocking)
+    }
 }
 
 /// Drain a node (evict all pods)
@@ -978,57 +1041,29 @@ pub async fn drain_node_with_progress(
         .await
         .map_err(|e| K8sError::ApiError(format!("Failed to list pods: {}", e)))?;
 
-    let mut pods_to_evict = Vec::new();
-    let mut _skipped_daemonset = 0;
-
-    for pod in pod_list.items {
-        let pod_name = pod.metadata.name.clone().unwrap_or_default();
-        let namespace = pod.metadata.namespace.clone().unwrap_or_default();
-
-        // Skip mirror pods (created by kubelet, not managed by API server)
-        if let Some(annotations) = &pod.metadata.annotations
-            && annotations.contains_key("kubernetes.io/config.mirror")
-        {
-            continue;
+    let pods_to_evict = match select_pods_to_evict(&pod_list.items, options) {
+        Ok(pods) => pods,
+        Err(blocking) => {
+            // Like kubectl: refuse up front instead of skipping, so the node
+            // isn't rebooted with pods still on it
+            let msg = format!(
+                "{} pod(s) with emptyDir data (local data would be lost): {}",
+                blocking.len(),
+                blocking.join(", ")
+            );
+            if let Some(ref cb) = progress_callback {
+                cb(&msg);
+            }
+            return Ok(DrainResult {
+                node: node_name.to_string(),
+                success: false,
+                pods_evicted: 0,
+                failed_pods: blocking,
+                force_deleted_pods: Vec::new(),
+                error: Some(msg),
+            });
         }
-
-        // Check if pod is owned by a controller (managed)
-        let owner_refs = pod.metadata.owner_references.as_ref();
-        let is_daemonset_pod =
-            owner_refs.is_some_and(|refs| refs.iter().any(|r| r.kind == "DaemonSet"));
-        let is_managed = owner_refs.is_some_and(|refs| {
-            refs.iter().any(|r| {
-                matches!(
-                    r.kind.as_str(),
-                    "ReplicaSet" | "Deployment" | "StatefulSet" | "Job" | "DaemonSet"
-                )
-            })
-        });
-
-        if is_daemonset_pod && options.ignore_daemonsets {
-            _skipped_daemonset += 1;
-            continue;
-        }
-        // DaemonSet pods can't be evicted without ignoring them
-
-        // Check for local storage (emptyDir)
-        let has_emptydir = pod.spec.as_ref().is_some_and(|spec| {
-            spec.volumes
-                .as_ref()
-                .is_some_and(|volumes| volumes.iter().any(|v| v.empty_dir.is_some()))
-        });
-
-        if has_emptydir && !options.delete_emptydir_data {
-            // Skip pods with emptyDir unless explicitly allowed
-            continue;
-        }
-
-        pods_to_evict.push(PodToEvict {
-            namespace,
-            name: pod_name,
-            is_managed,
-        });
-    }
+    };
 
     let total_pods = pods_to_evict.len();
     let mut evicted = 0;
@@ -1274,110 +1309,87 @@ pub enum NodeConditionStatus {
     Unknown,
 }
 
-/// Get the current ready status of a node
-pub async fn get_node_ready_status(
-    client: &Client,
-    node_name: &str,
-) -> Result<NodeConditionStatus, K8sError> {
-    let nodes: Api<Node> = Api::all(client.clone());
-
-    let node = nodes
-        .get(node_name)
-        .await
-        .map_err(|e| K8sError::ApiError(format!("Failed to get node: {}", e)))?;
-
-    let conditions = node.status.as_ref().and_then(|s| s.conditions.as_ref());
-
-    if let Some(conditions) = conditions {
-        for condition in conditions {
-            if condition.type_ == "Ready" {
-                return match condition.status.as_str() {
-                    "True" => Ok(NodeConditionStatus::Ready),
-                    "False" => Ok(NodeConditionStatus::NotReady),
-                    _ => Ok(NodeConditionStatus::Unknown),
-                };
-            }
-        }
-    }
-
-    Ok(NodeConditionStatus::Unknown)
+/// What a node reports: its Ready condition and the boot it is on
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeState {
+    pub ready: NodeConditionStatus,
+    /// `status.nodeInfo.bootID`; changes with every boot
+    pub boot_id: Option<String>,
 }
 
-/// Check if a node exists and is reachable in the cluster
-pub async fn node_exists(client: &Client, node_name: &str) -> bool {
+/// How long one node lookup may take while waiting on a reboot
+const NODE_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Get the Ready condition and boot ID of a node
+pub async fn get_node_state(client: &Client, node_name: &str) -> Result<NodeState, K8sError> {
     let nodes: Api<Node> = Api::all(client.clone());
-    nodes.get(node_name).await.is_ok()
+
+    let node = tokio::time::timeout(NODE_LOOKUP_TIMEOUT, nodes.get(node_name))
+        .await
+        .map_err(|_| K8sError::ApiError("Timed out getting node".to_string()))?
+        .map_err(|e| K8sError::ApiError(format!("Failed to get node: {}", e)))?;
+
+    let status = node.status.as_ref();
+    let ready = status
+        .and_then(|s| s.conditions.as_ref())
+        .and_then(|conditions| conditions.iter().find(|c| c.type_ == "Ready"))
+        .map_or(NodeConditionStatus::Unknown, |c| match c.status.as_str() {
+            "True" => NodeConditionStatus::Ready,
+            "False" => NodeConditionStatus::NotReady,
+            _ => NodeConditionStatus::Unknown,
+        });
+    let boot_id = status
+        .and_then(|s| s.node_info.as_ref())
+        .map(|info| info.boot_id.clone())
+        .filter(|id| !id.is_empty());
+    Ok(NodeState { ready, boot_id })
+}
+
+/// Boot ID of a node before a reboot, to tell the new boot from the old one
+pub async fn get_node_boot_id(client: &Client, node_name: &str) -> Option<String> {
+    get_node_state(client, node_name).await.ok()?.boot_id
+}
+
+/// Whether the node is back from the reboot: Ready on a new boot. Without
+/// boot IDs, Ready after it was seen down. A Ready node on the old boot
+/// hasn't rebooted yet: its condition is stale until kubelet stops reporting.
+fn reboot_finished(boot_id_before: Option<&str>, seen_down: bool, state: &NodeState) -> bool {
+    if state.ready != NodeConditionStatus::Ready {
+        return false;
+    }
+    match (boot_id_before, state.boot_id.as_deref()) {
+        (Some(before), Some(now)) => before != now,
+        _ => seen_down,
+    }
 }
 
 /// Progress callback for node readiness waiting
 pub type NodeReadyProgressCallback = Box<dyn Fn(&str) + Send + Sync>;
 
-/// Wait for a node to become Ready after reboot
+/// Wait for a node to come back Ready after a reboot.
 ///
-/// This function:
-/// 1. Optionally waits for the node to disappear (confirm reboot started)
-/// 2. Waits for the node to reappear
-/// 3. Waits for the node condition to become Ready
+/// `boot_id_before` is the node's boot ID from before the reboot request
+/// (see [`get_node_boot_id`]); with it, success means Ready on a new boot.
+/// Without it, success means Ready after the node was seen NotReady or gone.
 pub async fn wait_for_node_ready(
     client: &Client,
     node_name: &str,
     timeout_secs: u64,
-    wait_for_disconnect: bool,
+    boot_id_before: Option<String>,
     progress_callback: Option<NodeReadyProgressCallback>,
 ) -> Result<NodeReadyResult, K8sError> {
     let start = std::time::Instant::now();
-    let poll_interval = tokio::time::Duration::from_secs(5);
-
-    // Phase 1: Wait for node to disconnect (if requested)
-    if wait_for_disconnect {
+    let poll_interval = tokio::time::Duration::from_secs(3);
+    let report = |msg: &str| {
         if let Some(ref cb) = progress_callback {
-            cb("Waiting for node to begin rebooting...");
+            cb(msg);
         }
+    };
+    report("Waiting for node to begin rebooting...");
 
-        // Wait up to 60 seconds for the node to disconnect
-        let disconnect_timeout = 60;
-        let disconnect_start = std::time::Instant::now();
-        let mut disconnected = false;
-
-        while disconnect_start.elapsed().as_secs() < disconnect_timeout {
-            match get_node_ready_status(client, node_name).await {
-                Ok(NodeConditionStatus::NotReady) | Ok(NodeConditionStatus::Unknown) => {
-                    disconnected = true;
-                    if let Some(ref cb) = progress_callback {
-                        cb("Node is rebooting...");
-                    }
-                    break;
-                }
-                Err(_) => {
-                    // API error might mean node is disconnecting
-                    disconnected = true;
-                    if let Some(ref cb) = progress_callback {
-                        cb("Node is rebooting...");
-                    }
-                    break;
-                }
-                Ok(NodeConditionStatus::Ready) => {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                }
-            }
-        }
-
-        if !disconnected {
-            // Node never went down - might be a problem, but continue waiting
-            if let Some(ref cb) = progress_callback {
-                cb("Warning: Node didn't appear to disconnect, continuing to wait...");
-            }
-        }
-    }
-
-    // Phase 2: Wait for node to become Ready
-    if let Some(ref cb) = progress_callback {
-        cb("Waiting for node to come back online...");
-    }
-
+    let mut seen_down = false;
     loop {
         let elapsed = start.elapsed().as_secs();
-
         if elapsed >= timeout_secs {
             return Ok(NodeReadyResult {
                 success: false,
@@ -1388,41 +1400,46 @@ pub async fn wait_for_node_ready(
                 )),
             });
         }
+        let remaining = timeout_secs - elapsed;
 
-        // Check node status
-        match get_node_ready_status(client, node_name).await {
-            Ok(NodeConditionStatus::Ready) => {
-                if let Some(ref cb) = progress_callback {
-                    cb(&format!("Node is Ready (took {}s)", elapsed));
+        match get_node_state(client, node_name).await {
+            Ok(state) => {
+                if reboot_finished(boot_id_before.as_deref(), seen_down, &state) {
+                    report(&format!("Node is Ready (took {}s)", elapsed));
+                    return Ok(NodeReadyResult {
+                        success: true,
+                        time_taken_secs: elapsed,
+                        error: None,
+                    });
                 }
-                return Ok(NodeReadyResult {
-                    success: true,
-                    time_taken_secs: elapsed,
-                    error: None,
-                });
-            }
-            Ok(status) => {
-                let remaining = timeout_secs - elapsed;
-                if let Some(ref cb) = progress_callback {
-                    let status_str = match status {
+                let same_boot = boot_id_before.is_some() && state.boot_id == boot_id_before;
+                if state.ready != NodeConditionStatus::Ready {
+                    seen_down = true;
+                }
+                if state.ready == NodeConditionStatus::Ready && (same_boot || !seen_down) {
+                    report(&format!(
+                        "Waiting for node to begin rebooting ({}s remaining)",
+                        remaining
+                    ));
+                } else {
+                    let status = match state.ready {
                         NodeConditionStatus::NotReady => "NotReady",
+                        NodeConditionStatus::Ready => "Ready",
                         NodeConditionStatus::Unknown => "Unknown",
-                        _ => "Unknown",
                     };
-                    cb(&format!(
+                    report(&format!(
                         "Node status: {} ({}s remaining)",
-                        status_str, remaining
+                        status, remaining
                     ));
                 }
             }
             Err(_) => {
-                let remaining = timeout_secs - elapsed;
-                if let Some(ref cb) = progress_callback {
-                    cb(&format!(
-                        "Waiting for node to rejoin cluster ({}s remaining)",
-                        remaining
-                    ));
-                }
+                // Gone from the API or the API is down with it
+                seen_down = true;
+                report(&format!(
+                    "Waiting for node to rejoin cluster ({}s remaining)",
+                    remaining
+                ));
             }
         }
 
@@ -1454,6 +1471,122 @@ fn classify_eviction_error(err: &kube::Error) -> EvictionErrorKind {
 
 #[cfg(test)]
 mod tests {
+    fn node_state(ready: NodeConditionStatus, boot_id: Option<&str>) -> NodeState {
+        NodeState {
+            ready,
+            boot_id: boot_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn reboot_finished_needs_a_new_boot() {
+        use NodeConditionStatus::*;
+        // Still Ready on the old boot: not rebooted yet, even after the
+        // disconnect window passed
+        assert!(!reboot_finished(
+            Some("a"),
+            false,
+            &node_state(Ready, Some("a"))
+        ));
+        assert!(!reboot_finished(
+            Some("a"),
+            true,
+            &node_state(Ready, Some("a"))
+        ));
+        // New boot but not Ready yet
+        assert!(!reboot_finished(
+            Some("a"),
+            true,
+            &node_state(NotReady, Some("b"))
+        ));
+        // New boot and Ready, whether or not it was seen down
+        assert!(reboot_finished(
+            Some("a"),
+            false,
+            &node_state(Ready, Some("b"))
+        ));
+    }
+
+    #[test]
+    fn reboot_finished_without_boot_ids_needs_seen_down() {
+        use NodeConditionStatus::*;
+        assert!(!reboot_finished(None, false, &node_state(Ready, None)));
+        assert!(reboot_finished(None, true, &node_state(Ready, None)));
+        assert!(!reboot_finished(None, true, &node_state(Unknown, None)));
+        // Boot ID only known afterwards: fall back to seen down
+        assert!(!reboot_finished(None, false, &node_state(Ready, Some("b"))));
+    }
+
+    fn pod(name: &str, owner: Option<&str>, mirror: bool, emptydir: bool) -> Pod {
+        k8s_openapi::serde_json::from_value(json!({
+            "metadata": {
+                "name": name,
+                "namespace": "ns",
+                "annotations": if mirror {
+                    json!({"kubernetes.io/config.mirror": "x"})
+                } else {
+                    json!({})
+                },
+                "ownerReferences": owner.map(|kind| vec![json!({
+                    "apiVersion": "apps/v1", "kind": kind, "name": "o", "uid": "u"
+                })]).unwrap_or_default(),
+            },
+            "spec": {
+                "containers": [{"name": "c"}],
+                "volumes": if emptydir {
+                    json!([{"name": "v", "emptyDir": {}}])
+                } else {
+                    json!([])
+                },
+            },
+        }))
+        .unwrap()
+    }
+
+    fn names(pods: &[PodToEvict]) -> Vec<&str> {
+        pods.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn drain_skips_mirror_and_daemonset_pods() {
+        let pods = [
+            pod("mirror", None, true, false),
+            pod("ds", Some("DaemonSet"), false, false),
+            pod("app", Some("ReplicaSet"), false, false),
+            pod("bare", None, false, false),
+        ];
+        let selected = select_pods_to_evict(&pods, &DrainOptions::default()).unwrap();
+        assert_eq!(names(&selected), ["app", "bare"]);
+        assert!(selected[0].is_managed);
+        assert!(!selected[1].is_managed);
+
+        let options = DrainOptions {
+            ignore_daemonsets: false,
+            ..Default::default()
+        };
+        let selected = select_pods_to_evict(&pods, &options).unwrap();
+        assert_eq!(names(&selected), ["ds", "app", "bare"]);
+    }
+
+    #[test]
+    fn drain_refuses_emptydir_pods_unless_allowed() {
+        let pods = [
+            pod("app", Some("ReplicaSet"), false, false),
+            pod("cache", Some("ReplicaSet"), false, true),
+        ];
+        let selected = select_pods_to_evict(&pods, &DrainOptions::default()).unwrap();
+        assert_eq!(names(&selected), ["app", "cache"]);
+
+        let options = DrainOptions {
+            delete_emptydir_data: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            select_pods_to_evict(&pods, &options),
+            Err(vec!["ns/cache".to_string()])
+        );
+    }
+
     #[test]
     fn server_host_port_parsing() {
         use super::server_host_port;

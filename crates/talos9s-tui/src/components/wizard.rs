@@ -257,6 +257,18 @@ pub struct WizardComponent {
 
     /// Whether viewing volumes instead of disks
     viewing_volumes: bool,
+
+    /// A step that changes the node, waiting for `y`
+    confirming: Option<WizardConfirm>,
+}
+
+/// Steps that change the node and need an explicit `y`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WizardConfirm {
+    /// Install Talos to the selected disk (erases it)
+    Apply,
+    /// Bootstrap etcd (once per cluster)
+    Bootstrap,
 }
 
 impl WizardComponent {
@@ -270,6 +282,7 @@ impl WizardComponent {
             disk_table_state,
             active_field: ConfigField::default(),
             viewing_volumes: false,
+            confirming: None,
         }
     }
 
@@ -442,8 +455,8 @@ impl WizardComponent {
     fn handle_config_ready_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('a') | KeyCode::Enter => {
-                // Apply config
-                Some(Action::WizardApplyConfig)
+                self.confirming = Some(WizardConfirm::Apply);
+                None
             }
             KeyCode::Esc => {
                 // Go back to configure
@@ -459,8 +472,8 @@ impl WizardComponent {
     fn handle_ready_bootstrap_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('b') | KeyCode::Enter => {
-                // Bootstrap
-                Some(Action::WizardBootstrap)
+                self.confirming = Some(WizardConfirm::Bootstrap);
+                None
             }
             KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
             _ => None,
@@ -1098,6 +1111,67 @@ impl WizardComponent {
     }
 
     /// Draw ready to bootstrap state
+    fn draw_confirm(&self, frame: &mut Frame, area: Rect, confirm: WizardConfirm) {
+        let endpoint = self.data.endpoint.as_str();
+        let (title, lines) = match confirm {
+            WizardConfirm::Apply => {
+                let disk = self
+                    .data
+                    .selected_disk
+                    .as_ref()
+                    .map_or("the selected disk".to_string(), |d| {
+                        format!("{} ({})", d.dev_path, d.size_pretty)
+                    });
+                (
+                    " Install Talos ",
+                    vec![
+                        Line::raw(format!("Install Talos on {endpoint} to {disk}?")),
+                        Line::styled(
+                            "Everything on that disk will be erased.",
+                            Style::default().fg(Color::Red),
+                        ),
+                    ],
+                )
+            }
+            WizardConfirm::Bootstrap => (
+                " Bootstrap ",
+                vec![
+                    Line::raw(format!("Bootstrap etcd on {endpoint}?")),
+                    Line::styled(
+                        "Run this once per cluster, on one control plane node.",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ],
+            ),
+        };
+        let mut lines = lines;
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled(" [y] ", Style::default().fg(Color::Green)),
+            Span::raw("Yes  "),
+            Span::styled(" [n/Esc] ", Style::default().fg(Color::Cyan)),
+            Span::raw("Cancel"),
+        ]));
+        let width = lines
+            .iter()
+            .map(|l| l.width() as u16 + 4)
+            .max()
+            .unwrap_or(40)
+            .min(area.width);
+        let height = (lines.len() as u16 + 2).min(area.height);
+        let dialog = area.centered(Constraint::Length(width), Constraint::Length(height));
+        frame.render_widget(ratatui::widgets::Clear, dialog);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            ),
+            dialog,
+        );
+    }
+
     fn draw_ready_bootstrap(&self, frame: &mut Frame, area: Rect) {
         let mut lines = vec![
             Line::raw(""),
@@ -1277,6 +1351,24 @@ impl WizardComponent {
 
 impl Component for WizardComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // Only `y` goes ahead, so the Enter that opened the dialog can't
+        // confirm it
+        if let Some(confirm) = self.confirming {
+            return Ok(match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.confirming = None;
+                    Some(match confirm {
+                        WizardConfirm::Apply => Action::WizardApplyConfig,
+                        WizardConfirm::Bootstrap => Action::WizardBootstrap,
+                    })
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.confirming = None;
+                    None
+                }
+                _ => None,
+            });
+        }
         let action = match &self.state {
             WizardState::Connecting => self.handle_waiting_key(key),
             WizardState::SelectDisk => self.handle_select_disk_key(key),
@@ -1323,6 +1415,75 @@ impl Component for WizardComponent {
             WizardState::Error(msg) => self.draw_error(frame, layout[1], msg),
         }
 
+        if let Some(confirm) = self.confirming {
+            self.draw_confirm(frame, area, confirm);
+        }
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    fn press(wizard: &mut WizardComponent, code: KeyCode) -> Option<Action> {
+        wizard
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap()
+    }
+
+    #[test]
+    fn apply_needs_y_not_a_second_enter() {
+        let mut wizard = WizardComponent::new("10.0.0.5".into());
+        wizard.transition(WizardState::ConfigReady);
+
+        assert!(press(&mut wizard, KeyCode::Enter).is_none());
+        // The second Enter of a double press doesn't install
+        assert!(press(&mut wizard, KeyCode::Enter).is_none());
+        assert!(matches!(
+            press(&mut wizard, KeyCode::Char('y')),
+            Some(Action::WizardApplyConfig)
+        ));
+    }
+
+    #[test]
+    fn cancel_closes_the_dialog() {
+        let mut wizard = WizardComponent::new("10.0.0.5".into());
+        wizard.transition(WizardState::ReadyToBootstrap);
+
+        assert!(press(&mut wizard, KeyCode::Char('b')).is_none());
+        assert!(press(&mut wizard, KeyCode::Esc).is_none());
+        // The dialog is gone: `y` alone does nothing now
+        assert!(press(&mut wizard, KeyCode::Char('y')).is_none());
+
+        press(&mut wizard, KeyCode::Enter);
+        assert!(matches!(
+            press(&mut wizard, KeyCode::Char('y')),
+            Some(Action::WizardBootstrap)
+        ));
+    }
+
+    #[test]
+    fn confirm_dialog_names_the_disk() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut wizard = WizardComponent::new("10.0.0.5".into());
+        wizard.transition(WizardState::ConfigReady);
+        press(&mut wizard, KeyCode::Enter);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|f| wizard.draw(f, f.area()).unwrap())
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(screen.contains("Install Talos on 10.0.0.5"));
+        assert!(screen.contains("will be erased"));
     }
 }

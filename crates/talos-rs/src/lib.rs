@@ -108,6 +108,7 @@ pub use client::{
     ServiceRestartResult,
     TalosClient,
     VersionInfo,
+    host_of,
 };
 pub use config::{Context, TalosConfig};
 pub use error::TalosError;

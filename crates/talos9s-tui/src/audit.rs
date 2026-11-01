@@ -155,14 +155,17 @@ impl AuditLogger {
             return;
         }
 
+        // One entry per line: a newline in an error message must not
+        // forge a second entry
+        let one_line = |text: &str| text.replace(['\n', '\r'], " ");
         let entry = AuditEntry {
             timestamp: Local::now(),
             user: self.user.clone(),
             cluster: self.cluster.clone(),
-            operation: operation.to_string(),
-            node: node.to_string(),
+            operation: one_line(operation),
+            node: one_line(node),
             result,
-            details: details.to_string(),
+            details: one_line(details),
         };
 
         if let Err(e) = self.write_entry(&entry) {
@@ -279,6 +282,25 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn entries_stay_on_one_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = AuditLogger {
+            log_path: dir.path().join("audit.log"),
+            cluster: "bc".into(),
+            user: "me".into(),
+            enabled: true,
+        };
+        logger.log_failure(
+            "REBOOT",
+            "bc1",
+            "failed:\n[x] [bc] [me] [REBOOT] [bc1] [SUCCESS] ok",
+        );
+        let log = std::fs::read_to_string(dir.path().join("audit.log")).unwrap();
+        assert_eq!(log.lines().count(), 1);
+        assert!(log.contains("] [bc] [me] [REBOOT] [bc1] [FAILURE] failed: [x]"));
+    }
 
     #[test]
     fn test_audit_result_display() {

@@ -20,41 +20,24 @@ use ratatui::{
 };
 use std::sync::{Arc, Mutex};
 use talos_rs::TalosClient;
-use talos9s_core::{AsyncState, SafetyStatus};
+use talos9s_core::{AsyncState, EtcdQuorum, SafetyStatus};
 use tokio::task::JoinHandle;
 
 /// etcd quorum information for the node
 #[derive(Debug, Clone, Default)]
 pub struct NodeEtcdInfo {
-    /// Whether this node is an etcd member
+    /// Whether this node is a voting etcd member
     pub is_member: bool,
     /// Whether this node is the etcd leader
     pub is_leader: bool,
-    /// Total etcd members
+    /// Voting etcd members
     pub total_members: usize,
-    /// Healthy etcd members
-    pub healthy_members: usize,
-    /// Quorum needed
-    pub quorum_needed: usize,
-    /// Members remaining after this node goes down
-    pub members_after: usize,
-    /// Whether quorum is maintained after this node goes down
-    pub quorum_maintained: bool,
-}
-
-impl NodeEtcdInfo {
-    fn safety_status(&self) -> SafetyStatus {
-        if !self.is_member || self.quorum_maintained {
-            SafetyStatus::Safe
-        } else if self.total_members == 1 {
-            SafetyStatus::Unsafe("Single etcd member - quorum will be lost".to_string())
-        } else {
-            SafetyStatus::Unsafe(format!(
-                "Quorum will be lost ({}/{} members after)",
-                self.members_after, self.total_members
-            ))
-        }
-    }
+    /// Voters that answered the status call; `None` when unknown
+    pub healthy_members: Option<usize>,
+    /// Healthy voters left after this node goes down; `None` when unknown
+    pub members_after: Option<usize>,
+    /// Whether taking this node down keeps quorum
+    pub safety: SafetyStatus,
 }
 
 /// Current operation state
@@ -343,6 +326,13 @@ async fn run_reboot_operation(
         p.message = format!("Sending {} command...", name.to_lowercase());
     }
 
+    // Read before the request, so the wait can tell the new boot from the old
+    let boot_id_before = if shutdown || !options.wait_for_node_ready {
+        None
+    } else {
+        crate::components::diagnostics::k8s::get_node_boot_id(&k8s, &hostname).await
+    };
+
     let node_client = client.with_node(&address);
     // Already drained: Talos' own cordon and drain before a shutdown is a no-op
     let request = if shutdown {
@@ -413,7 +403,7 @@ async fn run_reboot_operation(
             &k8s,
             &hostname,
             options.post_reboot_timeout_secs,
-            true, // wait for disconnect first
+            boot_id_before,
             Some(ready_callback),
         )
         .await;
@@ -519,7 +509,7 @@ struct SafetyChecks {
 }
 
 /// Fetch etcd quorum information for the node at `address`
-async fn fetch_etcd_info(client: &TalosClient, address: &str) -> Option<NodeEtcdInfo> {
+pub(crate) async fn fetch_etcd_info(client: &TalosClient, address: &str) -> Option<NodeEtcdInfo> {
     let members = match tokio::time::timeout(SAFETY_CHECK_TIMEOUT, client.etcd_members()).await {
         Ok(Ok(members)) => members,
         Ok(Err(e)) => {
@@ -531,59 +521,33 @@ async fn fetch_etcd_info(client: &TalosClient, address: &str) -> Option<NodeEtcd
             return None;
         }
     };
-    let total = members.len();
-    let quorum_needed = total / 2 + 1;
-
-    // Check if this node is a member
-    let node_addr = address.split(':').next().unwrap_or(address);
-    let is_member = members
-        .iter()
-        .any(|m| m.peer_urls.iter().any(|url| url.contains(node_addr)));
-
     // Extract control plane IPs to target status calls (hostnames may not be resolvable)
     let cp_ips: Vec<String> = members.iter().filter_map(|m| m.ip_address()).collect();
 
-    // Get status from all control planes (single call for both is_leader and healthy)
+    // Per-node failures are left out of the reply; a failed call means unknown
     let statuses =
-        tokio::time::timeout(SAFETY_CHECK_TIMEOUT, client.etcd_status_for_nodes(&cp_ips))
+        match tokio::time::timeout(SAFETY_CHECK_TIMEOUT, client.etcd_status_for_nodes(&cp_ips))
             .await
-            .ok()
-            .and_then(|r| r.ok())
-            .unwrap_or_default();
+        {
+            Ok(Ok(statuses)) => Some(statuses),
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to fetch etcd status: {}", e);
+                None
+            }
+            Err(_) => {
+                tracing::warn!("Timed out fetching etcd status");
+                None
+            }
+        };
 
-    // Check if this node is the leader
-    let is_leader = statuses.iter().any(|s| {
-        let member = members.iter().find(|m| m.id == s.member_id);
-        if let Some(m) = member {
-            m.peer_urls.iter().any(|url| url.contains(node_addr)) && s.is_leader()
-        } else {
-            false
-        }
-    });
-
-    // Calculate members after this node goes down
-    let members_after = if is_member { total - 1 } else { total };
-    let quorum_maintained = members_after >= quorum_needed;
-
-    // Count healthy members (those with status)
-    // If no statuses returned, assume all healthy
-    let healthy = if statuses.is_empty() {
-        total
-    } else {
-        members
-            .iter()
-            .filter(|m| statuses.iter().any(|s| s.member_id == m.id))
-            .count()
-    };
-
+    let quorum = EtcdQuorum::assess(&members, statuses.as_deref());
     Some(NodeEtcdInfo {
-        is_member,
-        is_leader,
-        total_members: total,
-        healthy_members: healthy,
-        quorum_needed,
-        members_after,
-        quorum_maintained,
+        is_member: EtcdQuorum::is_voter(&members, address),
+        is_leader: quorum.is_leader(&members, address),
+        total_members: quorum.voters,
+        healthy_members: quorum.healthy,
+        members_after: quorum.healthy_after(&members, address),
+        safety: quorum.removal_safety(&members, address),
     })
 }
 
@@ -934,7 +898,7 @@ impl NodeOperationsComponent {
         let etcd_safety = data
             .etcd_info
             .as_ref()
-            .map(|e| e.safety_status())
+            .map(|e| e.safety.clone())
             .unwrap_or(SafetyStatus::Unknown);
 
         // Drain safety = PDB check
@@ -1233,34 +1197,41 @@ impl NodeOperationsComponent {
             )]));
 
             if let Some(etcd) = data.and_then(|d| d.etcd_info.as_ref()) {
-                let (indicator, color) = etcd.safety_status().indicator_with_color();
+                let (indicator, color) = etcd.safety.indicator_with_color();
+                let healthy = etcd
+                    .healthy_members
+                    .map_or_else(|| "?".to_string(), |h| h.to_string());
                 let role = if etcd.is_leader { "leader" } else { "member" };
 
                 lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(indicator, Style::default().fg(color)),
                     Span::raw(format!(
-                        " {}/{} members ({})",
-                        etcd.healthy_members, etcd.total_members, role
+                        " {}/{} members healthy ({})",
+                        healthy, etcd.total_members, role
                     )),
                 ]));
 
                 if etcd.is_member {
-                    let after_text = if etcd.quorum_maintained {
-                        format!(
-                            "After: {}/{} (quorum OK)",
-                            etcd.members_after, etcd.total_members
-                        )
-                    } else {
-                        format!(
-                            "After: {}/{} (QUORUM LOST)",
-                            etcd.members_after, etcd.total_members
-                        )
-                    };
-                    let after_color = if etcd.quorum_maintained {
-                        Color::Green
-                    } else {
-                        Color::Red
+                    let after = etcd
+                        .members_after
+                        .map_or_else(|| "?".to_string(), |a| a.to_string());
+                    let (after_text, after_color) = match &etcd.safety {
+                        SafetyStatus::Safe => (
+                            format!("After: {}/{} (quorum OK)", after, etcd.total_members),
+                            Color::Green,
+                        ),
+                        SafetyStatus::Unknown => (
+                            format!(
+                                "After: {}/{} (member health unknown)",
+                                after, etcd.total_members
+                            ),
+                            Color::DarkGray,
+                        ),
+                        _ => (
+                            format!("After: {}/{} (QUORUM LOST)", after, etcd.total_members),
+                            Color::Red,
+                        ),
                     };
                     lines.push(Line::from(vec![
                         Span::raw("    "),

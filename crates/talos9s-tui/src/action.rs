@@ -44,8 +44,6 @@ pub enum Action {
     /// Show diagnostics for a node: (hostname, address, role, controlplane_endpoint)
     /// The controlplane_endpoint is used for fetching kubeconfig when diagnosing worker nodes
     ShowDiagnostics(String, String, String, Option<String>),
-    /// Apply a diagnostic fix (triggered from confirmation dialog)
-    ApplyDiagnosticFix,
     /// Show security/certificates view
     ShowSecurity,
     /// Show lifecycle/version view

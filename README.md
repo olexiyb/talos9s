@@ -234,10 +234,10 @@ talos9s runs with your talosconfig, which usually means full admin on every
 node, so it is careful about what it changes:
 
 - **Reads by default.** It changes a node only for drain, reboot, shutdown,
-  rolling operations and diagnostic fixes, each after a confirmation dialog,
-  and logs every step to `~/.talos9s/audit.log`.
-- **Never runs suggested commands.** Storage fixes (drbdadm, kubectl) are
-  shown and copied for you to review and run.
+  rolling operations, cluster install and bootstrap, each after a
+  confirmation dialog, and logs every step to `~/.talos9s/audit.log`.
+- **Never runs suggested commands.** Diagnostic fixes (talosctl) and storage
+  fixes (drbdadm, kubectl) are shown and copied for you to review and run.
 - **Never shows secrets.** The machine config viewer masks keys, tokens,
   passwords, private keys and Secret data before anything is drawn.
 - **Writes only:** the audit log, the remembered view state

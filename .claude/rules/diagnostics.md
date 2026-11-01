@@ -20,8 +20,8 @@ components/diagnostics/
 - Build results with `DiagnosticCheck::pass(id, name, msg)`,
   `fail(id, name, msg, Some(fix))`, `warn(id, name, msg)`, `unknown(id, name)`.
   Return `unknown` when the source can't be read; never `fail` on missing data.
-- Give a `DiagnosticFix` when there is a concrete action; it is shown and
-  confirmed, never applied silently.
+- Give a `DiagnosticFix` when there is a concrete action. talos9s never runs
+  it: the dialog shows the command (`FixAction::command`) and copies it.
 - New check: find the source of truth first (file > API > log), add it to
   `core.rs` or the CNI/addon module.
 - New CNI: `cni/<name>.rs`, detection in `cni/mod.rs` (Kubernetes API first,

@@ -8,19 +8,14 @@ pub use talos9s_core::{
     CheckCategory, CheckStatus, CniInfo, CniPodInfo, CniType, PodHealthInfo, UnhealthyPodInfo,
 };
 
-/// Action that can be taken to fix an issue
+/// What fixes an issue. talos9s never runs it: the dialog shows the command
+/// and copies it, and the user runs it.
 #[derive(Debug, Clone)]
 pub enum FixAction {
-    /// Add a kernel module via machine config
+    /// Add a kernel module via the machine config
     AddKernelModule(String),
     /// Restart a service
     RestartService(String),
-    /// Apply a YAML config patch
-    ApplyConfigPatch { yaml: String, requires_reboot: bool },
-    /// Show more details (navigate to logs, etc.)
-    ShowDetails(String),
-    /// Install Cilium CNI
-    InstallCilium,
     /// Run a command on the host (for Docker environments)
     HostCommand {
         command: String,
@@ -34,36 +29,36 @@ impl FixAction {
         match self {
             FixAction::AddKernelModule(name) => format!("Add {} kernel module", name),
             FixAction::RestartService(name) => format!("Restart {} service", name),
-            FixAction::ApplyConfigPatch {
-                requires_reboot, ..
-            } => {
-                if *requires_reboot {
-                    "Apply config patch (requires reboot)".to_string()
-                } else {
-                    "Apply config patch".to_string()
-                }
-            }
-            FixAction::ShowDetails(_) => "View details".to_string(),
-            FixAction::InstallCilium => "Install Cilium CNI".to_string(),
             FixAction::HostCommand { description, .. } => description.clone(),
         }
     }
 
-    /// Check if this action requires reboot
+    /// Whether the fix takes effect only after a reboot
     pub fn requires_reboot(&self) -> bool {
-        matches!(
-            self,
-            FixAction::AddKernelModule(_)
-                | FixAction::ApplyConfigPatch {
-                    requires_reboot: true,
-                    ..
-                }
-        )
+        matches!(self, FixAction::AddKernelModule(_))
     }
 
-    /// Check if this is a host command (manual action)
+    /// Check if this is a host command (run outside Talos)
     pub fn is_host_command(&self) -> bool {
         matches!(self, FixAction::HostCommand { .. })
+    }
+
+    /// The command that applies the fix on `node`, for the user to run.
+    /// With a `context`, `talosctl` targets that cluster, not its default.
+    pub fn command(&self, context: Option<&str>, node: &str) -> String {
+        let node = talos_rs::host_of(node);
+        let talosctl = match context {
+            Some(context) => format!("talosctl --context {context} -n {node}"),
+            None => format!("talosctl -n {node}"),
+        };
+        match self {
+            FixAction::AddKernelModule(name) => format!(
+                "{talosctl} patch machineconfig --patch \
+                 '{{\"machine\":{{\"kernel\":{{\"modules\":[{{\"name\":\"{name}\"}}]}}}}}}'"
+            ),
+            FixAction::RestartService(service) => format!("{talosctl} service {service} restart"),
+            FixAction::HostCommand { command, .. } => command.clone(),
+        }
     }
 }
 
@@ -155,15 +150,13 @@ impl DiagnosticCheck {
     }
 }
 
-/// Pending action waiting for confirmation
+/// The fix shown in the dialog
 #[derive(Debug, Clone)]
 pub struct PendingAction {
     /// The check this action is for
     pub check_id: String,
-    /// The fix to apply
+    /// The fix to show
     pub fix: DiagnosticFix,
-    /// Preview YAML (for config patches)
-    pub preview: Option<String>,
 }
 
 /// Context passed to diagnostic providers
@@ -217,5 +210,31 @@ impl DiagnosticContext {
 impl Default for DiagnosticContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fix_commands_target_the_cluster_and_node() {
+        assert_eq!(
+            FixAction::RestartService("kubelet".into()).command(Some("bc"), "10.0.0.1:50000"),
+            "talosctl --context bc -n 10.0.0.1 service kubelet restart"
+        );
+        assert_eq!(
+            FixAction::AddKernelModule("br_netfilter".into()).command(None, "[fd00::1]:50000"),
+            "talosctl -n fd00::1 patch machineconfig --patch \
+             '{\"machine\":{\"kernel\":{\"modules\":[{\"name\":\"br_netfilter\"}]}}}'"
+        );
+        let host = FixAction::HostCommand {
+            command: "sudo modprobe br_netfilter".into(),
+            description: "Load br_netfilter".into(),
+        };
+        assert_eq!(
+            host.command(Some("bc"), "10.0.0.1"),
+            "sudo modprobe br_netfilter"
+        );
     }
 }

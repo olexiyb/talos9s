@@ -104,7 +104,7 @@ impl TalosClient {
     pub fn known_addresses(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for addr in self.nodes.iter().chain(&self.endpoints) {
-            let host = strip_port(addr).to_string();
+            let host = host_of(addr).to_string();
             if !host.is_empty() && !out.contains(&host) {
                 out.push(host);
             }
@@ -2007,8 +2007,12 @@ pub struct CpuStat {
     pub steal: f64,
 }
 
-/// `host:port` or `[v6]:port` → host; bare hosts and IPv6 addresses unchanged
-fn strip_port(addr: &str) -> &str {
+/// Host of an address or URL: `host:port`, `[v6]:port` and
+/// `https://host:port/path` give the host; bare hosts and IPv6 addresses are
+/// returned unchanged
+pub fn host_of(addr: &str) -> &str {
+    let addr = addr.split_once("://").map_or(addr, |(_, rest)| rest);
+    let addr = addr.split('/').next().unwrap_or(addr);
     if let Some(rest) = addr.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);
     }
@@ -2069,16 +2073,18 @@ pub struct EtcdMemberInfo {
 }
 
 impl EtcdMemberInfo {
-    /// Extract IP address from peer_urls
-    /// e.g., "https://10.5.0.2:2380" -> "10.5.0.2"
+    /// Host of the first peer URL: `https://10.5.0.2:2380` → `10.5.0.2`,
+    /// `https://[fd00::2]:2380` → `fd00::2`
     pub fn ip_address(&self) -> Option<String> {
-        self.peer_urls.first().and_then(|url| {
-            // Parse URL like "https://10.5.0.2:2380"
-            url.split("://")
-                .nth(1)
-                .and_then(|host_port| host_port.split(':').next())
-                .map(|s| s.to_string())
-        })
+        let host = host_of(self.peer_urls.first()?);
+        (!host.is_empty()).then(|| host.to_string())
+    }
+
+    /// Whether any peer URL points at `host` (compared exactly, so
+    /// `10.0.0.1` is not `10.0.0.11`)
+    pub fn has_peer_host(&self, host: &str) -> bool {
+        let host = host_of(host);
+        self.peer_urls.iter().any(|url| host_of(url) == host)
     }
 }
 
@@ -2938,12 +2944,46 @@ mod tests {
     }
 
     #[test]
+    fn host_of_strips_scheme_port_and_path() {
+        assert_eq!(host_of("https://10.0.0.1:2380"), "10.0.0.1");
+        assert_eq!(host_of("https://[fd00::1]:2380"), "fd00::1");
+        assert_eq!(
+            host_of("https://node.example.com:2380/"),
+            "node.example.com"
+        );
+        assert_eq!(host_of(""), "");
+    }
+
+    #[test]
+    fn etcd_member_peer_host_matches_exactly() {
+        let member = EtcdMemberInfo {
+            id: 1,
+            hostname: "cp1".into(),
+            peer_urls: vec!["https://10.0.0.11:2380".into()],
+            client_urls: vec![],
+            is_learner: false,
+        };
+        assert!(member.has_peer_host("10.0.0.11"));
+        assert!(member.has_peer_host("10.0.0.11:50000"));
+        assert!(!member.has_peer_host("10.0.0.1"));
+        assert_eq!(member.ip_address().as_deref(), Some("10.0.0.11"));
+
+        let v6 = EtcdMemberInfo {
+            peer_urls: vec!["https://[fd00::2]:2380".into()],
+            ..member
+        };
+        assert_eq!(v6.ip_address().as_deref(), Some("fd00::2"));
+        assert!(v6.has_peer_host("[fd00::2]:50000"));
+        assert!(v6.has_peer_host("fd00::2"));
+    }
+
+    #[test]
     fn strip_port_handles_v4_v6_and_hostnames() {
-        assert_eq!(strip_port("10.0.0.1:50000"), "10.0.0.1");
-        assert_eq!(strip_port("10.0.0.1"), "10.0.0.1");
-        assert_eq!(strip_port("[fd00::1]:50000"), "fd00::1");
-        assert_eq!(strip_port("fd00::1"), "fd00::1");
-        assert_eq!(strip_port("talos.example.com:50000"), "talos.example.com");
+        assert_eq!(host_of("10.0.0.1:50000"), "10.0.0.1");
+        assert_eq!(host_of("10.0.0.1"), "10.0.0.1");
+        assert_eq!(host_of("[fd00::1]:50000"), "fd00::1");
+        assert_eq!(host_of("fd00::1"), "fd00::1");
+        assert_eq!(host_of("talos.example.com:50000"), "talos.example.com");
     }
 
     #[test]

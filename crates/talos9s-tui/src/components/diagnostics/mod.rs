@@ -28,7 +28,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState},
 };
 use std::time::{Duration, Instant};
-use talos_rs::{ApplyConfigResult, ApplyMode, TalosClient};
+use talos_rs::TalosClient;
 use talos9s_core::AsyncState;
 
 use crate::ui_ext::CheckStatusExt;
@@ -77,11 +77,11 @@ pub struct DiagnosticsComponent {
     /// Where each category's checks were drawn, for clicks
     category_rows: [crate::ui_ext::RowHits; 5],
 
-    /// Pending action (waiting for confirmation)
+    /// The fix shown in the dialog
     pending_action: Option<PendingAction>,
-    /// Whether we're in the confirmation dialog
+    /// Whether the fix dialog is open
     show_confirmation: bool,
-    /// Confirmation dialog selection (0 = Cancel, 1 = Apply; for host commands: 0 = Copy, 1 = Close)
+    /// Fix dialog button: 0 = Copy, 1 = Close
     confirmation_selection: usize,
     /// Time when command was copied (for showing feedback)
     copy_feedback_until: Option<Instant>,
@@ -92,11 +92,6 @@ pub struct DiagnosticsComponent {
     details_title: String,
     /// Content of the details popup
     details_content: String,
-
-    /// Whether we're applying a fix
-    applying_fix: bool,
-    /// Result of the last apply
-    apply_result: Option<Result<Vec<ApplyConfigResult>, String>>,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -158,8 +153,6 @@ impl DiagnosticsComponent {
             show_details: false,
             details_title: String::new(),
             details_content: String::new(),
-            applying_fix: false,
-            apply_result: None,
             auto_refresh: true,
             client: None,
             controlplane_endpoint: None,
@@ -319,25 +312,10 @@ impl DiagnosticsComponent {
 
         if let Some((check_id, check_name, fix_opt, details_opt)) = check_info {
             if let Some(fix) = fix_opt {
-                // Has a fix - show confirmation dialog
-                let preview = match &fix.action {
-                    FixAction::AddKernelModule(name) => Some(format!(
-                        "machine:\n  kernel:\n    modules:\n      - name: {}",
-                        name
-                    )),
-                    FixAction::ApplyConfigPatch { yaml, .. } => Some(yaml.clone()),
-                    _ => None,
-                };
-
-                let is_host_cmd = fix.action.is_host_command();
-
-                self.pending_action = Some(PendingAction {
-                    check_id,
-                    fix,
-                    preview,
-                });
+                // Show the command; the user runs it
+                self.pending_action = Some(PendingAction { check_id, fix });
                 self.show_confirmation = true;
-                self.confirmation_selection = if is_host_cmd { 0 } else { 1 };
+                self.confirmation_selection = 0;
                 self.copy_feedback_until = None;
             } else if let Some(details) = details_opt {
                 // No fix but has details - show details popup
@@ -348,103 +326,16 @@ impl DiagnosticsComponent {
         }
     }
 
-    /// Show the pending fix as being applied, while a clone applies it in
-    /// the background; `adopt_refresh` takes over its result
-    pub fn begin_apply_fix(&mut self) {
-        self.applying_fix = true;
-        self.show_confirmation = false;
-        self.pending_action = None;
-    }
-
-    /// Apply the pending fix action
-    pub async fn apply_pending_fix(&mut self) -> Result<()> {
-        tracing::info!("apply_pending_fix called");
-
-        let Some(pending) = self.pending_action.take() else {
-            tracing::info!("No pending action to apply");
-            return Ok(());
-        };
-
-        let Some(client) = &self.client else {
-            tracing::error!("No client configured");
-            self.set_error("No client configured".to_string());
-            return Ok(());
-        };
-
-        // Get address for talosctl commands
+    /// The command for the fix in the dialog
+    fn pending_command(&self) -> Option<String> {
+        let pending = self.pending_action.as_ref()?;
         let address = self.data().map(|d| d.address.clone()).unwrap_or_default();
-
-        self.applying_fix = true;
-        self.show_confirmation = false;
-
-        match &pending.fix.action {
-            FixAction::AddKernelModule(name) => {
-                tracing::info!("Applying kernel module fix: {}", name);
-                let patch_yaml =
-                    format!("machine:\n  kernel:\n    modules:\n      - name: {}", name);
-
-                // Without a context talosctl would fall back to its default
-                // context, which may be a different cluster than the one shown.
-                let Some(context) = self.talos_context.as_deref() else {
-                    tracing::error!("No talosconfig context for patch");
-                    self.apply_result = Some(Err("No talosconfig context available".to_string()));
-                    self.applying_fix = false;
-                    return Ok(());
-                };
-
-                match talos_rs::patch_machineconfig_for_node(
-                    context,
-                    &address,
-                    self.config_path.as_deref(),
-                    &patch_yaml,
-                )
-                .await
-                {
-                    Ok(stdout) => {
-                        tracing::info!("Patch succeeded: {}", stdout);
-                        self.apply_result = Some(Ok(vec![]));
-                    }
-                    Err(e) => {
-                        tracing::error!("Patch failed: {}", e);
-                        self.apply_result = Some(Err(e.to_string()));
-                    }
-                }
-            }
-            FixAction::ApplyConfigPatch {
-                yaml,
-                requires_reboot,
-            } => {
-                let mode = if *requires_reboot {
-                    ApplyMode::Reboot
-                } else {
-                    ApplyMode::Auto
-                };
-                match client.apply_configuration(yaml, mode, false).await {
-                    Ok(results) => {
-                        self.apply_result = Some(Ok(results));
-                    }
-                    Err(e) => {
-                        self.apply_result = Some(Err(e.to_string()));
-                    }
-                }
-            }
-            FixAction::RestartService(service) => match client.service_restart(service).await {
-                Ok(_) => {
-                    self.apply_result = Some(Ok(vec![]));
-                }
-                Err(e) => {
-                    self.apply_result = Some(Err(e.to_string()));
-                }
-            },
-            FixAction::ShowDetails(_)
-            | FixAction::InstallCilium
-            | FixAction::HostCommand { .. } => {
-                // These don't apply directly
-            }
-        }
-
-        self.applying_fix = false;
-        Ok(())
+        Some(
+            pending
+                .fix
+                .action
+                .command(self.talos_context.as_deref(), &address),
+        )
     }
 
     /// Refresh diagnostics data from the node
@@ -781,8 +672,7 @@ impl DiagnosticsComponent {
         let inner = block.inner(dialog_area);
         frame.render_widget(block, dialog_area);
 
-        let is_host_command = pending.fix.action.is_host_command();
-
+        let command = self.pending_command().unwrap_or_default();
         let mut lines = vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -790,111 +680,65 @@ impl DiagnosticsComponent {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
+            Line::from(Span::styled(
+                if pending.fix.action.is_host_command() {
+                    "Run this command on your Docker host:"
+                } else {
+                    "Run this command:"
+                },
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
         ];
-
-        if let FixAction::HostCommand { command, .. } = &pending.fix.action {
+        for cmd_line in command.lines() {
             lines.push(Line::from(Span::styled(
-                "Run this command on your Docker host:",
-                Style::default().fg(Color::Yellow),
+                format!("  {}", cmd_line),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
-            lines.push(Line::from(""));
-            // Display each line of the command
-            for cmd_line in command.lines() {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", cmd_line),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )));
-            }
-            lines.push(Line::from(""));
-        } else if let Some(preview) = &pending.preview {
-            lines.push(Line::from("This will apply the following configuration:"));
-            lines.push(Line::from(""));
-            for line in preview.lines().take(5) {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", line),
-                    Style::default().fg(Color::Cyan),
-                )));
-            }
-            lines.push(Line::from(""));
         }
+        lines.push(Line::from(""));
 
-        if !is_host_command && pending.fix.action.requires_reboot() {
+        if pending.fix.action.requires_reboot() {
             lines.push(Line::from(Span::styled(
-                "⚠ This requires a node reboot to take effect.",
+                "⚠ Takes effect after a node reboot.",
                 Style::default().fg(Color::Yellow),
             )));
             lines.push(Line::from(""));
         }
 
-        if is_host_command {
-            let show_copied = self
-                .copy_feedback_until
-                .map(|t| t.elapsed() < std::time::Duration::from_secs(2))
-                .unwrap_or(false);
-
-            let copy_style = if show_copied {
-                Style::default()
-                    .bg(Color::Green)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
-            } else if self.confirmation_selection == 0 {
-                Style::default()
-                    .bg(Color::Cyan)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Cyan)
-            };
-
-            let close_style = if self.confirmation_selection == 1 {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            let copy_text = if show_copied { " Copied! " } else { " Copy " };
-
-            lines.push(Line::from(vec![
-                Span::raw("         "),
-                Span::styled(copy_text, copy_style),
-                Span::raw("     "),
-                Span::styled(" Close ", close_style),
-            ]));
+        let show_copied = self
+            .copy_feedback_until
+            .map(|t| t.elapsed() < std::time::Duration::from_secs(2))
+            .unwrap_or(false);
+        let copy_style = if show_copied {
+            Style::default()
+                .bg(Color::Green)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
+        } else if self.confirmation_selection == 0 {
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
         } else {
-            let cancel_style = if self.confirmation_selection == 0 {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let apply_style = if self.confirmation_selection == 1 {
-                Style::default()
-                    .bg(Color::Green)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Green)
-            };
-
-            lines.push(Line::from(vec![
-                Span::raw("         "),
-                Span::styled(" Cancel ", cancel_style),
-                Span::raw("     "),
-                Span::styled(
-                    if pending.fix.action.requires_reboot() {
-                        " Apply & Reboot "
-                    } else {
-                        " Apply "
-                    },
-                    apply_style,
-                ),
-            ]));
-        }
+            Style::default().fg(Color::Cyan)
+        };
+        let close_style = if self.confirmation_selection == 1 {
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let copy_text = if show_copied { " Copied! " } else { " Copy " };
+        lines.push(Line::from(vec![
+            Span::raw("         "),
+            Span::styled(copy_text, copy_style),
+            Span::raw("     "),
+            Span::styled(" Close ", close_style),
+        ]));
 
         let content = Paragraph::new(lines);
         frame.render_widget(content, inner);
@@ -1033,10 +877,10 @@ impl Component for DiagnosticsComponent {
             vec![
                 key("[←/→]"),
                 Span::raw(" choose  "),
-                key("[Enter]"),
-                Span::raw(" confirm  "),
+                key("[c]"),
+                Span::raw(" copy  "),
                 key("[Esc]"),
-                Span::raw(" cancel"),
+                Span::raw(" close"),
             ]
         } else {
             vec![
@@ -1058,7 +902,7 @@ impl Component for DiagnosticsComponent {
     }
 
     fn uses_horizontal_keys(&self) -> bool {
-        // The fix dialog picks Yes/No with Left/Right
+        // The fix dialog picks Copy/Close with Left/Right
         self.show_confirmation
     }
 
@@ -1075,12 +919,6 @@ impl Component for DiagnosticsComponent {
         }
 
         if self.show_confirmation {
-            let is_host_command = self
-                .pending_action
-                .as_ref()
-                .map(|p| p.fix.action.is_host_command())
-                .unwrap_or(false);
-
             match key.code {
                 KeyCode::Left | KeyCode::Char('h') => {
                     self.confirmation_selection = 0;
@@ -1090,33 +928,22 @@ impl Component for DiagnosticsComponent {
                     self.confirmation_selection = 1;
                     return Ok(None);
                 }
-                KeyCode::Enter => {
-                    if is_host_command {
-                        if self.confirmation_selection == 0 {
-                            if let Some(pending) = &self.pending_action
-                                && let FixAction::HostCommand { command, .. } = &pending.fix.action
-                            {
-                                // Spawn a thread to copy to clipboard and keep it alive
-                                // This prevents the "clipboard dropped quickly" warning
-                                let cmd = command.clone();
-                                std::thread::spawn(move || {
-                                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                        let _ = clipboard.set_text(cmd);
-                                        // Keep clipboard alive for a bit so clipboard managers can read
-                                        std::thread::sleep(std::time::Duration::from_millis(100));
-                                    }
-                                });
-                                self.copy_feedback_until = Some(Instant::now());
+                KeyCode::Enter if self.confirmation_selection == 1 => {
+                    self.show_confirmation = false;
+                    self.pending_action = None;
+                    return Ok(None);
+                }
+                KeyCode::Enter | KeyCode::Char('c') | KeyCode::Char('y') => {
+                    if let Some(cmd) = self.pending_command() {
+                        // Kept alive briefly on its own thread so clipboard
+                        // managers can read it
+                        std::thread::spawn(move || {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                let _ = clipboard.set_text(cmd);
+                                std::thread::sleep(std::time::Duration::from_millis(100));
                             }
-                        } else {
-                            self.show_confirmation = false;
-                            self.pending_action = None;
-                        }
-                    } else if self.confirmation_selection == 0 {
-                        self.show_confirmation = false;
-                        self.pending_action = None;
-                    } else {
-                        return Ok(Some(Action::ApplyDiagnosticFix));
+                        });
+                        self.copy_feedback_until = Some(Instant::now());
                     }
                     return Ok(None);
                 }
@@ -1283,12 +1110,63 @@ impl Component for DiagnosticsComponent {
 
 impl crate::components::BackgroundRefresh for DiagnosticsComponent {
     fn adopt_refresh(&mut self, refreshed: Self) {
-        // A fix applied in the background (see `begin_apply_fix`)
-        if self.applying_fix {
-            self.applying_fix = false;
-            self.apply_result = refreshed.apply_result;
-        }
         self.state = refreshed.state;
         self.ensure_valid_selection();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    fn press(diag: &mut DiagnosticsComponent, code: KeyCode) -> Option<Action> {
+        diag.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap()
+    }
+
+    fn with_failed_service() -> DiagnosticsComponent {
+        let mut diag =
+            DiagnosticsComponent::new("bc1".into(), "10.0.0.1".into(), "controlplane".into(), None);
+        diag.set_talos_context(Some("bc".into()));
+        diag.data_mut().unwrap().system_checks = vec![DiagnosticCheck::fail(
+            "svc_kubelet",
+            "kubelet",
+            "Failed",
+            Some(DiagnosticFix {
+                description: "Restart kubelet".into(),
+                action: FixAction::RestartService("kubelet".into()),
+            }),
+        )];
+        diag
+    }
+
+    #[test]
+    fn fix_dialog_shows_the_command_and_never_runs_it() {
+        let mut diag = with_failed_service();
+        assert!(press(&mut diag, KeyCode::Enter).is_none());
+        assert!(diag.show_confirmation);
+        assert_eq!(
+            diag.pending_command().as_deref(),
+            Some("talosctl --context bc -n 10.0.0.1 service kubelet restart")
+        );
+
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| diag.draw(f, f.area()).unwrap()).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(screen.contains("service kubelet restart"));
+        assert!(!screen.contains("Apply"));
+
+        // Close: no action leaves the view
+        assert!(press(&mut diag, KeyCode::Right).is_none());
+        assert!(press(&mut diag, KeyCode::Enter).is_none());
+        assert!(!diag.show_confirmation);
     }
 }
