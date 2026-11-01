@@ -6,7 +6,7 @@ use crate::action::Action;
 use crate::components::Component;
 use crate::components::diagnostics::k8s::{
     KubeconfigSource, PdbHealthInfo, PodHealthInfo, check_pdb_health, check_pod_health,
-    create_k8s_client_with_source, discovery_members_via_k8s,
+    discovery_members_via_k8s,
 };
 use crate::reachability::prefer_reachable_addresses;
 use crate::ui_ext::HealthIndicatorExt;
@@ -616,21 +616,13 @@ impl LifecycleComponent {
             .and_then(|m| m.ip_address());
 
         if self.k8s_client.is_none() {
-            match bounded(
-                CALL_TIMEOUT,
-                create_k8s_client_with_source(client, cp_node_ip.as_deref(), None),
-            )
-            .await
+            match crate::components::diagnostics::k8s::connect(client, cp_node_ip.as_deref()).await
             {
                 Ok((k8s, source)) => {
-                    tracing::info!("K8s client created from: {:?}", source);
                     self.k8s_client = Some(k8s);
                     self.k8s_source = Some(source);
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to create K8s client: {}", e);
-                    self.k8s_source = Some(KubeconfigSource::Unavailable(e));
-                }
+                Err(e) => self.k8s_source = Some(KubeconfigSource::Unavailable(e)),
             }
         }
 

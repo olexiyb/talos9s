@@ -391,7 +391,7 @@ impl DiagnosticsComponent {
         if let Some(cp) = &pin {
             tracing::info!("Kubernetes client pinned to control plane {}", cp);
         }
-        let k8s_client = match k8s::create_k8s_client_with_source(&client, pin.as_deref(), None)
+        let k8s_client = match k8s::connect(&client, pin.as_deref())
             .await
             .map(|(client, _source)| client)
         {
@@ -403,7 +403,7 @@ impl DiagnosticsComponent {
                 Some(client)
             }
             Err(e) => {
-                let error_msg = format!("{}", e);
+                let error_msg = e;
                 tracing::warn!(
                     "Failed to create K8s client: {} - K8s-based checks will be limited",
                     error_msg

@@ -2513,19 +2513,13 @@ impl App {
                         h.abort();
                     }
                     self.rolling_k8s_fetch = Some(tokio::spawn(async move {
-                        let created = tokio::time::timeout(
-                            Duration::from_secs(15),
-                            crate::components::diagnostics::k8s::create_k8s_client_with_source(
-                                &talos_client,
-                                cp_ip.as_deref(),
-                                None,
-                            ),
+                        crate::components::diagnostics::k8s::connect(
+                            &talos_client,
+                            cp_ip.as_deref(),
                         )
-                        .await;
-                        match created {
-                            Ok(Ok((k8s, _source))) => Some(k8s),
-                            _ => None,
-                        }
+                        .await
+                        .ok()
+                        .map(|(k8s, _source)| k8s)
                     }));
                 }
 

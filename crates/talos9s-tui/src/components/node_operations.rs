@@ -4,9 +4,7 @@
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::components::diagnostics::k8s::{
-    DrainOptions, PdbHealthInfo, check_pdb_health, create_k8s_client_with_source,
-};
+use crate::components::diagnostics::k8s::{DrainOptions, PdbHealthInfo, check_pdb_health};
 use crate::ui_ext::SafetyStatusExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -578,28 +576,10 @@ async fn fetch_pdb_info(
                     Ok(Ok(members)) => members.first().and_then(|m| m.ip_address()),
                     _ => None,
                 };
-            let created = tokio::time::timeout(
-                SAFETY_CHECK_TIMEOUT,
-                create_k8s_client_with_source(client, cp_node_ip.as_deref(), None),
-            )
-            .await;
-            match created {
-                Ok(Ok((k8s, source))) => {
-                    tracing::info!("K8s client created from: {:?}", source);
-                    (Some(Ok(k8s.clone())), k8s)
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!("Failed to create K8s client: {}", e);
-                    return (Some(Err(e.to_string())), None);
-                }
-                Err(_) => {
-                    let e = format!(
-                        "timed out after {}s fetching the kubeconfig",
-                        SAFETY_CHECK_TIMEOUT.as_secs()
-                    );
-                    tracing::warn!("Failed to create K8s client: {}", e);
-                    return (Some(Err(e)), None);
-                }
+            match crate::components::diagnostics::k8s::connect(client, cp_node_ip.as_deref()).await
+            {
+                Ok((k8s, _source)) => (Some(Ok(k8s.clone())), k8s),
+                Err(e) => return (Some(Err(e)), None),
             }
         }
     };

@@ -352,7 +352,10 @@ mod tests {
         // A pane that doesn't start at the screen's corner
         let pane = Rect::new(30, 2, 100, 40);
         assert_eq!(centered(pane, 50, 10), Rect::new(55, 17, 50, 10));
-        assert_eq!(centered(Rect::new(0, 0, 20, 5), 50, 10), Rect::new(0, 0, 20, 5));
+        assert_eq!(
+            centered(Rect::new(0, 0, 20, 5), 50, 10),
+            Rect::new(0, 0, 20, 5)
+        );
     }
 
     #[test]

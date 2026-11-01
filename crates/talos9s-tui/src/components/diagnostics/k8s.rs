@@ -36,6 +36,42 @@ pub enum KubeconfigSource {
     Unavailable(String),
 }
 
+/// How long fetching a kubeconfig and building a client may take
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// [`create_k8s_client_with_source`] bounded by [`CONNECT_TIMEOUT`], with
+/// one error text for both failures. Pin `cp_node_ip` to a control plane
+/// node of the cluster being viewed: an ambient KUBECONFIG may point at
+/// another cluster.
+pub async fn connect(
+    talos_client: &TalosClient,
+    cp_node_ip: Option<&str>,
+) -> Result<(Client, KubeconfigSource), String> {
+    match tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        create_k8s_client_with_source(talos_client, cp_node_ip, None),
+    )
+    .await
+    {
+        Ok(Ok(created)) => {
+            tracing::info!("K8s client created from: {:?}", created.1);
+            Ok(created)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("Failed to create K8s client: {}", e);
+            Err(e.to_string())
+        }
+        Err(_) => {
+            let e = format!(
+                "timed out after {}s fetching the kubeconfig",
+                CONNECT_TIMEOUT.as_secs()
+            );
+            tracing::warn!("Failed to create K8s client: {}", e);
+            Err(e)
+        }
+    }
+}
+
 /// Create a Kubernetes client and return the source of the kubeconfig
 ///
 /// Match-and-honor: when we can pin to a control plane node (`cp_node_ip`), that
