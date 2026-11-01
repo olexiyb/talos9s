@@ -1,6 +1,6 @@
 # Plan: code health — correctness fixes, dead code, simplification, tests
 
-Status: phase 1 done · Author: Olexiy Buyanskyy · 2026-11-01
+Status: phases 1-2 done · Author: Olexiy Buyanskyy · 2026-11-01
 
 ## Summary
 
@@ -67,6 +67,10 @@ handled; the wizard is the maintenance-mode UI), so it moves to phase 4.
 ## Phase 2 — false positives and missing timeouts
 
 Principle 2: showing failure for a healthy system is worse than unknown.
+
+Done (2026-11-01), every row of the table. Also: the tree's etcd summary
+counted an empty status answer as 0 healthy; pods Pending under 2 minutes
+are not stuck; the Lifecycle/node-ops pod count checks init containers.
 
 | Where | Problem | Fix |
 |---|---|---|
