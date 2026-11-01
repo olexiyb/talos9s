@@ -144,8 +144,6 @@ pub struct KubeSpanPeerStatus {
     pub endpoint: Option<String>,
     /// Peer state (e.g., "up", "down", "unknown")
     pub state: String,
-    /// Round-trip time in milliseconds
-    pub rtt_ms: Option<f64>,
     /// Last handshake time
     pub last_handshake: Option<String>,
     /// Received bytes
@@ -1569,21 +1567,6 @@ fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, 
             .unwrap_or("unknown")
             .to_string();
 
-        // RTT might be in nanoseconds or have a duration format
-        let rtt_ms = spec
-            .and_then(|s| s.get("lastUsedEndpoint"))
-            .and_then(|e| e.get("rtt"))
-            .and_then(|v| {
-                // Could be a number or a string like "2.5ms"
-                if let Some(n) = v.as_f64() {
-                    Some(n / 1_000_000.0) // nanoseconds to ms
-                } else if let Some(s) = v.as_str() {
-                    parse_duration_to_ms(s)
-                } else {
-                    None
-                }
-            });
-
         let last_handshake = spec
             .and_then(|s| s.get("lastHandshakeTime"))
             .and_then(|v| v.as_str())
@@ -1604,7 +1587,6 @@ fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, 
             label,
             endpoint,
             state,
-            rtt_ms,
             last_handshake,
             rx_bytes,
             tx_bytes,
@@ -1755,32 +1737,6 @@ fn parse_address_status_yaml(yaml_str: &str) -> Result<Vec<AddressStatus>, Talos
     }
 
     Ok(addresses)
-}
-
-/// Parse a duration string like "2.5ms" or "1s" to milliseconds
-fn parse_duration_to_ms(s: &str) -> Option<f64> {
-    let s = s.trim();
-    if s.ends_with("ms") {
-        s.trim_end_matches("ms").parse::<f64>().ok()
-    } else if s.ends_with("µs") || s.ends_with("us") {
-        s.trim_end_matches("µs")
-            .trim_end_matches("us")
-            .parse::<f64>()
-            .ok()
-            .map(|v| v / 1000.0)
-    } else if s.ends_with("ns") {
-        s.trim_end_matches("ns")
-            .parse::<f64>()
-            .ok()
-            .map(|v| v / 1_000_000.0)
-    } else if s.ends_with('s') {
-        s.trim_end_matches('s')
-            .parse::<f64>()
-            .ok()
-            .map(|v| v * 1000.0)
-    } else {
-        s.parse::<f64>().ok()
-    }
 }
 
 #[cfg(test)]

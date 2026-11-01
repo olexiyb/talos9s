@@ -102,6 +102,27 @@ fn port_to_service(port: u32) -> Option<&'static str> {
     talos9s_core::network::port_to_service_u32(port)
 }
 
+/// WireGuard renews a session's handshake every 2 minutes while traffic
+/// flows; well past that the peer has gone quiet
+const HANDSHAKE_STALE_SECS: i64 = 180;
+
+/// Seconds since a KubeSpan peer's `lastHandshakeTime`; `None` when there
+/// was none (Go's zero time) or it can't be read
+fn handshake_age(time: &str, now: i64) -> Option<i64> {
+    let t = chrono::DateTime::parse_from_rfc3339(time).ok()?.timestamp();
+    (t > 0).then(|| (now - t).max(0))
+}
+
+/// `45s`, `3m`, `2h`, `5d`
+fn format_age_secs(secs: i64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
 /// Whether a node's TCP state counts are worth a look (see the thresholds)
 fn conn_warnings(cc: &ConnectionCounts) -> bool {
     cc.time_wait >= TIME_WAIT_WARN
@@ -2401,7 +2422,7 @@ impl NetworkStatsComponent {
         let header_row = Row::new(vec![
             Cell::from("HOSTNAME").style(Style::default().fg(Color::DarkGray)),
             Cell::from("ENDPOINT").style(Style::default().fg(Color::DarkGray)),
-            Cell::from("RTT").style(Style::default().fg(Color::DarkGray)),
+            Cell::from("HANDSHAKE").style(Style::default().fg(Color::DarkGray)),
             Cell::from("STATE").style(Style::default().fg(Color::DarkGray)),
             Cell::from("RX").style(Style::default().fg(Color::DarkGray)),
             Cell::from("TX").style(Style::default().fg(Color::DarkGray)),
@@ -2424,16 +2445,28 @@ impl NetworkStatsComponent {
                     _ => Style::default().fg(Color::Yellow),
                 };
 
-                let rtt_str = peer
-                    .rtt_ms
-                    .map(|r| format!("{:.1}ms", r))
-                    .unwrap_or_else(|| "--".to_string());
+                let now = chrono::Utc::now().timestamp();
+                let (handshake, handshake_style) = match peer
+                    .last_handshake
+                    .as_deref()
+                    .and_then(|t| handshake_age(t, now))
+                {
+                    Some(age) => (
+                        format!("{} ago", format_age_secs(age)),
+                        if age > HANDSHAKE_STALE_SECS {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default()
+                        },
+                    ),
+                    None => ("--".to_string(), Style::default()),
+                };
                 let endpoint_str = peer.endpoint.clone().unwrap_or_else(|| "--".to_string());
 
                 Row::new(vec![
                     Cell::from(peer.label.clone()).style(style),
                     Cell::from(endpoint_str).style(style),
-                    Cell::from(rtt_str).style(style),
+                    Cell::from(handshake).style(handshake_style.patch(style)),
                     Cell::from(peer.state.clone()).style(state_style.patch(style)),
                     Cell::from(format_bytes(peer.rx_bytes)).style(style),
                     Cell::from(format_bytes(peer.tx_bytes)).style(style),
@@ -2447,7 +2480,7 @@ impl NetworkStatsComponent {
             [
                 Constraint::Min(20),    // Hostname
                 Constraint::Length(22), // Endpoint
-                Constraint::Length(10), // RTT
+                Constraint::Length(10), // Handshake
                 Constraint::Length(10), // State
                 Constraint::Length(10), // RX
                 Constraint::Length(10), // TX
@@ -4107,6 +4140,22 @@ mod click_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kubespan_handshake_age() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-01T20:35:00Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            handshake_age("2026-11-01T20:33:22.402498694Z", now),
+            Some(98)
+        );
+        // Never: Go's zero time
+        assert_eq!(handshake_age("0001-01-01T00:00:00Z", now), None);
+        assert_eq!(handshake_age("garbage", now), None);
+        assert_eq!(format_age_secs(98), "1m");
+        assert_eq!(format_age_secs(45), "45s");
+    }
 
     #[test]
     fn busy_healthy_node_has_no_connection_warning() {
