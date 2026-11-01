@@ -171,8 +171,8 @@ fn format_poll_error(error: &str) -> String {
         "Connection timeout - node may still be booting".to_string()
     } else {
         // Truncate long error messages
-        if error.len() > 80 {
-            format!("{}...", &error[..77])
+        if error.chars().count() > 80 {
+            talos9s_core::truncate_string(error, 80)
         } else {
             error.to_string()
         }
@@ -1432,6 +1432,13 @@ mod tests {
         wizard
             .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
             .unwrap()
+    }
+
+    #[test]
+    fn long_poll_errors_are_cut_on_char_boundaries() {
+        let error = "é".repeat(100);
+        let short = format_poll_error(&error);
+        assert_eq!(short.chars().count(), 80);
     }
 
     #[test]

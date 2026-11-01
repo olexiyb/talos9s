@@ -210,6 +210,43 @@ impl LogLevel {
     }
 }
 
+/// Byte ranges of `text` matching `query` case-insensitively, without
+/// overlap. Compared char by char in `text` itself: offsets found in a
+/// lowercased copy don't fit the original when lowercasing changes a
+/// char's length (`İ`, the Kelvin sign).
+fn match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let query: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut ranges = Vec::new();
+    let mut next_start = 0;
+    for (start, _) in text.char_indices() {
+        if start < next_start {
+            continue;
+        }
+        let mut wanted = query.iter();
+        let mut end = start;
+        let mut matched = false;
+        for (i, c) in text[start..].char_indices() {
+            let lower: Vec<char> = c.to_lowercase().collect();
+            if !lower.iter().all(|l| wanted.next() == Some(l)) {
+                break;
+            }
+            end = start + i + c.len_utf8();
+            if wanted.as_slice().is_empty() {
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            ranges.push(start..end);
+            next_start = end;
+        }
+    }
+    ranges
+}
+
 /// A log entry from any service
 #[derive(Debug, Clone)]
 pub(crate) struct MultiLogEntry {
@@ -922,18 +959,9 @@ impl MultiLogsComponent {
                             let rest_start = space_pos + 2 + time_end;
                             let rest = line[rest_start..].trim();
                             let short_ts = Self::extract_time_part(time_part);
-                            // Parse MMDD and time, convert to Unix timestamp
-                            // Use current year since klog doesn't include year
-                            let month: i64 = date_part[0..2].parse().unwrap_or(1);
-                            let day: i64 = date_part[2..4].parse().unwrap_or(1);
-                            let hour: i64 =
-                                short_ts.get(0..2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                            let min: i64 =
-                                short_ts.get(3..5).and_then(|s| s.parse().ok()).unwrap_or(0);
-                            let sec: i64 =
-                                short_ts.get(6..8).and_then(|s| s.parse().ok()).unwrap_or(0);
-                            let year = Self::current_year();
-                            let sort_key = Self::datetime_to_unix(year, month, day, hour, min, sec);
+                            let sort_key =
+                                Self::klog_sort_key(date_part, time_part, chrono::Utc::now())
+                                    .unwrap_or_else(|| Self::time_to_sort_key(time_part));
                             return (short_ts, sort_key, rest);
                         }
                     }
@@ -1103,34 +1131,22 @@ impl MultiLogsComponent {
     }
 
     /// Convert a full timestamp string to a Unix timestamp (seconds since epoch)
-    /// Handles ISO 8601 (2026-01-09T23:23:45), slash format (2026/01/09 23:23:45),
-    /// and falls back to time-only (HHMMSS) if no date found
+    /// Handles RFC 3339 with an offset, ISO 8601 and slash dates without one
+    /// (taken as UTC), and falls back to time-only (HHMMSS) if no date is
+    /// found. Invalid dates (month 13) fall back too, never panic.
     fn time_to_sort_key(ts: &str) -> i64 {
-        let bytes = ts.as_bytes();
-        let len = bytes.len();
-
-        // Look for date patterns: YYYY-MM-DD or YYYY/MM/DD
-        if len >= 10 && (bytes[4] == b'-' || bytes[4] == b'/') {
-            // Try to parse: YYYY-MM-DDTHH:MM:SS or YYYY/MM/DD HH:MM:SS
-            let year: i64 = ts[0..4].parse().unwrap_or(0);
-            let month: i64 = ts[5..7].parse().unwrap_or(0);
-            let day: i64 = ts[8..10].parse().unwrap_or(0);
-
-            // Look for time part after date
-            let mut hour: i64 = 0;
-            let mut min: i64 = 0;
-            let mut sec: i64 = 0;
-
-            // Time starts at position 11 (after 'T' or ' ')
-            if len >= 19 {
-                hour = ts[11..13].parse().unwrap_or(0);
-                min = ts[14..16].parse().unwrap_or(0);
-                sec = ts[17..19].parse().unwrap_or(0);
-            }
-
-            if year > 0 && month > 0 && day > 0 {
-                // Convert to Unix timestamp (seconds since 1970-01-01)
-                return Self::datetime_to_unix(year, month, day, hour, min, sec);
+        use chrono::{DateTime, NaiveDateTime};
+        let ts = ts.trim();
+        if let Ok(t) = DateTime::parse_from_rfc3339(ts) {
+            return t.timestamp();
+        }
+        for format in [
+            "%Y-%m-%dT%H:%M:%S%.f",
+            "%Y-%m-%d %H:%M:%S%.f",
+            "%Y/%m/%d %H:%M:%S%.f",
+        ] {
+            if let Ok((t, _)) = NaiveDateTime::parse_and_remainder(ts, format) {
+                return t.and_utc().timestamp();
             }
         }
 
@@ -1140,56 +1156,29 @@ impl MultiLogsComponent {
         digits.parse().unwrap_or(0)
     }
 
-    /// Convert date/time components to Unix timestamp (seconds since 1970-01-01 00:00:00 UTC)
-    fn datetime_to_unix(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) -> i64 {
-        // Days from year 1970 to start of given year
-        let mut days: i64 = 0;
-        for y in 1970..year {
-            days += if Self::is_leap_year(y) { 366 } else { 365 };
-        }
-
-        // Days from start of year to start of month
-        let days_in_months = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        for m in 1..month {
-            days += days_in_months[m as usize] as i64;
-            if m == 2 && Self::is_leap_year(year) {
-                days += 1;
-            }
-        }
-
-        // Add days in current month (day is 1-indexed)
-        days += day - 1;
-
-        // Convert to seconds and add time
-        days * 86400 + hour * 3600 + min * 60 + sec
-    }
-
-    /// Check if a year is a leap year
-    fn is_leap_year(year: i64) -> bool {
-        (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-    }
-
-    /// Get the current year from system time
-    fn current_year() -> i64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0) as i64;
-
-        // Calculate year from Unix timestamp
-        let mut year = 1970;
-        let mut remaining_secs = secs;
-        loop {
-            let days_in_year = if Self::is_leap_year(year) { 366 } else { 365 };
-            let secs_in_year = days_in_year * 86400;
-            if remaining_secs < secs_in_year {
-                break;
-            }
-            remaining_secs -= secs_in_year;
-            year += 1;
-        }
-        year
+    /// Sort key of a klog timestamp (`MMDD` and `HH:MM:SS.ffffff`). klog has
+    /// no year: the current one, or last year for a date that would be
+    /// ahead of `now` (a December line read in January). `None` for an
+    /// invalid date.
+    fn klog_sort_key(mmdd: &str, time: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+        use chrono::{Datelike, NaiveDate, NaiveTime};
+        let month: u32 = mmdd.get(0..2)?.parse().ok()?;
+        let day: u32 = mmdd.get(2..4)?.parse().ok()?;
+        let time = NaiveTime::parse_from_str(time, "%H:%M:%S%.f").ok()?;
+        let at = |year| {
+            Some(
+                NaiveDate::from_ymd_opt(year, month, day)?
+                    .and_time(time)
+                    .and_utc(),
+            )
+        };
+        let this_year = at(now.year())?;
+        let t = if this_year > now + chrono::Duration::days(1) {
+            at(now.year() - 1)?
+        } else {
+            this_year
+        };
+        Some(t.timestamp())
     }
 
     /// Convert Unix timestamp to (HH:MM:SS, sort_key)
@@ -1615,25 +1604,20 @@ impl MultiLogsComponent {
             return vec![Span::raw(message.to_string())];
         }
 
-        let query_lower = self.search_query.to_lowercase();
-        let message_lower = message.to_lowercase();
         let mut spans: Vec<Span<'static>> = Vec::new();
         let mut last_end = 0;
-
-        for (start, _) in message_lower.match_indices(&query_lower) {
-            if start > last_end {
-                spans.push(Span::raw(message[last_end..start].to_string()));
+        let style = if is_current {
+            Style::default().bg(Color::Yellow).fg(Color::Black).bold()
+        } else {
+            Style::default().bg(Color::DarkGray).fg(Color::White)
+        };
+        for range in match_ranges(message, &self.search_query) {
+            if range.start > last_end {
+                spans.push(Span::raw(message[last_end..range.start].to_string()));
             }
-            let end = start + self.search_query.len();
-            let style = if is_current {
-                Style::default().bg(Color::Yellow).fg(Color::Black).bold()
-            } else {
-                Style::default().bg(Color::DarkGray).fg(Color::White)
-            };
-            spans.push(Span::styled(message[start..end].to_string(), style));
-            last_end = end;
+            last_end = range.end;
+            spans.push(Span::styled(message[range].to_string(), style));
         }
-
         if last_end < message.len() {
             spans.push(Span::raw(message[last_end..].to_string()));
         }
@@ -1670,7 +1654,9 @@ impl MultiLogsComponent {
             .map(|(_, s)| s.id.len())
             .max()
             .unwrap_or(8);
-        let panel_width = (max_name_len + 4).max(16).min(area.width as usize - 4) as u16;
+        let panel_width = (max_name_len + 4)
+            .max(16)
+            .min((area.width as usize).saturating_sub(4)) as u16;
         let panel_height = (filtered_services.len() + 2).min(area.height as usize - 2) as u16;
 
         // Position in top-left with small margin
@@ -2901,6 +2887,63 @@ mod tests {
             .all(|w| w[0].timestamp_sort <= w[1].timestamp_sort);
         println!("sorted: {sorted}, total {}", data.entries.len());
         logs.stop_streaming();
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn search_matches_fit_the_original_text() {
+        assert_eq!(match_ranges("Error and ERROR", "error"), [0..5, 10..15]);
+        assert_eq!(match_ranges("aaa", "aa"), [0..2]);
+        assert!(match_ranges("abc", "").is_empty());
+        // Kelvin sign (3 bytes) lowercases to a 1-byte 'k'
+        let text = "\u{212A}elvin kelvin";
+        let ranges = match_ranges(text, "kelvin");
+        assert_eq!(ranges.len(), 2);
+        for r in ranges {
+            let _ = &text[r];
+        }
+        // Lowercasing İ gives two chars
+        assert_eq!(match_ranges("İstanbul", "i̇stanbul").len(), 1);
+        assert_eq!(match_ranges("ünïcödé", "CÖD"), [5..9]);
+    }
+
+    #[test]
+    fn timestamps_never_panic_and_respect_offsets() {
+        let key = MultiLogsComponent::time_to_sort_key;
+        assert_eq!(key("2026-11-01T10:00:00Z"), 1_793_527_200);
+        assert_eq!(key("2026-11-01T12:00:00+02:00"), 1_793_527_200);
+        assert_eq!(key("2026-11-01T10:00:00.123456789Z"), 1_793_527_200);
+        assert_eq!(key("2026/11/01 10:00:00"), 1_793_527_200);
+        // Invalid dates and non-ASCII text fall back instead of panicking
+        let _ = key("2026-99-01 12:00:00");
+        let _ = key("2026-ab-ü1 12:00:00");
+        let _ = key("ééééééééééééééééééééé");
+        for line in [
+            "2026-99-01 12:00:00 x",
+            "E9999 12:00:00.123456    1 x.go:1] bad month",
+            "I0230 12:00:00.123456    1 x.go:1] Feb 30",
+            "2026-11-01T10:00:00Zü message",
+            "ü2026-11-01 10:00:00 message",
+        ] {
+            let _ = MultiLogsComponent::parse_line(line, "svc", Color::Reset);
+        }
+    }
+
+    #[test]
+    fn klog_dates_take_the_year_they_were_written() {
+        use chrono::TimeZone;
+        let jan_2 = chrono::Utc.with_ymd_and_hms(2027, 1, 2, 0, 0, 0).unwrap();
+        let dec_31 = MultiLogsComponent::klog_sort_key("1231", "23:59:00.5", jan_2).unwrap();
+        let expected = chrono::Utc
+            .with_ymd_and_hms(2026, 12, 31, 23, 59, 0)
+            .unwrap();
+        assert_eq!(dec_31, expected.timestamp());
+        let jan_1 = MultiLogsComponent::klog_sort_key("0101", "10:00:00", jan_2).unwrap();
+        assert!(jan_1 > dec_31);
+        assert_eq!(
+            MultiLogsComponent::klog_sort_key("1301", "10:00:00", jan_2),
+            None
+        );
     }
 
     #[test]

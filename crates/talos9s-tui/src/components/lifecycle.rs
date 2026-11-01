@@ -1017,11 +1017,7 @@ impl LifecycleComponent {
             Some(KubeconfigSource::TalosNode(node)) => format!("via node {}", node),
             Some(KubeconfigSource::Unavailable(err)) => {
                 // Truncate long error messages
-                let short_err = if err.len() > 40 {
-                    format!("{}...", &err[..40])
-                } else {
-                    err.clone()
-                };
+                let short_err = talos9s_core::truncate_string(err, 43);
                 format!("unavailable: {}", short_err)
             }
             None => "not initialized".to_string(),

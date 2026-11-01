@@ -414,13 +414,7 @@ impl StorageComponent {
                         Span::raw(
                             disk.wwid
                                 .clone()
-                                .map(|w| {
-                                    if w.len() > 30 {
-                                        format!("{}...", &w[..30])
-                                    } else {
-                                        w
-                                    }
-                                })
+                                .map(|w| talos9s_core::truncate_string(&w, 33))
                                 .unwrap_or_else(|| "N/A".to_string()),
                         ),
                     ]),

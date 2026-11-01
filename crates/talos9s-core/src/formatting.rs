@@ -222,9 +222,11 @@ pub fn format_timestamp_iso(timestamp: DateTime<Utc>) -> String {
 ///
 /// assert_eq!(truncate_string("Hello, World!", 10), "Hello, ...");
 /// assert_eq!(truncate_string("Short", 10), "Short");
+/// // Counts chars, never cuts one in half
+/// assert_eq!(truncate_string("ééééé", 4), "é...");
 /// ```
 pub fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         s.to_string()
     } else if max_len <= 3 {
         s.chars().take(max_len).collect()

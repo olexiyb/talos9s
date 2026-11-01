@@ -1953,7 +1953,9 @@ impl MemInfo {
         if self.mem_total == 0 {
             return 0.0;
         }
-        let used = self.mem_total - self.mem_available;
+        // MemAvailable can exceed MemTotal briefly in odd kernels: 0%, not
+        // an underflow panic
+        let used = self.mem_total.saturating_sub(self.mem_available);
         (used as f32 / self.mem_total as f32) * 100.0
     }
 }
@@ -2048,8 +2050,10 @@ impl CpuStat {
         if delta_total <= 0.0 {
             return 0.0;
         }
+        // A counter going back (reboot, PID namespace) gives a negative or
+        // impossible busy share: clamp to 0-100
         let delta_busy = curr.busy() - prev.busy();
-        ((delta_busy / delta_total) * 100.0) as f32
+        ((delta_busy / delta_total) * 100.0).clamp(0.0, 100.0) as f32
     }
 }
 
@@ -2929,6 +2933,44 @@ mod tests {
         assert_eq!(disks, ["/var", "/var/mnt/data", "/var/mnt/tank"]);
         assert_eq!(node.var().map(|v| v.size), Some(1000));
         assert_eq!(node.var().and_then(MountUsage::used_pct), Some(50.0));
+    }
+
+    #[test]
+    fn memory_and_cpu_usage_stay_in_range() {
+        let mem = |total, available| MemInfo {
+            mem_total: total,
+            mem_free: 0,
+            mem_available: available,
+            buffers: 0,
+            cached: 0,
+        };
+        assert_eq!(mem(0, 0).usage_percent(), 0.0);
+        assert_eq!(mem(100, 150).usage_percent(), 0.0);
+        assert_eq!(mem(100, 25).usage_percent(), 75.0);
+
+        let cpu = |busy: f64, idle: f64| CpuStat {
+            user: busy,
+            nice: 0.0,
+            system: 0.0,
+            idle,
+            iowait: 0.0,
+            irq: 0.0,
+            soft_irq: 0.0,
+            steal: 0.0,
+        };
+        assert_eq!(
+            CpuStat::usage_percent_from(&cpu(10.0, 10.0), &cpu(10.0, 10.0)),
+            0.0
+        );
+        assert_eq!(
+            CpuStat::usage_percent_from(&cpu(10.0, 10.0), &cpu(15.0, 15.0)),
+            50.0
+        );
+        // Busy counter went back while total went up
+        assert_eq!(
+            CpuStat::usage_percent_from(&cpu(100.0, 0.0), &cpu(10.0, 200.0)),
+            0.0
+        );
     }
 
     #[test]
