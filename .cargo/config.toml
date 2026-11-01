@@ -1,10 +1,13 @@
 [alias]
 # Run the app and rebuild + restart it on every source change (cargo-watch):
 #   TALOS9S_CONTEXT=bc cargo dev
+# Quitting the app (q, Ctrl+C) ends cargo dev too: it exits 0 and the shell
+# stops cargo-watch ($PPID). A restart kills the app (exit 130) and a failed
+# build exits non-zero, so cargo-watch keeps watching then.
 # (an array: cargo splits a string alias on spaces, so quoting wouldn't survive)
 dev = [
     "watch", "--quiet", "--clear",
     "--watch", "src", "--watch", "crates",
     "--ignore", "crates/talos-rs/src/generated/**",
-    "--exec", "run --quiet",
+    "--shell", "cargo run --quiet && kill $PPID",
 ]
