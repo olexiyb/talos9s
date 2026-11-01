@@ -372,5 +372,6 @@ cargo test --package talos9s-core
 | `internal-docs/talos-pilot-design-doc.md` | Original design document (talos-pilot) |
 | `internal-docs/phase-2-features.md` | Feature implementation tracking |
 | `internal-docs/refactoring_report.md` | Code refactoring progress |
+| `plans/*.md` | Design plans for features, reviewed before implementation (e.g. `plans/upgrades.md`) |
 | `internal-docs/*-plan.md` | Feature planning documents |
 | `internal-docs/*-progress.md` | Feature implementation progress |
