@@ -195,13 +195,7 @@ impl SecurityComponent {
         let mut pki = PkiStatus::default();
 
         // Load talosconfig - use custom path if provided
-        let config_result = match config_path {
-            Some(path) => {
-                let path_buf = std::path::PathBuf::from(path);
-                talos_rs::TalosConfig::load_from(&path_buf)
-            }
-            None => talos_rs::TalosConfig::load_default(),
-        };
+        let config_result = talos_rs::TalosConfig::load(config_path);
         match config_result {
             Ok(config) => {
                 // Use the selected cluster's context; fall back to talosconfig's current one
@@ -243,41 +237,22 @@ impl SecurityComponent {
 
     /// Load kubeconfig certificates via client (static method)
     async fn load_kubeconfig_certs(data: &mut SecurityData, client: &TalosClient) {
-        if let Ok(kubeconfig_yaml) = client.kubeconfig().await
-            && let Ok(kc) = serde_saphyr::from_str::<serde_json::Value>(&kubeconfig_yaml)
+        let Ok(Ok(yaml)) = tokio::time::timeout(pki::KUBECONFIG_TIMEOUT, client.kubeconfig()).await
+        else {
+            return;
+        };
+        let Ok(certs) = pki::kubeconfig_certs(&yaml) else {
+            return;
+        };
+        for ca in &certs.cas {
+            if let Ok(cert_info) = pki::parse_base64_certificate("Kubernetes CA", ca) {
+                data.pki_status.cas.push(cert_info);
+            }
+        }
+        if let Some(cert) = &certs.client
+            && let Ok(cert_info) = pki::parse_base64_certificate("kubeconfig", cert)
         {
-            // Parse kubeconfig CA
-            if let Some(clusters) = kc.get("clusters").and_then(|c| c.as_array()) {
-                for cluster in clusters {
-                    if let Some(cluster_data) = cluster.get("cluster")
-                        && let Some(ca_data) = cluster_data
-                            .get("certificate-authority-data")
-                            .and_then(|c| c.as_str())
-                        && let Ok(cert_info) =
-                            pki::parse_base64_certificate("Kubernetes CA", ca_data)
-                    {
-                        data.pki_status.cas.push(cert_info);
-                    }
-                }
-            }
-
-            // Parse kubeconfig client cert
-            if let Some(users) = kc.get("users").and_then(|u| u.as_array()) {
-                for user in users {
-                    if let Some(user_data) = user.get("user")
-                        && let Some(cert_data) = user_data
-                            .get("client-certificate-data")
-                            .and_then(|c| c.as_str())
-                    {
-                        if let Ok(cert_info) =
-                            pki::parse_base64_certificate("kubeconfig", cert_data)
-                        {
-                            data.pki_status.client_certs.push(cert_info);
-                        }
-                        break;
-                    }
-                }
-            }
+            data.pki_status.client_certs.push(cert_info);
         }
     }
 
@@ -290,13 +265,7 @@ impl SecurityComponent {
     ) {
         // Query the node the cluster view knows is reachable; fall back to
         // the first node from talosconfig
-        let config_result = match config_path {
-            Some(path) => {
-                let path_buf = std::path::PathBuf::from(path);
-                talos_rs::TalosConfig::load_from(&path_buf)
-            }
-            None => talos_rs::TalosConfig::load_default(),
-        };
+        let config_result = talos_rs::TalosConfig::load(config_path);
         let node = match config_result {
             Ok(config) => {
                 config.get_context(&data.context_name).ok().and_then(|ctx| {

@@ -130,6 +130,32 @@ impl CertificateInfo {
     }
 }
 
+/// The base64 certificates of a kubeconfig: every cluster's CA and the
+/// first user's client certificate. The client key is never read.
+#[derive(Debug, Default, PartialEq)]
+pub struct KubeconfigCerts {
+    pub cas: Vec<String>,
+    pub client: Option<String>,
+}
+
+pub fn kubeconfig_certs(yaml: &str) -> Result<KubeconfigCerts, String> {
+    let kc = kube::config::Kubeconfig::from_yaml(yaml).map_err(|e| e.to_string())?;
+    Ok(KubeconfigCerts {
+        cas: kc
+            .clusters
+            .iter()
+            .filter_map(|c| c.cluster.as_ref()?.certificate_authority_data.clone())
+            .collect(),
+        client: kc
+            .auth_infos
+            .iter()
+            .find_map(|a| a.auth_info.as_ref()?.client_certificate_data.clone()),
+    })
+}
+
+/// How long reading the kubeconfig from Talos may take
+pub const KUBECONFIG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Parse a PEM-encoded certificate and extract info
 pub fn parse_certificate(name: &str, pem_data: &[u8]) -> Result<CertificateInfo, String> {
     parse_certificate_at(name, pem_data, Utc::now())
@@ -357,6 +383,36 @@ mod tests {
 
     fn in_days(days: i64) -> DateTime<Utc> {
         now() + Duration::days(days)
+    }
+
+    #[test]
+    fn kubeconfig_certs_without_the_key() {
+        // Placeholders only: no real certificate or key
+        let yaml = "apiVersion: v1
+kind: Config
+clusters:
+- name: bc
+  cluster:
+    server: https://10.0.0.1:6443
+    certificate-authority-data: Q0EtREFUQQ==
+contexts:
+- name: admin@bc
+  context: {cluster: bc, user: admin@bc}
+current-context: admin@bc
+users:
+- name: admin@bc
+  user:
+    client-certificate-data: Q0VSVA==
+    client-key-data: S0VZ
+";
+        assert_eq!(
+            kubeconfig_certs(yaml).unwrap(),
+            KubeconfigCerts {
+                cas: vec!["Q0EtREFUQQ==".to_string()],
+                client: Some("Q0VSVA==".to_string()),
+            }
+        );
+        assert!(kubeconfig_certs("not: [valid").is_err());
     }
 
     #[test]

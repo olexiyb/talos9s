@@ -33,6 +33,14 @@ pub struct Context {
 }
 
 impl TalosConfig {
+    /// The talosconfig at `path` (`--talosconfig`), or the default one
+    pub fn load(path: Option<&str>) -> Result<Self, TalosError> {
+        match path {
+            Some(path) => Self::load_from(&PathBuf::from(path)),
+            None => Self::load_default(),
+        }
+    }
+
     /// Load configuration from the default location (~/.talos/config)
     pub fn load_default() -> Result<Self, TalosError> {
         let path = Self::default_path()?;

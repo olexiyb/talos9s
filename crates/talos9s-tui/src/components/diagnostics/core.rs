@@ -297,13 +297,7 @@ pub async fn run_certificate_checks(
     let mut checks = Vec::new();
 
     // Load talosconfig - use custom path if provided
-    let config_result = match config_path {
-        Some(path) => {
-            let path_buf = std::path::PathBuf::from(path);
-            talos_rs::TalosConfig::load_from(&path_buf)
-        }
-        None => talos_rs::TalosConfig::load_default(),
-    };
+    let config_result = talos_rs::TalosConfig::load(config_path);
     match config_result {
         Ok(config) => {
             // The cluster being diagnosed, not talosconfig's current one
@@ -369,41 +363,21 @@ pub async fn run_certificate_checks(
     }
 
     // Check kubeconfig certificate (from Talos API)
-    match client.kubeconfig().await {
-        Ok(kubeconfig_yaml) => {
-            // Parse kubeconfig YAML to extract client certificate
-            if let Ok(kc) = serde_saphyr::from_str::<serde_json::Value>(&kubeconfig_yaml)
-                && let Some(users) = kc.get("users").and_then(|u| u.as_array())
-            {
-                for user in users {
-                    if let Some(user_data) = user.get("user") {
-                        // Check for client-certificate-data (base64 encoded PEM)
-                        if let Some(cert_data) = user_data
-                            .get("client-certificate-data")
-                            .and_then(|c| c.as_str())
-                        {
-                            match pki::parse_base64_certificate("kubeconfig", cert_data) {
-                                Ok(cert_info) => {
-                                    checks.push(cert_to_diagnostic_check(
-                                        "kubeconfig_cert",
-                                        "kubeconfig",
-                                        &cert_info,
-                                    ));
-                                }
-                                Err(e) => {
-                                    checks.push(
-                                        DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
-                                            .with_details(&format!(
-                                                "Failed to parse kubeconfig cert: {}",
-                                                e
-                                            )),
-                                    );
-                                }
-                            }
-                            break; // Only check first user
-                        }
+    let kubeconfig = tokio::time::timeout(pki::KUBECONFIG_TIMEOUT, client.kubeconfig())
+        .await
+        .map_err(|_| "timed out".to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()))
+        .and_then(|yaml| pki::kubeconfig_certs(&yaml));
+    match kubeconfig {
+        Ok(certs) => {
+            if let Some(cert) = &certs.client {
+                checks.push(match pki::parse_base64_certificate("kubeconfig", cert) {
+                    Ok(cert_info) => {
+                        cert_to_diagnostic_check("kubeconfig_cert", "kubeconfig", &cert_info)
                     }
-                }
+                    Err(e) => DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
+                        .with_details(&format!("Failed to parse kubeconfig cert: {}", e)),
+                });
             }
         }
         Err(e) => {

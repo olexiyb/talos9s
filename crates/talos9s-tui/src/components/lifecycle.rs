@@ -371,13 +371,7 @@ impl LifecycleComponent {
             Ok(versions) => {
                 // Get context name from talosconfig if not already set
                 if !versions.is_empty() && data.context_name.is_empty() {
-                    let config_result = match &self.config_path {
-                        Some(path) => {
-                            let path_buf = std::path::PathBuf::from(path);
-                            TalosConfig::load_from(&path_buf)
-                        }
-                        None => TalosConfig::load_default(),
-                    };
+                    let config_result = TalosConfig::load(self.config_path.as_deref());
                     if let Ok(config) = config_result {
                         data.context_name = config.context;
                     }
@@ -416,13 +410,7 @@ impl LifecycleComponent {
         let context_name = if !data.context_name.is_empty() {
             data.context_name.clone()
         } else {
-            let config_result = match &self.config_path {
-                Some(path) => {
-                    let path_buf = std::path::PathBuf::from(path);
-                    TalosConfig::load_from(&path_buf)
-                }
-                None => TalosConfig::load_default(),
-            };
+            let config_result = TalosConfig::load(self.config_path.as_deref());
             config_result
                 .map(|config| config.context)
                 .unwrap_or_default()

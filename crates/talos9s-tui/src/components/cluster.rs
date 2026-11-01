@@ -2258,24 +2258,12 @@ impl ClusterComponent {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         // Load talosconfig - use custom path if provided via --config flag
-        let config = match &self.config_path {
-            Some(path) => {
-                let path_buf = std::path::PathBuf::from(path);
-                match TalosConfig::load_from(&path_buf) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("Failed to load talosconfig from {}: {}", path, e);
-                        return Ok(());
-                    }
-                }
+        let config = match TalosConfig::load(self.config_path.as_deref()) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Failed to load talosconfig: {}", e);
+                return Ok(());
             }
-            None => match TalosConfig::load_default() {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("Failed to load talosconfig: {}", e);
-                    return Ok(());
-                }
-            },
         };
 
         // Determine which contexts to load based on --context flag
@@ -5245,13 +5233,7 @@ impl ClusterComponent {
                 .border_style(Style::default().fg(border_color));
 
             // Get control plane IP from talosconfig endpoints
-            let config_result = match &self.config_path {
-                Some(path) => {
-                    let path_buf = std::path::PathBuf::from(path);
-                    TalosConfig::load_from(&path_buf)
-                }
-                None => TalosConfig::load_default(),
-            };
+            let config_result = TalosConfig::load(self.config_path.as_deref());
             let cp_ip = config_result
                 .ok()
                 .and_then(|config| {
