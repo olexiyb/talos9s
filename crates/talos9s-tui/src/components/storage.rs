@@ -148,7 +148,7 @@ impl StorageComponent {
             None
         } else {
             // Extract IP from address (remove port if present)
-            Some(address.split(':').next().unwrap_or(&address).to_string())
+            Some(talos_rs::host_of(&address).to_string())
         };
 
         Self {

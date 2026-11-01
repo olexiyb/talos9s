@@ -504,7 +504,7 @@ impl ClusterData {
                             cluster
                                 .endpoints
                                 .first()
-                                .map(|e| e.split(':').next().unwrap_or(e).to_string())
+                                .map(|e| talos_rs::host_of(e).to_string())
                         });
 
                     match cp_ip {
@@ -608,7 +608,7 @@ impl ClusterData {
                 .versions
                 .iter()
                 .map(|v| {
-                    let ip = v.node.split(':').next().unwrap_or(&v.node).to_string();
+                    let ip = talos_rs::host_of(&v.node).to_string();
                     (v.node.clone(), ip)
                 })
                 .collect()
@@ -1012,7 +1012,7 @@ impl ClusterData {
     /// offline node, and finally the etcd service. Keeping these in one place
     /// ensures the control-plane and worker groups stay complementary.
     fn is_controlplane(&self, node: &str) -> bool {
-        let key = node.split(':').next().unwrap_or(node);
+        let key = talos_rs::host_of(node);
         if let Some(member) = self.discovery_members.iter().find(|m| {
             m.hostname.eq_ignore_ascii_case(node)
                 || m.hostname.eq_ignore_ascii_case(key)
@@ -1067,7 +1067,7 @@ impl ClusterData {
             .or_else(|| {
                 self.endpoints
                     .first()
-                    .map(|e| e.split(':').next().unwrap_or(e).to_string())
+                    .map(|e| talos_rs::host_of(e).to_string())
             })
     }
 }
@@ -2833,7 +2833,7 @@ impl ClusterComponent {
 
     /// Kubelet version from the Kubernetes Node object of the same name
     fn get_node_kubelet_version_for(&self, cluster_idx: usize, node_name: &str) -> Option<&str> {
-        let key = node_name.split(':').next().unwrap_or(node_name);
+        let key = talos_rs::host_of(node_name);
         self.clusters
             .get(cluster_idx)?
             .kubelet_versions
@@ -5236,7 +5236,7 @@ impl ClusterComponent {
                     config
                         .current_context()
                         .and_then(|ctx| ctx.endpoints.first())
-                        .map(|e| e.split(':').next().unwrap_or(e).to_string())
+                        .map(|e| talos_rs::host_of(e).to_string())
                 })
                 .unwrap_or_else(|| "<control-plane-ip>".to_string());
 

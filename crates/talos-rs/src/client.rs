@@ -153,11 +153,11 @@ impl TalosClient {
             .unwrap_or_else(|| {
                 self.nodes
                     .get(index)
-                    .map(|n| n.split(':').next().unwrap_or(n).to_string())
+                    .map(|n| host_of(n).to_string())
                     .unwrap_or_else(|| {
                         self.nodes
                             .first()
-                            .map(|n| n.split(':').next().unwrap_or(n).to_string())
+                            .map(|n| host_of(n).to_string())
                             .unwrap_or_else(|| "node".to_string())
                     })
             })
@@ -174,41 +174,7 @@ impl TalosClient {
         // Only add nodes metadata if explicitly configured (not just endpoints)
         // When nodes is empty or same as endpoints, skip the header
         if !self.nodes.is_empty() {
-            // Identify vIPs: endpoints that are NOT in the nodes list
-            // These are load balancers/VIPs that shouldn't be targeted as nodes
-            // Endpoints that ARE also in nodes are real nodes and should be kept
-            let vips: std::collections::HashSet<&str> = self
-                .endpoints
-                .iter()
-                .filter_map(|e| {
-                    let endpoint_host = e.split(':').next().unwrap_or(e);
-                    // Check if this endpoint also appears in the nodes list
-                    let is_also_a_node = self.nodes.iter().any(|n| {
-                        let node_host = n.split(':').next().unwrap_or(n);
-                        node_host == endpoint_host
-                    });
-                    // It's a vIP only if it's NOT also a node
-                    if is_also_a_node {
-                        None
-                    } else {
-                        Some(endpoint_host)
-                    }
-                })
-                .collect();
-
-            // Filter out localhost and vIPs from nodes
-            let valid_nodes: Vec<String> = self
-                .nodes
-                .iter()
-                .filter(|n| {
-                    let is_localhost = n.starts_with("127.0.0.1") || n.starts_with("localhost");
-                    let node_host = n.split(':').next().unwrap_or(n);
-                    let is_vip = vips.contains(node_host);
-                    !is_localhost && !is_vip
-                })
-                .map(|n| n.split(':').next().unwrap_or(n).to_string())
-                .collect();
-
+            let valid_nodes = self.filtered_target_nodes();
             if valid_nodes.len() == 1 {
                 // Single node: use "node" header (direct proxy, no aggregation)
                 if let Ok(value) = valid_nodes[0].parse() {
@@ -242,9 +208,9 @@ impl TalosClient {
             .endpoints
             .iter()
             .filter_map(|e| {
-                let endpoint_host = e.split(':').next().unwrap_or(e);
+                let endpoint_host = host_of(e);
                 let is_also_a_node = self.nodes.iter().any(|n| {
-                    let node_host = n.split(':').next().unwrap_or(n);
+                    let node_host = host_of(n);
                     node_host == endpoint_host
                 });
                 if is_also_a_node {
@@ -259,11 +225,11 @@ impl TalosClient {
             .iter()
             .filter(|n| {
                 let is_localhost = n.starts_with("127.0.0.1") || n.starts_with("localhost");
-                let node_host = n.split(':').next().unwrap_or(n);
+                let node_host = host_of(n);
                 let is_vip = vips.contains(node_host);
                 !is_localhost && !is_vip
             })
-            .map(|n| n.split(':').next().unwrap_or(n).to_string())
+            .map(|n| host_of(n).to_string())
             .collect()
     }
 
@@ -3168,6 +3134,16 @@ mod tests {
         let filtered = client.filtered_target_nodes();
 
         assert_eq!(filtered, vec!["node1"]);
+    }
+
+    #[tokio::test]
+    async fn test_filtered_nodes_handles_ipv6_and_endpoint_urls() {
+        let client = create_test_client(
+            vec!["[fd00::1]:50000".to_string(), "fd00::2".to_string()],
+            vec!["https://[fd00::1]:50000".to_string()],
+        );
+        // Was cut to "fd00" at the first colon
+        assert_eq!(client.filtered_target_nodes(), vec!["fd00::1", "fd00::2"]);
     }
 
     #[tokio::test]

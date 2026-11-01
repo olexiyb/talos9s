@@ -466,7 +466,7 @@ impl NodeInfoComponent {
             hostname,
             tab,
             client: None,
-            node_address: address.split(':').next().unwrap_or(&address).to_string(),
+            node_address: talos_rs::host_of(&address).to_string(),
             context,
             config_path,
             reload_all: true,

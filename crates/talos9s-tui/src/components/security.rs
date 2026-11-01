@@ -305,13 +305,11 @@ impl SecurityComponent {
                 config.get_context(&data.context_name).ok().and_then(|ctx| {
                     // Prefer nodes if set, otherwise use first endpoint
                     if !ctx.nodes.is_empty() {
-                        ctx.nodes
-                            .first()
-                            .map(|n| n.split(':').next().unwrap_or(n).to_string())
+                        ctx.nodes.first().map(|n| talos_rs::host_of(n).to_string())
                     } else {
                         ctx.endpoints
                             .first()
-                            .map(|e| e.split(':').next().unwrap_or(e).to_string())
+                            .map(|e| talos_rs::host_of(e).to_string())
                     }
                 })
             }

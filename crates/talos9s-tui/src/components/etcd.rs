@@ -79,11 +79,7 @@ impl EtcdFlags {
 
 /// Host of `https://10.0.0.1:2380` or `https://[fd00::1]:2380`
 fn url_host(url: &str) -> Option<String> {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let host = match rest.strip_prefix('[') {
-        Some(v6) => v6.split(']').next()?,
-        None => rest.split(':').next()?,
-    };
+    let host = talos_rs::host_of(url);
     (!host.is_empty()).then(|| host.to_string())
 }
 

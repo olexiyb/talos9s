@@ -98,7 +98,7 @@ fn roster_ip_for(roster: &[DiscoveryMember], node: &str) -> String {
         .iter()
         .find(|m| m.hostname == node || m.addresses.iter().any(|a| a == node))
         .and_then(|m| m.addresses.first().cloned())
-        .unwrap_or_else(|| node.split(':').next().unwrap_or(node).to_string())
+        .unwrap_or_else(|| talos_rs::host_of(node).to_string())
 }
 
 /// Node lifecycle status
@@ -434,7 +434,7 @@ impl LifecycleComponent {
             let fallback_ips: Vec<String> = data
                 .versions
                 .iter()
-                .map(|v| v.node.split(':').next().unwrap_or(&v.node).to_string())
+                .map(|v| talos_rs::host_of(&v.node).to_string())
                 .collect();
             match bounded(
                 DISCOVERY_TIMEOUT,
@@ -712,9 +712,7 @@ impl LifecycleComponent {
             let drift_details: Vec<String> = config_hashes
                 .iter()
                 .filter_map(|(hostname, hash)| {
-                    hash.map(|h| {
-                        format!("{}:{}", hostname.split(':').next().unwrap_or(hostname), h)
-                    })
+                    hash.map(|h| format!("{}:{}", talos_rs::host_of(hostname), h))
                 })
                 .collect();
             data.alerts.push(Alert {
