@@ -20,6 +20,7 @@ helpers).
 | `diagnostics` | `CheckStatus`, `CniType`, `CniInfo`, `PodHealthInfo` |
 | `constants` | thresholds, CRD lists, refresh intervals |
 | `etcd` | `EtcdQuorum`: quorum and whether a node can go down |
+| `logparse` | log line timestamp, level and message; search match ranges |
 
 If logic in the TUI can be tested without a terminal or a cluster, it belongs
 here.

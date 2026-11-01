@@ -27,6 +27,7 @@ pub mod errors;
 pub mod etcd;
 pub mod formatting;
 pub mod indicators;
+pub mod logparse;
 pub mod network;
 pub mod selection;
 
