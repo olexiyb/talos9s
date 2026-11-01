@@ -645,75 +645,80 @@ pub async fn check_pod_health(
         .await
         .map_err(|e| K8sError::ApiError(e.to_string()))?;
 
+    Ok(pod_health_from(
+        &pod_list.items,
+        chrono::Utc::now().timestamp(),
+    ))
+}
+
+/// Unhealthy pods among `pods`, each listed once (under its first stuck
+/// container). Pending counts once a pod has waited past the grace time;
+/// `now` is seconds since the epoch.
+fn pod_health_from(pods: &[Pod], now: i64) -> PodHealthInfo {
+    use talos9s_core::constants::POD_PENDING_GRACE_SECS;
     let mut info = PodHealthInfo {
-        total_pods: pod_list.items.len(),
+        total_pods: pods.len(),
         ..Default::default()
     };
 
-    for pod in pod_list.items {
+    for pod in pods {
         let name = pod.metadata.name.clone().unwrap_or_default();
         let namespace = pod.metadata.namespace.clone().unwrap_or_default();
         let status = pod.status.as_ref();
 
-        // Check container statuses for waiting states
-        if let Some(container_statuses) = status.and_then(|s| s.container_statuses.as_ref()) {
-            for cs in container_statuses {
-                if let Some(waiting) = cs.state.as_ref().and_then(|s| s.waiting.as_ref()) {
-                    let reason = waiting.reason.clone().unwrap_or_default();
-                    let restart_count = cs.restart_count;
-
-                    // Get last termination reason if available
-                    let last_reason = cs
-                        .last_state
-                        .as_ref()
-                        .and_then(|s| s.terminated.as_ref())
-                        .and_then(|t| t.reason.clone());
-
-                    let pod_info = UnhealthyPodInfo {
-                        name: name.clone(),
-                        namespace: namespace.clone(),
-                        state: reason.clone(),
-                        restart_count,
-                        last_reason,
-                    };
-
-                    match reason.as_str() {
-                        "CrashLoopBackOff" => info.crashing.push(pod_info),
-                        "ImagePullBackOff" | "ErrImagePull" => {
-                            info.image_pull_errors.push(pod_info)
-                        }
-                        _ => {}
-                    }
-                }
+        let init = status
+            .and_then(|s| s.init_container_statuses.as_deref())
+            .unwrap_or_default();
+        let containers = status
+            .and_then(|s| s.container_statuses.as_deref())
+            .unwrap_or_default();
+        let stuck = init.iter().chain(containers).find_map(|cs| {
+            let reason = cs.state.as_ref()?.waiting.as_ref()?.reason.clone()?;
+            matches!(
+                reason.as_str(),
+                "CrashLoopBackOff" | "ImagePullBackOff" | "ErrImagePull"
+            )
+            .then_some((cs, reason))
+        });
+        if let Some((cs, reason)) = stuck {
+            let pod_info = UnhealthyPodInfo {
+                name,
+                namespace,
+                state: reason.clone(),
+                restart_count: cs.restart_count,
+                last_reason: cs
+                    .last_state
+                    .as_ref()
+                    .and_then(|s| s.terminated.as_ref())
+                    .and_then(|t| t.reason.clone()),
+            };
+            if reason == "CrashLoopBackOff" {
+                info.crashing.push(pod_info);
+            } else {
+                info.image_pull_errors.push(pod_info);
             }
+            continue;
         }
 
-        // Check for stuck Pending pods (no container statuses yet)
-        let phase = status.and_then(|s| s.phase.clone()).unwrap_or_default();
-        if phase == "Pending" {
-            // Check if it's been pending for a while (has conditions but no containers)
-            let has_conditions = status
-                .and_then(|s| s.conditions.as_ref())
-                .map(|c| !c.is_empty())
-                .unwrap_or(false);
-            let no_containers = status
-                .and_then(|s| s.container_statuses.as_ref())
-                .map(|c| c.is_empty())
-                .unwrap_or(true);
-
-            if has_conditions && no_containers {
-                info.pending.push(UnhealthyPodInfo {
-                    name,
-                    namespace,
-                    state: "Pending".to_string(),
-                    restart_count: 0,
-                    last_reason: None,
-                });
-            }
+        // Pending past the grace time: being scheduled or pulled is normal
+        let pending = status.and_then(|s| s.phase.as_deref()) == Some("Pending");
+        let age = pod
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .map(|ts| now - ts.0.as_second());
+        if pending && age.is_none_or(|a| a >= POD_PENDING_GRACE_SECS) {
+            info.pending.push(UnhealthyPodInfo {
+                name,
+                namespace,
+                state: "Pending".to_string(),
+                restart_count: 0,
+                last_reason: None,
+            });
         }
     }
 
-    Ok(info)
+    info
 }
 
 /// Information about a PodDisruptionBudget
@@ -1545,6 +1550,44 @@ mod tests {
 
     fn names(pods: &[PodToEvict]) -> Vec<&str> {
         pods.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn pod_health_lists_each_pod_once() {
+        const NOW: i64 = 1_800_000_000;
+        let created = |secs_ago: i64| {
+            chrono::DateTime::from_timestamp(NOW - secs_ago, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let waiting = |reason: &str| {
+            json!({"name": "c", "image": "i", "imageID": "", "ready": false, "restartCount": 4,
+                   "state": {"waiting": {"reason": reason}}})
+        };
+        let pods: Vec<Pod> = [
+            // Two crashing containers, one pod
+            json!({"metadata": {"name": "two"},
+                   "status": {"phase": "Running", "containerStatuses":
+                       [waiting("CrashLoopBackOff"), waiting("CrashLoopBackOff")]}}),
+            json!({"metadata": {"name": "init"},
+                   "status": {"phase": "Pending", "initContainerStatuses":
+                       [waiting("ImagePullBackOff")]}}),
+            json!({"metadata": {"name": "new", "creationTimestamp": created(10)},
+                   "status": {"phase": "Pending"}}),
+            json!({"metadata": {"name": "stuck", "creationTimestamp": created(3600)},
+                   "status": {"phase": "Pending"}}),
+        ]
+        .into_iter()
+        .map(|v| k8s_openapi::serde_json::from_value(v).unwrap())
+        .collect();
+        let info = pod_health_from(&pods, NOW);
+        let names = |list: &[UnhealthyPodInfo]| -> Vec<String> {
+            list.iter().map(|p| p.name.clone()).collect()
+        };
+        assert_eq!(names(&info.crashing), ["two"]);
+        assert_eq!(names(&info.image_pull_errors), ["init"]);
+        assert_eq!(names(&info.pending), ["stuck"]);
+        assert_eq!(info.total_pods, 4);
     }
 
     #[test]

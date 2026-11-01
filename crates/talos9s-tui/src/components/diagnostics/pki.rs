@@ -65,25 +65,41 @@ pub struct CertificateInfo {
 }
 
 impl CertificateInfo {
-    /// Calculate status based on days remaining
-    fn status_from_days(days: i64) -> CertStatus {
-        match days {
-            d if d <= 0 => CertStatus::Expired,
+    /// Status at `now`: expired only once `not_after` has passed (a
+    /// certificate with 23 hours left has 0 whole days but is valid)
+    fn status_at(not_after: DateTime<Utc>, now: DateTime<Utc>) -> CertStatus {
+        if not_after <= now {
+            return CertStatus::Expired;
+        }
+        match not_after.signed_duration_since(now).num_days() {
             d if d <= 7 => CertStatus::Critical,
             d if d <= 30 => CertStatus::Warning,
             _ => CertStatus::Valid,
         }
     }
 
-    /// Format time remaining in human-readable form
-    fn format_time_remaining(days: i64) -> String {
-        if days <= 0 {
-            let abs_days = days.abs();
-            if abs_days == 1 {
-                "expired 1 day ago".to_string()
-            } else {
-                format!("expired {} days ago", abs_days)
-            }
+    /// One line for the expiry: "EXPIRED 5 days ago" or "expires in 2m 3d"
+    pub fn expiry_text(&self) -> String {
+        if self.status == CertStatus::Expired {
+            format!("EXPIRED {}", self.time_remaining)
+        } else {
+            format!("expires in {}", self.time_remaining)
+        }
+    }
+
+    /// Format the time to `not_after` in human-readable form: "5 days",
+    /// "under 1 day", or for an expired one "5 days ago", "today"
+    fn format_time_remaining(not_after: DateTime<Utc>, now: DateTime<Utc>) -> String {
+        if not_after <= now {
+            return match now.signed_duration_since(not_after).num_days() {
+                0 => "today".to_string(),
+                1 => "1 day ago".to_string(),
+                d => format!("{d} days ago"),
+            };
+        }
+        let days = not_after.signed_duration_since(now).num_days();
+        if days == 0 {
+            "under 1 day".to_string()
         } else if days < 60 {
             if days == 1 {
                 "1 day".to_string()
@@ -112,6 +128,15 @@ impl CertificateInfo {
 
 /// Parse a PEM-encoded certificate and extract info
 pub fn parse_certificate(name: &str, pem_data: &[u8]) -> Result<CertificateInfo, String> {
+    parse_certificate_at(name, pem_data, Utc::now())
+}
+
+/// [`parse_certificate`] with the time to judge expiry at
+pub fn parse_certificate_at(
+    name: &str,
+    pem_data: &[u8],
+    now: DateTime<Utc>,
+) -> Result<CertificateInfo, String> {
     // Parse PEM to get DER
     let pem = parse_x509_pem(pem_data)
         .map_err(|e| format!("Failed to parse PEM: {}", e))?
@@ -150,8 +175,6 @@ pub fn parse_certificate(name: &str, pem_data: &[u8]) -> Result<CertificateInfo,
     let not_after_chrono =
         DateTime::from_timestamp(not_after.unix_timestamp(), 0).unwrap_or_else(Utc::now);
 
-    // Calculate days remaining
-    let now = Utc::now();
     let duration = not_after_chrono.signed_duration_since(now);
     let days_remaining = duration.num_days();
 
@@ -170,8 +193,8 @@ pub fn parse_certificate(name: &str, pem_data: &[u8]) -> Result<CertificateInfo,
         not_before: not_before_chrono,
         not_after: not_after_chrono,
         days_remaining,
-        time_remaining: CertificateInfo::format_time_remaining(days_remaining),
-        status: CertificateInfo::status_from_days(days_remaining),
+        time_remaining: CertificateInfo::format_time_remaining(not_after_chrono, now),
+        status: CertificateInfo::status_at(not_after_chrono, now),
         is_ca,
     })
 }
@@ -361,36 +384,62 @@ impl EncryptionStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
-    #[test]
-    fn test_format_time_remaining() {
-        assert_eq!(CertificateInfo::format_time_remaining(1), "1 day");
-        assert_eq!(CertificateInfo::format_time_remaining(30), "30 days");
-        assert_eq!(CertificateInfo::format_time_remaining(45), "45 days");
-        assert_eq!(CertificateInfo::format_time_remaining(60), "2m");
-        assert_eq!(CertificateInfo::format_time_remaining(90), "3m");
-        assert_eq!(CertificateInfo::format_time_remaining(365), "1y");
-        assert_eq!(CertificateInfo::format_time_remaining(400), "1y 1m");
-        assert_eq!(CertificateInfo::format_time_remaining(3650), "10y");
-        assert_eq!(
-            CertificateInfo::format_time_remaining(-1),
-            "expired 1 day ago"
-        );
-        assert_eq!(
-            CertificateInfo::format_time_remaining(-30),
-            "expired 30 days ago"
-        );
+    fn now() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_800_000_000, 0).unwrap()
+    }
+
+    fn in_days(days: i64) -> DateTime<Utc> {
+        now() + Duration::days(days)
     }
 
     #[test]
-    fn test_status_from_days() {
-        assert_eq!(CertificateInfo::status_from_days(365), CertStatus::Valid);
-        assert_eq!(CertificateInfo::status_from_days(31), CertStatus::Valid);
-        assert_eq!(CertificateInfo::status_from_days(30), CertStatus::Warning);
-        assert_eq!(CertificateInfo::status_from_days(15), CertStatus::Warning);
-        assert_eq!(CertificateInfo::status_from_days(7), CertStatus::Critical);
-        assert_eq!(CertificateInfo::status_from_days(1), CertStatus::Critical);
-        assert_eq!(CertificateInfo::status_from_days(0), CertStatus::Expired);
-        assert_eq!(CertificateInfo::status_from_days(-1), CertStatus::Expired);
+    fn test_format_time_remaining() {
+        let fmt = |t| CertificateInfo::format_time_remaining(t, now());
+        assert_eq!(fmt(in_days(1)), "1 day");
+        assert_eq!(fmt(in_days(30)), "30 days");
+        assert_eq!(fmt(in_days(45)), "45 days");
+        assert_eq!(fmt(in_days(60)), "2m");
+        assert_eq!(fmt(in_days(90)), "3m");
+        assert_eq!(fmt(in_days(365)), "1y");
+        assert_eq!(fmt(in_days(400)), "1y 1m");
+        assert_eq!(fmt(in_days(3650)), "10y");
+        assert_eq!(fmt(now() + Duration::hours(23)), "under 1 day");
+        assert_eq!(fmt(now() - Duration::hours(3)), "today");
+        assert_eq!(fmt(in_days(-1)), "1 day ago");
+        assert_eq!(fmt(in_days(-30)), "30 days ago");
+    }
+
+    #[test]
+    fn test_status_at() {
+        let status = |t| CertificateInfo::status_at(t, now());
+        assert_eq!(status(in_days(365)), CertStatus::Valid);
+        assert_eq!(status(in_days(31)), CertStatus::Valid);
+        assert_eq!(status(in_days(30)), CertStatus::Warning);
+        assert_eq!(status(in_days(15)), CertStatus::Warning);
+        assert_eq!(status(in_days(7)), CertStatus::Critical);
+        assert_eq!(status(in_days(1)), CertStatus::Critical);
+        // 23 hours left: 0 whole days, but not expired
+        assert_eq!(status(now() + Duration::hours(23)), CertStatus::Critical);
+        assert_eq!(status(now()), CertStatus::Expired);
+        assert_eq!(status(in_days(-5)), CertStatus::Expired);
+    }
+
+    #[test]
+    fn expiry_text_says_ago_once() {
+        let cert = |not_after: DateTime<Utc>| CertificateInfo {
+            name: "talosconfig".into(),
+            subject: String::new(),
+            issuer: String::new(),
+            not_before: now(),
+            not_after,
+            days_remaining: not_after.signed_duration_since(now()).num_days(),
+            time_remaining: CertificateInfo::format_time_remaining(not_after, now()),
+            status: CertificateInfo::status_at(not_after, now()),
+            is_ca: false,
+        };
+        assert_eq!(cert(in_days(-5)).expiry_text(), "EXPIRED 5 days ago");
+        assert_eq!(cert(in_days(45)).expiry_text(), "expires in 45 days");
     }
 }

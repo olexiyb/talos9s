@@ -268,41 +268,19 @@ pub async fn run_kubernetes_checks(
 /// The presence of these files indicates the CNI has initialized.
 ///
 /// Returns (is_working, error_details)
-pub async fn check_cni_health(client: &TalosClient) -> (bool, Option<String>) {
-    // Check for Flannel subnet.env
-    if client.read_file("/run/flannel/subnet.env").await.is_ok() {
-        return (true, None);
-    }
-
-    // Check for Cilium CNI config
-    if client
-        .read_file("/etc/cni/net.d/05-cilium.conflist")
-        .await
-        .is_ok()
-    {
-        return (true, None);
-    }
-
-    // Check for Calico CNI config
-    if client
-        .read_file("/etc/cni/net.d/10-calico.conflist")
-        .await
-        .is_ok()
-    {
-        return (true, None);
-    }
-
-    // Check for any CNI config in /etc/cni/net.d/
-    // If we find any config file, CNI is likely working
-    if let Ok(content) = client.read_file("/etc/cni/net.d").await {
-        // If the directory exists and has content, some CNI is configured
-        if !content.is_empty() {
-            return (true, None);
+pub async fn check_cni_health(client: &TalosClient) -> Result<bool, talos_rs::TalosError> {
+    // Flannel's subnet.env, or a Cilium / Calico CNI config. `Err` when the
+    // node can't be asked: that is unknown, not "no CNI".
+    for path in [
+        "/run/flannel/subnet.env",
+        "/etc/cni/net.d/05-cilium.conflist",
+        "/etc/cni/net.d/10-calico.conflist",
+    ] {
+        if client.file_exists(path).await? {
+            return Ok(true);
         }
     }
-
-    // No CNI config files found
-    (false, Some("No CNI configuration files found".to_string()))
+    Ok(false)
 }
 
 /// Run certificate expiry checks
@@ -313,7 +291,7 @@ pub async fn check_cni_health(client: &TalosClient) -> (bool, Option<String>) {
 /// - kubeconfig client certificate (from API)
 pub async fn run_certificate_checks(
     client: &TalosClient,
-    _ctx: &DiagnosticContext,
+    ctx: &DiagnosticContext,
     config_path: Option<&str>,
 ) -> Vec<DiagnosticCheck> {
     let mut checks = Vec::new();
@@ -328,7 +306,12 @@ pub async fn run_certificate_checks(
     };
     match config_result {
         Ok(config) => {
-            if let Some(context) = config.current_context() {
+            // The cluster being diagnosed, not talosconfig's current one
+            let context = match ctx.talos_context.as_deref() {
+                Some(name) => config.get_context(name).ok(),
+                None => config.current_context(),
+            };
+            if let Some(context) = context {
                 // Check client certificate
                 match context.client_cert_pem() {
                     Ok(pem_data) => match pki::parse_certificate("talosconfig", &pem_data) {
@@ -437,14 +420,7 @@ pub async fn run_certificate_checks(
 
 /// Convert a CertificateInfo to a DiagnosticCheck
 fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> DiagnosticCheck {
-    let message = if cert.days_remaining <= 0 {
-        format!(
-            "EXPIRED {} ago",
-            cert.time_remaining.replace("expired ", "")
-        )
-    } else {
-        format!("expires in {}", cert.time_remaining)
-    };
+    let message = cert.expiry_text();
 
     let details = format!(
         "Subject: {}\nIssuer: {}\nExpires: {}\nDays remaining: {}",

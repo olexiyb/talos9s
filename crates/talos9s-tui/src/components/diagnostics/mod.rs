@@ -591,8 +591,15 @@ impl DiagnosticsComponent {
         frame.render_widget(block, area);
 
         if checks.is_empty() {
-            let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, inner);
+            // Empty after a refresh means nothing to check here (e.g. no
+            // addons, or no Kubernetes client), not still loading
+            let text = if self.state.is_loading() {
+                "Loading..."
+            } else {
+                "Nothing to check"
+            };
+            let empty = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(empty, inner);
             return;
         }
 
@@ -666,7 +673,7 @@ impl DiagnosticsComponent {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Confirm Action ")
+            .title(" Fix ")
             .border_style(Style::default().fg(Color::Yellow));
 
         let inner = block.inner(dialog_area);
@@ -1129,6 +1136,7 @@ mod tests {
         let mut diag =
             DiagnosticsComponent::new("bc1".into(), "10.0.0.1".into(), "controlplane".into(), None);
         diag.set_talos_context(Some("bc".into()));
+        diag.state.mark_loaded();
         diag.data_mut().unwrap().system_checks = vec![DiagnosticCheck::fail(
             "svc_kubelet",
             "kubelet",
@@ -1162,6 +1170,9 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(screen.contains("service kubelet restart"));
+        // The categories with no checks after loading are not "Loading..."
+        assert!(!screen.contains("Loading..."));
+        assert!(screen.contains("Nothing to check"));
         assert!(!screen.contains("Apply"));
 
         // Close: no action leaves the view

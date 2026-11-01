@@ -23,8 +23,9 @@ pub async fn run_flannel_checks(
 
     // Check br_netfilter kernel module (Flannel requires this)
     let br_netfilter_check = check_br_netfilter(client, ctx).await;
-    let br_netfilter_ok =
-        br_netfilter_check.status == crate::components::diagnostics::types::CheckStatus::Pass;
+    // Only a known-missing module is a root cause; unknown is not
+    let br_netfilter_missing =
+        br_netfilter_check.status == crate::components::diagnostics::types::CheckStatus::Fail;
 
     checks.push(br_netfilter_check);
 
@@ -34,7 +35,7 @@ pub async fn run_flannel_checks(
     }
 
     // Check CNI health from kubelet logs
-    let cni_check = check_flannel_cni(client, ctx, br_netfilter_ok).await;
+    let cni_check = check_flannel_cni(client, ctx, br_netfilter_missing).await;
     checks.push(cni_check);
 
     checks
@@ -78,7 +79,13 @@ fn check_flannel_pods(
 async fn check_br_netfilter(client: &TalosClient, ctx: &DiagnosticContext) -> DiagnosticCheck {
     // Check by reading /proc/sys/net/bridge/bridge-nf-call-iptables
     // If it exists and contains "1", br_netfilter is loaded
-    let br_netfilter_loaded = client.is_br_netfilter_loaded().await.unwrap_or_default();
+    let br_netfilter_loaded = match client.is_br_netfilter_loaded().await {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            return DiagnosticCheck::unknown("br_netfilter", "br_netfilter")
+                .with_details(&format!("Could not read the sysctl: {e}"));
+        }
+    };
 
     if br_netfilter_loaded {
         DiagnosticCheck::pass("br_netfilter", "br_netfilter", "Loaded")
@@ -141,7 +148,7 @@ async fn check_br_netfilter(client: &TalosClient, ctx: &DiagnosticContext) -> Di
 async fn check_flannel_cni(
     client: &TalosClient,
     ctx: &DiagnosticContext,
-    br_netfilter_ok: bool,
+    br_netfilter_missing: bool,
 ) -> DiagnosticCheck {
     // Primary check: Does /run/flannel/subnet.env exist?
     // This file is the definitive indicator that Flannel has initialized.
@@ -150,7 +157,12 @@ async fn check_flannel_cni(
             // File exists - verify it has valid content
             content.contains("FLANNEL_NETWORK=") && content.contains("FLANNEL_SUBNET=")
         }
-        Err(_) => false,
+        Err(e) if e.is_not_found() => false,
+        // The node didn't answer: that says nothing about Flannel
+        Err(e) => {
+            return DiagnosticCheck::unknown("cni", "CNI (Flannel)")
+                .with_details(&format!("Could not read /run/flannel/subnet.env: {e}"));
+        }
     };
 
     if subnet_env_exists {
@@ -159,7 +171,7 @@ async fn check_flannel_cni(
     } else {
         // subnet.env missing - Flannel hasn't initialized
         // Determine the likely cause and appropriate fix
-        let (fix, message, details) = if !br_netfilter_ok {
+        let (fix, message, details) = if br_netfilter_missing {
             // br_netfilter is the root cause
             let fix = if ctx.is_container {
                 let container_name = if ctx.hostname.is_empty() {

@@ -346,13 +346,26 @@ impl SecurityComponent {
                         continue;
                     }
 
-                    let provider = match status.encryption_provider.as_deref() {
-                        Some("luks2") | Some("LUKS2") => EncryptionProvider::Static,
-                        Some(p) if p.to_lowercase().contains("tpm") => EncryptionProvider::Tpm,
-                        Some(p) if p.to_lowercase().contains("kms") => EncryptionProvider::Kms,
-                        Some(_) => EncryptionProvider::Static,
-                        None => EncryptionProvider::None,
+                    // VolumeStatus says `luks2` whatever seals the key: the
+                    // key kinds are in the VolumeConfig
+                    let key_types = match status.encryption_provider {
+                        Some(_) => talos_rs::get_volume_key_types_for_node(
+                            &data.context_name,
+                            &node,
+                            config_path,
+                            &status.id,
+                        )
+                        .await
+                        .inspect_err(|e| {
+                            tracing::warn!("Failed to read {} key types: {}", status.id, e)
+                        })
+                        .ok(),
+                        None => None,
                     };
+                    let provider = encryption_provider(
+                        status.encryption_provider.as_deref(),
+                        key_types.as_deref(),
+                    );
 
                     volumes.push(VolumeEncryption {
                         name: status.id,
@@ -576,6 +589,36 @@ impl SecurityComponent {
     }
 }
 
+/// How a volume is encrypted. The weakest key decides: any static or
+/// nodeID key opens the volume without the TPM or KMS. Without the key
+/// kinds the strength is unknown, not weak.
+fn encryption_provider(provider: Option<&str>, key_types: Option<&[String]>) -> EncryptionProvider {
+    let Some(provider) = provider else {
+        return EncryptionProvider::None;
+    };
+    let types: Vec<String> = key_types
+        .unwrap_or_default()
+        .iter()
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let has = |kind: &str| types.iter().any(|t| t == kind);
+    if types.is_empty() {
+        EncryptionProvider::Unknown(provider.to_string())
+    } else if has("static") {
+        EncryptionProvider::Static
+    } else if has("nodeid") {
+        EncryptionProvider::NodeID
+    } else if types.iter().all(|t| t == "tpm" || t == "kms") {
+        if has("kms") {
+            EncryptionProvider::Kms
+        } else {
+            EncryptionProvider::Tpm
+        }
+    } else {
+        EncryptionProvider::Unknown(provider.to_string())
+    }
+}
+
 /// Convert a CertificateInfo to a SecurityItem
 fn cert_to_item(cert: &CertificateInfo) -> SecurityItem {
     let status = match cert.status {
@@ -584,11 +627,8 @@ fn cert_to_item(cert: &CertificateInfo) -> SecurityItem {
         CertStatus::Critical | CertStatus::Expired => ItemStatus::Critical,
     };
 
-    let message = if cert.days_remaining <= 0 {
-        format!(
-            "EXPIRED {} ago",
-            cert.time_remaining.replace("expired ", "")
-        )
+    let message = if cert.status == CertStatus::Expired {
+        cert.expiry_text()
     } else {
         format!("Valid for {}", cert.time_remaining)
     };
@@ -821,5 +861,44 @@ impl crate::components::BackgroundRefresh for SecurityComponent {
         if !still_valid {
             self.selected = refreshed.selected;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(k: &[&str]) -> Vec<String> {
+        k.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn encryption_strength_comes_from_the_weakest_key() {
+        assert_eq!(encryption_provider(None, None), EncryptionProvider::None);
+        // luks2 alone says nothing about the keys
+        assert_eq!(
+            encryption_provider(Some("luks2"), None),
+            EncryptionProvider::Unknown("luks2".into())
+        );
+        assert_eq!(
+            encryption_provider(Some("luks2"), Some(&kinds(&["tpm"]))),
+            EncryptionProvider::Tpm
+        );
+        assert_eq!(
+            encryption_provider(Some("luks2"), Some(&kinds(&["kms", "tpm"]))),
+            EncryptionProvider::Kms
+        );
+        assert_eq!(
+            encryption_provider(Some("luks2"), Some(&kinds(&["tpm", "static"]))),
+            EncryptionProvider::Static
+        );
+        assert_eq!(
+            encryption_provider(Some("luks2"), Some(&kinds(&["nodeID"]))),
+            EncryptionProvider::NodeID
+        );
+        assert_eq!(
+            encryption_provider(Some("luks2"), Some(&kinds(&["new-kind"]))),
+            EncryptionProvider::Unknown("luks2".into())
+        );
     }
 }

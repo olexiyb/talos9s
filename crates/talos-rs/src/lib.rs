@@ -122,7 +122,7 @@ pub use talosctl::{
     get_etcd_spec_for_node, get_extensions_for_node, get_kubespan_peers,
     get_kubespan_peers_for_node, get_kubespan_settings_for_node, get_machine_config,
     get_machine_config_for_node, get_machine_config_text_for_node, get_node_network_info,
-    get_version_insecure, get_volume_status, get_volume_status_for_node,
-    get_volume_status_insecure, is_kubespan_enabled, is_kubespan_enabled_for_node,
-    patch_machineconfig_for_node, reboot_insecure, shutdown_insecure,
+    get_version_insecure, get_volume_key_types_for_node, get_volume_status,
+    get_volume_status_for_node, get_volume_status_insecure, is_kubespan_enabled,
+    is_kubespan_enabled_for_node, patch_machineconfig_for_node, reboot_insecure, shutdown_insecure,
 };

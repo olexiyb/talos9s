@@ -117,15 +117,16 @@ async fn run_generic_cni_checks(
     let mut checks = Vec::new();
 
     // Just check if CNI is working at a basic level
-    let (cni_ok, error) = super::core::check_cni_health(client).await;
-
-    if cni_ok {
-        checks.push(DiagnosticCheck::pass("cni", "CNI", "OK"));
-    } else {
-        checks.push(
+    match super::core::check_cni_health(client).await {
+        Ok(true) => checks.push(DiagnosticCheck::pass("cni", "CNI", "OK")),
+        Ok(false) => checks.push(
             DiagnosticCheck::fail("cni", "CNI", "Network setup failed", None)
-                .with_details(&error.unwrap_or_else(|| "Unknown error".to_string())),
-        );
+                .with_details("No CNI configuration files found"),
+        ),
+        Err(e) => checks.push(
+            DiagnosticCheck::unknown("cni", "CNI")
+                .with_details(&format!("Could not read CNI files: {e}")),
+        ),
     }
 
     checks

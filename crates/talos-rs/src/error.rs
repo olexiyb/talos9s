@@ -53,3 +53,29 @@ pub enum TalosError {
     #[error("Could not determine home directory")]
     NoHomeDirectory,
 }
+
+impl TalosError {
+    /// Whether the node answered that the thing asked for doesn't exist,
+    /// as opposed to not answering at all. A proxied multi-node reply puts
+    /// the node's error in its metadata text.
+    pub fn is_not_found(&self) -> bool {
+        match self {
+            TalosError::Grpc(status) => status.code() == tonic::Code::NotFound,
+            TalosError::Connection(msg) => msg.contains("no such file or directory"),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_found_is_told_apart_from_failures() {
+        assert!(TalosError::Grpc(tonic::Status::not_found("stat /x: no such file")).is_not_found());
+        assert!(TalosError::Connection("stat /x: no such file or directory".into()).is_not_found());
+        assert!(!TalosError::Grpc(tonic::Status::unavailable("connection refused")).is_not_found());
+        assert!(!TalosError::Connection("timed out".into()).is_not_found());
+    }
+}

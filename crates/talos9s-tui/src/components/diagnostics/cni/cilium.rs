@@ -184,14 +184,21 @@ async fn check_cilium_operator(client: &Client) -> DiagnosticCheck {
         match deployments.get(name).await {
             Ok(deployment) => {
                 let status = deployment.status.as_ref();
-                let replicas = status.and_then(|s| s.replicas).unwrap_or(0);
+                let replicas = desired_replicas(&deployment);
                 let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
                 let available = status.and_then(|s| s.available_replicas).unwrap_or(0);
 
                 // Check for pending pods to detect single-node scheduling constraints
                 let unavailable = status.and_then(|s| s.unavailable_replicas).unwrap_or(0);
 
-                if ready > 0 && ready == replicas {
+                if replicas == 0 {
+                    return DiagnosticCheck::pass(
+                        "cilium_operator",
+                        "Cilium Operator",
+                        "scaled to 0",
+                    );
+                }
+                if ready >= replicas {
                     // All replicas ready - perfect
                     return DiagnosticCheck::pass(
                         "cilium_operator",
@@ -247,6 +254,16 @@ async fn check_cilium_operator(client: &Client) -> DiagnosticCheck {
     )
 }
 
+/// Replicas a Deployment asks for: `spec.replicas`, 1 when unset.
+/// `status.replicas` counts surge pods mid-rollout.
+fn desired_replicas(deployment: &Deployment) -> i32 {
+    deployment
+        .spec
+        .as_ref()
+        .and_then(|s| s.replicas)
+        .unwrap_or(1)
+}
+
 /// Check Hubble Relay deployment status (returns None if Hubble not deployed)
 async fn check_hubble_relay(client: &Client) -> Option<DiagnosticCheck> {
     let deployments: Api<Deployment> = Api::namespaced(client.clone(), "kube-system");
@@ -254,10 +271,16 @@ async fn check_hubble_relay(client: &Client) -> Option<DiagnosticCheck> {
     match deployments.get("hubble-relay").await {
         Ok(deployment) => {
             let status = deployment.status.as_ref();
-            let replicas = status.and_then(|s| s.replicas).unwrap_or(0);
+            let replicas = desired_replicas(&deployment);
             let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
 
-            if ready > 0 && ready == replicas {
+            if replicas == 0 {
+                Some(DiagnosticCheck::pass(
+                    "hubble_relay",
+                    "Hubble Relay",
+                    "scaled to 0",
+                ))
+            } else if ready >= replicas {
                 Some(DiagnosticCheck::pass(
                     "hubble_relay",
                     "Hubble Relay",
@@ -450,6 +473,20 @@ fn determine_overall_status(
 mod tests {
     use super::*;
     use crate::components::diagnostics::types::CheckStatus;
+
+    #[test]
+    fn desired_replicas_come_from_spec() {
+        let deployment = |v| -> Deployment { k8s_openapi::serde_json::from_value(v).unwrap() };
+        let d = deployment(k8s_openapi::serde_json::json!({
+            "spec": {"replicas": 0, "selector": {}, "template": {}},
+            "status": {"replicas": 2}
+        }));
+        assert_eq!(desired_replicas(&d), 0);
+        let d = deployment(k8s_openapi::serde_json::json!({
+            "spec": {"selector": {}, "template": {}}
+        }));
+        assert_eq!(desired_replicas(&d), 1);
+    }
 
     fn kubespan(advertise: bool) -> KubeSpanSettings {
         KubeSpanSettings {

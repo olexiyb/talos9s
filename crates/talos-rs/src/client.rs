@@ -997,28 +997,21 @@ impl TalosClient {
         Ok(output)
     }
 
-    /// Check if the br_netfilter kernel module is loaded
-    ///
-    /// Returns true if the module is loaded, false otherwise.
-    /// This checks by reading /proc/sys/net/bridge/bridge-nf-call-iptables
-    /// which only exists when br_netfilter is loaded.
-    pub async fn is_br_netfilter_loaded(&self) -> Result<bool, TalosError> {
-        match self
-            .read_file("/proc/sys/net/bridge/bridge-nf-call-iptables")
-            .await
-        {
-            Ok(content) => {
-                tracing::info!(
-                    "br_netfilter sysctl file exists, content: {:?}",
-                    content.trim()
-                );
-                Ok(true)
-            }
-            Err(e) => {
-                tracing::info!("br_netfilter sysctl file not found: {}", e);
-                Ok(false)
-            }
+    /// Whether `path` exists on the node: `Ok(false)` only when the node
+    /// says it doesn't, an error when the node can't be asked
+    pub async fn file_exists(&self, path: &str) -> Result<bool, TalosError> {
+        match self.read_file(path).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.is_not_found() => Ok(false),
+            Err(e) => Err(e),
         }
+    }
+
+    /// Whether the br_netfilter kernel module is loaded: its sysctl
+    /// `/proc/sys/net/bridge/bridge-nf-call-iptables` exists only then
+    pub async fn is_br_netfilter_loaded(&self) -> Result<bool, TalosError> {
+        self.file_exists("/proc/sys/net/bridge/bridge-nf-call-iptables")
+            .await
     }
 
     /// Get kubeconfig from the cluster

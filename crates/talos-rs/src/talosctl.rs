@@ -205,6 +205,38 @@ pub async fn get_volume_status_for_node(
     parse_volume_status_yaml(&output)
 }
 
+/// Kinds of the encryption keys of a volume (`static`, `nodeID`, `kms`,
+/// `tpm`), from its VolumeConfig: VolumeStatus only says `luks2`. Only the
+/// kinds are read; a static key's passphrase is never kept.
+pub async fn get_volume_key_types_for_node(
+    context: &str,
+    node_ip: &str,
+    config_path: Option<&str>,
+    volume: &str,
+) -> Result<Vec<String>, TalosError> {
+    let output = get_resource_yaml(
+        Some(context),
+        node_ip,
+        config_path,
+        &["volumeconfig", volume],
+    )
+    .await?;
+    Ok(parse_key_types(&output))
+}
+
+fn parse_key_types(yaml: &str) -> Vec<String> {
+    resource_documents(yaml)
+        .flat_map(|doc| {
+            doc.pointer("/spec/encryption/keys")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|key| key.get("type").and_then(scalar_to_string))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Get disk information for a node
 ///
 /// Executes: talosctl get disks --nodes <node> -o yaml
@@ -1753,6 +1785,13 @@ fn parse_duration_to_ms(s: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn volume_key_types_leave_secrets_out() {
+        let yaml = "node: 10.0.0.1\nmetadata:\n    id: STATE\nspec:\n    encryption:\n        provider: luks2\n        keys:\n            - slot: 0\n              type: tpm\n            - slot: 1\n              type: static\n              staticPassphrase: hunter2\n";
+        assert_eq!(super::parse_key_types(yaml), ["tpm", "static"]);
+        assert!(super::parse_key_types("spec:\n    phase: ready\n").is_empty());
+    }
+
     /// `talosctl get machineconfig -o yaml`: the stored config first, then
     /// the active one, each a multi-document config in a block scalar
     fn machine_config_output(persistent_hostname: &str) -> String {
