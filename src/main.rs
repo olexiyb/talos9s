@@ -12,8 +12,23 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 /// talos9s: Terminal UI for Talos Linux clusters
 #[derive(Parser, Debug)]
 #[command(name = "talos9s")]
-#[command(author, version, about, long_about = None)]
+#[command(author, about, long_about = None)]
 struct Cli {
+    /// Print the version, and a newer release when the last check found one
+    #[arg(short = 'V', long)]
+    version: bool,
+
+    /// Don't check GitHub for a newer release (done at most once a day;
+    /// DO_NOT_TRACK=1 also turns it off)
+    // Boolish: the variable may be 1/0, yes/no, on/off as well as true/false
+    #[arg(
+        long,
+        env = "TALOS9S_NO_UPDATE_CHECK",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    no_update_check: bool,
+
     /// Talos context to use (from talosconfig)
     #[arg(short, long, env = "TALOS9S_CONTEXT")]
     context: Option<String>,
@@ -47,6 +62,10 @@ struct Cli {
 async fn main() -> Result<()> {
     // Parse CLI arguments
     let cli = Cli::parse();
+    if cli.version {
+        print_version();
+        return Ok(());
+    }
 
     // Initialize error handling
     color_eyre::install()?;
@@ -114,10 +133,25 @@ async fn main() -> Result<()> {
         cli.insecure,
         cli.endpoint,
     );
+    if cli.no_update_check {
+        app.disable_update_check();
+    }
     app.run().await?;
 
     tracing::info!("Goodbye!");
     Ok(())
+}
+
+/// `talos9s 0.2.0`, and the newer release the last daily check found
+fn print_version() {
+    use talos9s_tui::update::{RELEASES_URL, VERSION};
+    println!("talos9s {VERSION}");
+    let newer = talos9s_tui::state::default_path()
+        .map(|path| talos9s_tui::state::load(&path).update)
+        .and_then(|check| check.newer().map(str::to_string));
+    if let Some(newer) = newer {
+        println!("{newer} is available: {RELEASES_URL}");
+    }
 }
 
 /// Default logs older than this are removed at startup

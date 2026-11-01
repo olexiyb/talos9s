@@ -37,6 +37,11 @@ kube.workspace = true
 k8s-openapi.workspace = true
 # Raw requests through kube (LINSTOR API via the service proxy)
 http = "1"
+# The daily new-release check (all already in the build through kube)
+hyper = "1"
+hyper-util.workspace = true
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"] }
+http-body-util = "0.1"
 
 # Serialization
 serde.workspace = true

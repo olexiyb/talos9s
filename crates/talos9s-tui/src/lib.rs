@@ -17,6 +17,7 @@ pub mod state;
 pub mod task;
 pub mod tui;
 pub mod ui_ext;
+pub mod update;
 pub mod zfs;
 
 pub use app::App;

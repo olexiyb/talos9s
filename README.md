@@ -219,6 +219,9 @@ Moving around:
   view, the pane width, folded groups, log levels, sort orders and view
   toggles are kept in `~/.talos9s/state.yaml`. Text filters are not. Delete
   the file to start fresh.
+- The top line shows the version, and a newer release when the daily check
+  found one (shortened or left out on a narrow screen). `talos9s --version`
+  prints both.
 - The top line lists the keys that work everywhere (`Tab`, `Z`, `[` `]`,
   `Ctrl+C`); the bottom line lists only what acts in the focused window
   right now, so `Space` fold appears on an expandable row, `o` ops on a
@@ -243,6 +246,10 @@ node, so it is careful about what it changes:
   wizard's output directory. It has no configuration file.
 - **No in-cluster access needed.** Nothing runs in the cluster and no
   Kubernetes namespace needs Talos API rights.
+- **One connection besides your clusters:** at most once a day it asks
+  GitHub for the latest talos9s release, to show "0.3.0 available" on the
+  top line. `--no-update-check`, `TALOS9S_NO_UPDATE_CHECK=1` or
+  `DO_NOT_TRACK=1` turns it off.
 
 ## How it works
 

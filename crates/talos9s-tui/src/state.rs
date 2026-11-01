@@ -35,6 +35,32 @@ pub struct UiState {
     /// Processes sort (`processes::SortBy` name)
     pub processes_sort: Option<String>,
     pub network: NetworkSettings,
+    /// The last new-release check (`update.rs`)
+    pub update: UpdateCheck,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateCheck {
+    /// When it answered, seconds since the Unix epoch
+    pub checked_at: Option<u64>,
+    /// The latest release then
+    pub latest: Option<String>,
+}
+
+impl UpdateCheck {
+    /// No answer yet, or the last one is older than `interval`
+    pub fn due(&self, now: u64, interval: std::time::Duration) -> bool {
+        self.checked_at
+            .is_none_or(|at| now.saturating_sub(at) >= interval.as_secs())
+    }
+
+    /// The latest release when it is newer than this build
+    pub fn newer(&self) -> Option<&str> {
+        self.latest
+            .as_deref()
+            .filter(|l| crate::update::is_newer(crate::update::VERSION, l))
+    }
 }
 
 /// A tree row by name: the cluster, optionally a group (`control-plane` or

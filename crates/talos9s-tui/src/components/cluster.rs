@@ -1155,6 +1155,8 @@ pub struct ClusterComponent {
     /// Group or node remembered from the last run, selected once the
     /// cluster lists its nodes (unless the user moved first)
     pending_selection: Option<crate::state::Selection>,
+    /// A newer talos9s release, for the top line
+    newer_version: Option<String>,
     /// First tree row shown, when the tree is taller than its pane
     tree_scroll: usize,
     /// Scroll of the node pane (lines), the node it belongs to, and how far
@@ -1683,6 +1685,7 @@ impl ClusterComponent {
             tree_pane: FocusedPane::Nodes,
             back_hint: None,
             pending_selection: None,
+            newer_version: None,
             tree_scroll: 0,
             details_scroll: 0,
             details_scroll_node: String::new(),
@@ -3172,6 +3175,11 @@ impl ClusterComponent {
         })
     }
 
+    /// A newer release found by the daily check, or none
+    pub fn set_newer_version(&mut self, version: Option<String>) {
+        self.newer_version = version;
+    }
+
     pub fn auto_refresh(&self) -> bool {
         self.auto_refresh
     }
@@ -3777,12 +3785,18 @@ impl ClusterComponent {
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
         // Only clusters that aren't connected are worth a word here: every
         // row of the tree carries its own status, so a healthy set says nothing
-        let mut header_spans = vec![Span::styled(
-            " talos9s ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )];
+        let mut header_spans = vec![
+            Span::styled(
+                " talos9s",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {} ", crate::update::VERSION),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ];
         for cluster in &self.clusters {
             let (symbol, word, color) = if cluster.loading {
                 ("◌", "connecting", Color::Yellow)
@@ -3804,6 +3818,23 @@ impl ClusterComponent {
             .get(self.active_cluster)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| "none".to_string());
+
+        // A newer release: ahead of the global keys (they drop first), and
+        // shorter or left out when the line is narrow (`--version` says it too)
+        if let Some(newer) = &self.newer_version {
+            let room = area
+                .width
+                .saturating_sub(active_name.chars().count() as u16 + 3);
+            let used = Line::from(header_spans.clone()).width() as u16;
+            let long = format!("· {newer} available ");
+            let short = format!("↑{newer} ");
+            let style = Style::default().fg(Color::Green);
+            if used + long.chars().count() as u16 <= room {
+                header_spans.push(Span::styled(long, style));
+            } else if used + short.chars().count() as u16 <= room {
+                header_spans.push(Span::styled(short, style));
+            }
+        }
 
         let left_content = Line::from(header_spans);
         let right_content = Span::styled(

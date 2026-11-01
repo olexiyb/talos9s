@@ -201,6 +201,11 @@ pub struct App {
     /// Where the state between runs lives, and what was last written there
     state_path: Option<std::path::PathBuf>,
     saved_state: crate::state::UiState,
+    /// The new-release check: off by flag, its result, and the request
+    /// while it runs
+    update_check_enabled: bool,
+    update: crate::state::UpdateCheck,
+    update_job: Option<tokio::task::JoinHandle<Result<String, String>>>,
     /// Etcd status component (created when viewing etcd)
     etcd: Option<EtcdComponent>,
     /// Processes component (created when viewing processes)
@@ -299,6 +304,9 @@ impl App {
             network_settings: Default::default(),
             state_path: None,
             saved_state: Default::default(),
+            update_check_enabled: true,
+            update: Default::default(),
+            update_job: None,
             etcd: None,
             processes: None,
             network: None,
@@ -681,6 +689,46 @@ impl App {
         }
     }
 
+    /// Turn the daily new-release check off (`--no-update-check`)
+    pub fn disable_update_check(&mut self) {
+        self.update_check_enabled = false;
+    }
+
+    /// Ask GitHub for the latest release when the last answer is a day old
+    fn start_update_check(&mut self) {
+        if !self.update_check_enabled
+            || crate::update::do_not_track()
+            || !self.update.due(unix_now(), crate::update::CHECK_INTERVAL)
+        {
+            return;
+        }
+        self.update_job = Some(tokio::spawn(crate::update::fetch_latest()));
+    }
+
+    /// Take the check's answer when it is in; a failure is only logged and
+    /// tried again next start
+    fn poll_update_check(&mut self) {
+        if !self.update_job.as_ref().is_some_and(|j| j.is_finished()) {
+            return;
+        }
+        let Some(job) = self.update_job.take() else {
+            return;
+        };
+        match crate::task::poll_finished(job) {
+            Some(Ok(Ok(latest))) => {
+                tracing::info!("Latest talos9s release: {latest}");
+                self.update = crate::state::UpdateCheck {
+                    checked_at: Some(unix_now()),
+                    latest: Some(latest),
+                };
+                self.cluster
+                    .set_newer_version(self.update.newer().map(str::to_string));
+            }
+            Some(Ok(Err(e))) => tracing::debug!("New-release check failed: {e}"),
+            _ => {}
+        }
+    }
+
     /// Apply what the last run left in the state file; the menu entry it
     /// showed, for the caller to open
     fn restore_state(&mut self) -> Option<NavMenuItem> {
@@ -733,6 +781,9 @@ impl App {
             listening_only: state.network.listening_only.unwrap_or(false),
         };
         let item = by_name(&NavMenuItem::ALL, state.view.as_deref());
+        self.update = state.update.clone();
+        self.cluster
+            .set_newer_version(self.update.newer().map(str::to_string));
         self.saved_state = state;
         item
     }
@@ -797,6 +848,7 @@ impl App {
                 connections_sort: Some(name_of(network.conn_sort_by)),
                 listening_only: Some(network.listening_only),
             },
+            update: self.update.clone(),
         }
     }
 
@@ -843,6 +895,7 @@ impl App {
             }
             self.focus_after_show = false;
         }
+        self.start_update_check();
 
         loop {
             // Draw current view
@@ -890,6 +943,7 @@ impl App {
             // never refills, and once it is spent every await on a budgeted
             // resource (and every poll of a finished task) reads as pending.
             tokio::task::yield_now().await;
+            self.poll_update_check();
             self.persist_state();
 
             // Check async results (non-blocking)
@@ -2604,6 +2658,13 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// Seconds since the Unix epoch
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
