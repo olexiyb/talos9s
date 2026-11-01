@@ -14,7 +14,9 @@
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::components::diagnostics::{CheckStatus, DiagnosticCheck, DiagnosticsComponent};
+use crate::components::diagnostics::{
+    CheckStatus, DiagnosticCheck, DiagnosticsComponent, DiagnosticsSummary,
+};
 use crate::ui_ext::CheckStatusExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -310,6 +312,24 @@ impl GroupComponent {
             self.state.set_error(errors.join("; "));
         }
         Ok(())
+    }
+
+    /// Each node's diagnostics summary from the last run (diagnostics groups only)
+    pub fn diagnostics_summaries(&self) -> Vec<(String, DiagnosticsSummary)> {
+        if self.kind != GroupKind::Diagnostics {
+            return Vec::new();
+        }
+        let Some(data) = self.state.data() else {
+            return Vec::new();
+        };
+        self.nodes
+            .iter()
+            .zip(&data.diagnostics)
+            .filter_map(|(node, checks)| {
+                let checks = checks.as_ref().ok()?;
+                Some((node.hostname.clone(), DiagnosticsSummary::of(checks)))
+            })
+            .collect()
     }
 
     /// Run the single-node diagnostics on every node at once

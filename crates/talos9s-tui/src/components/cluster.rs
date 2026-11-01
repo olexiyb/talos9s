@@ -1,12 +1,13 @@
 //! Cluster component - displays cluster overview with nodes
 
 use crate::action::Action;
-use crate::components::diagnostics::k8s;
+use crate::components::diagnostics::{DiagnosticsSummary, k8s};
 use crate::components::{
     Component, GroupKind, GroupNode, KERNEL_SERVICE, LogNode, NodeInfoTab, ProcessNode,
 };
 use crate::linstor::{LinstorNode, LinstorStatus, StoragePool, fetch_linstor};
 use crate::reachability::prefer_reachable_addresses;
+use crate::ui_ext::HealthIndicatorExt;
 use crate::zfs::{ZfsPool, fetch_zfs_pools};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -917,6 +918,8 @@ pub struct ClusterComponent {
     hits: std::cell::RefCell<HitMap>,
     /// The view on the right has the keyboard, not the tree (set per draw)
     view_focused: bool,
+    /// Last diagnostics result per (cluster, node), shown on the dashboard
+    diagnostics_summaries: HashMap<(String, String), DiagnosticsSummary>,
 }
 
 /// Where clickable things were drawn on the last frame
@@ -1074,14 +1077,60 @@ fn format_uptime(secs: u64) -> String {
 }
 
 /// Color for a memory usage percentage
-fn memory_color(pct: f32) -> Color {
-    if pct > 90.0 {
-        Color::Red
-    } else if pct > 70.0 {
-        Color::Yellow
+/// The dashboard's "Diag:" line: what the last diagnostics run found
+fn diagnostics_line(summary: &DiagnosticsSummary) -> Line<'static> {
+    let age = talos9s_core::format_duration_human(
+        chrono::Duration::from_std(summary.checked_at.elapsed()).unwrap_or_default(),
+    );
+    let mut spans = vec![Span::styled(" Diag:   ", Style::default().dim())];
+    if summary.failures.is_empty() && summary.warnings.is_empty() {
+        spans.push(Span::styled(
+            "● all checks pass",
+            Style::default().fg(Color::Green),
+        ));
     } else {
-        Color::Green
+        let (symbol, color) = if summary.failures.is_empty() {
+            ("◐", Color::Yellow)
+        } else {
+            ("✗", Color::Red)
+        };
+        let mut counts = Vec::new();
+        if !summary.failures.is_empty() {
+            counts.push(talos9s_core::pluralize(
+                summary.failures.len(),
+                "failure",
+                "failures",
+            ));
+        }
+        if !summary.warnings.is_empty() {
+            counts.push(talos9s_core::pluralize(
+                summary.warnings.len(),
+                "warning",
+                "warnings",
+            ));
+        }
+        let names: Vec<&str> = summary
+            .failures
+            .iter()
+            .chain(&summary.warnings)
+            .map(String::as_str)
+            .collect();
+        spans.push(Span::styled(
+            format!("{symbol} {}: {}", counts.join(", "), names.join(", ")),
+            Style::default().fg(color),
+        ));
     }
+    spans.push(Span::styled(
+        format!("  {age} ago  [d]"),
+        Style::default().dim(),
+    ));
+    Line::from(spans)
+}
+
+/// Color of a fill level (memory, storage pools), with the thresholds the
+/// diagnostics judge memory by
+fn memory_color(pct: f32) -> Color {
+    talos9s_core::memory_health(pct as f64).color()
 }
 
 /// Upper bound for the kube-apiserver queries (ZFS pools, kubelet versions,
@@ -1250,14 +1299,10 @@ fn gib(bytes: u64) -> f64 {
 }
 
 /// Color for a 1-minute load average
-fn load_color(load1: f64) -> Color {
-    if load1 > 4.0 {
-        Color::Red
-    } else if load1 > 2.0 {
-        Color::Yellow
-    } else {
-        Color::Green
-    }
+/// Color of a load average for the node's core count (dim while unknown),
+/// with the thresholds the diagnostics use
+fn load_color(load1: f64, cpu_count: Option<usize>) -> Color {
+    talos9s_core::load_health(load1, cpu_count).color()
 }
 
 /// Render `label` followed by `items` joined with ", ", breaking only between
@@ -1330,6 +1375,7 @@ impl ClusterComponent {
             node_stats_fetch: None,
             hits: std::cell::RefCell::new(HitMap::default()),
             view_focused: false,
+            diagnostics_summaries: HashMap::new(),
         }
     }
 
@@ -2513,6 +2559,12 @@ impl ClusterComponent {
         true
     }
 
+    /// Remember a diagnostics run's result for a node of the selected cluster
+    pub fn set_diagnostics_summary(&mut self, node: String, summary: DiagnosticsSummary) {
+        self.diagnostics_summaries
+            .insert((self.cluster_key(), node), summary);
+    }
+
     pub fn focused_pane(&self) -> FocusedPane {
         self.focused_pane
     }
@@ -3575,7 +3627,11 @@ impl ClusterComponent {
                 let load = match self.get_node_load_avg_for(cluster_idx, node) {
                     Some(l) => Cell::from(Span::styled(
                         format!("{:.2}", l.load1),
-                        Style::default().fg(load_color(l.load1)),
+                        Style::default().fg(load_color(
+                            l.load1,
+                            self.get_node_cpu_info_for(cluster_idx, node)
+                                .map(|c| c.cpu_count),
+                        )),
                     )),
                     None => pending(),
                 };
@@ -4323,13 +4379,7 @@ impl ClusterComponent {
             let used_gb = (mem.mem_total - mem.mem_available) as f64 / 1024.0 / 1024.0 / 1024.0;
             let total_gb = mem.mem_total as f64 / 1024.0 / 1024.0 / 1024.0;
             let bar = Self::render_compact_bar(pct, 10);
-            let color = if pct > 90.0 {
-                Color::Red
-            } else if pct > 70.0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
+            let color = memory_color(pct);
             resource_lines.push(Line::from(vec![
                 Span::styled(" Memory: ", Style::default().dim()),
                 Span::styled(bar, Style::default().fg(color)),
@@ -4342,13 +4392,8 @@ impl ClusterComponent {
 
         // Load average
         if let Some(load) = self.get_node_load_avg(&node_name) {
-            let color = if load.load1 > 4.0 {
-                Color::Red
-            } else if load.load1 > 2.0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
+            let cores = self.get_node_cpu_info(&node_name).map(|c| c.cpu_count);
+            let color = load_color(load.load1, cores);
             resource_lines.push(Line::from(vec![
                 Span::styled(" Load:   ", Style::default().dim()),
                 Span::styled(format!("{:.2}", load.load1), Style::default().fg(color)),
@@ -4520,6 +4565,13 @@ impl ClusterComponent {
                 clock_span(clock),
                 Span::styled(format!(" vs {}", clock.server), Style::default().dim()),
             ]));
+        }
+        // From the last diagnostics run, when there was one: no extra queries
+        if let Some(summary) = self
+            .diagnostics_summaries
+            .get(&(self.cluster_key(), node_name.clone()))
+        {
+            resource_lines.push(diagnostics_line(summary));
         }
 
         // Split into resources (sized to its lines plus a spacer) and services
@@ -4727,6 +4779,63 @@ mod tests {
             Some(Action::ShowNetwork(ref n, _)) if n == "worker1"
         ));
         assert!(!comp.select_node("missing"));
+    }
+
+    /// The dashboard line names what the last diagnostics run found; a CNI
+    /// summary that only repeats its checks is left out
+    #[test]
+    fn diagnostics_line_names_the_findings() {
+        use crate::components::diagnostics::DiagnosticCheck;
+        let categories = vec![
+            (
+                "CNI (Cilium)",
+                vec![
+                    DiagnosticCheck::warn("hubble_relay", "Hubble Relay", "0/1 ready"),
+                    DiagnosticCheck::warn("cni", "CNI (Cilium)", "warnings in Hubble Relay"),
+                ],
+            ),
+            (
+                "System Health",
+                vec![
+                    DiagnosticCheck::pass("memory", "Memory", "52%"),
+                    DiagnosticCheck::fail("etcd", "Etcd", "unhealthy", None),
+                ],
+            ),
+        ];
+        let summary = DiagnosticsSummary::of(&categories);
+        assert_eq!(summary.failures, ["Etcd"]);
+        assert_eq!(summary.warnings, ["Hubble Relay"]);
+        let text: String = diagnostics_line(&summary)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            text.starts_with(" Diag:   ✗ 1 failure, 1 warning: Etcd, Hubble Relay"),
+            "{text}"
+        );
+        assert!(text.ends_with("ago  [d]"), "{text}");
+
+        let clean = DiagnosticsSummary::of(&[(
+            "System Health",
+            vec![DiagnosticCheck::pass("memory", "Memory", "52%")],
+        )]);
+        let text: String = diagnostics_line(&clean)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(text.contains("● all checks pass"), "{text}");
+    }
+
+    /// The dashboard's colors use the diagnostics' thresholds: load 5.5 is
+    /// fine on 32 cores
+    #[test]
+    fn dashboard_colors_use_shared_thresholds() {
+        assert_eq!(load_color(5.5, Some(32)), Color::Green);
+        assert_eq!(load_color(5.5, Some(2)), Color::Red);
+        assert_eq!(memory_color(75.0), Color::Green);
+        assert_eq!(memory_color(85.0), Color::Yellow);
     }
 
     /// Full when the view keeps 100 columns, compact otherwise; hidden is 0

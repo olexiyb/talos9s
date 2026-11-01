@@ -214,6 +214,13 @@ impl DiagnosticsComponent {
             .collect())
     }
 
+    /// The node and a summary of its last completed run, for the dashboard
+    pub fn summary(&self) -> Option<(String, DiagnosticsSummary)> {
+        let categories = self.checks_by_category().ok()?;
+        let hostname = self.data()?.hostname.clone();
+        Some((hostname, DiagnosticsSummary::of(&categories)))
+    }
+
     /// Set an error message
     pub fn set_error(&mut self, error: String) {
         self.state.set_error(error);
@@ -472,8 +479,8 @@ impl DiagnosticsComponent {
             && let Some(info) = cpu_info.first()
             && let Some(data) = self.data_mut()
         {
-            data.context.cpu_count = info.cpu_count.max(1);
-            tracing::info!("Detected {} CPUs", data.context.cpu_count);
+            data.context.cpu_count = Some(info.cpu_count).filter(|c| *c > 0);
+            tracing::info!("Detected {:?} CPUs", data.context.cpu_count);
         }
 
         log_stage(&addr, "cpu info", &mut lap);
@@ -941,6 +948,49 @@ impl DiagnosticsComponent {
 
         let content = Paragraph::new(lines);
         frame.render_widget(content, inner);
+    }
+}
+
+/// What a node's last diagnostics run found, shown on the dashboard
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiagnosticsSummary {
+    /// Names of the checks that failed / warned
+    pub failures: Vec<String>,
+    pub warnings: Vec<String>,
+    pub checked_at: std::time::Instant,
+}
+
+impl DiagnosticsSummary {
+    /// From a run's checks by category. A category summary that only
+    /// repeats the checks beside it ("CNI (Cilium): warnings in …") is left out.
+    pub fn of(categories: &[(&str, Vec<DiagnosticCheck>)]) -> Self {
+        let mut failures = Vec::new();
+        let mut warnings = Vec::new();
+        for (_, checks) in categories {
+            let others_flagged = |summary: &DiagnosticCheck| {
+                checks
+                    .iter()
+                    .any(|c| c.id != summary.id && c.status != CheckStatus::Pass)
+            };
+            for check in checks {
+                if check.id == "cni" && others_flagged(check) {
+                    continue;
+                }
+                let list = match check.status {
+                    CheckStatus::Fail => &mut failures,
+                    CheckStatus::Warn => &mut warnings,
+                    _ => continue,
+                };
+                if !list.contains(&check.name) {
+                    list.push(check.name.clone());
+                }
+            }
+        }
+        Self {
+            failures,
+            warnings,
+            checked_at: std::time::Instant::now(),
+        }
     }
 }
 

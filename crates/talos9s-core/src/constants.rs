@@ -6,6 +6,16 @@
 /// Threshold for considering a pod to have "high" restarts
 pub const HIGH_RESTART_THRESHOLD: i32 = 5;
 
+/// Memory in use (percent) that is a warning / critical. One source for the
+/// dashboard's colors and the diagnostics verdicts, so they never disagree.
+pub const MEMORY_WARN_PERCENT: f64 = 80.0;
+pub const MEMORY_CRITICAL_PERCENT: f64 = 90.0;
+
+/// 1-minute load average per CPU core that is a warning / critical: load
+/// means nothing without the core count (5 is idle on 32 cores)
+pub const LOAD_WARN_PER_CORE: f64 = 1.5;
+pub const LOAD_CRITICAL_PER_CORE: f64 = 2.0;
+
 /// Maximum log entries to retain in memory
 pub const MAX_LOG_ENTRIES: usize = 5000;
 

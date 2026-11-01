@@ -745,6 +745,7 @@ impl App {
         let Some(job) = self.refresh_job.take() else {
             return;
         };
+        let diagnostics = matches!(job, RefreshJob::Diagnostics(_) | RefreshJob::Group(_));
         // A panicked task is shown as the view's error: that ends its loading
         // state, so auto-refresh retries instead of "Loading..." forever.
         // (Aborted jobs never get here: cancelling takes them out first.)
@@ -773,6 +774,21 @@ impl App {
             RefreshJob::Etcd(h) => finish!(self.etcd, h),
             RefreshJob::Volumes(h) => finish!(self.volumes, h),
             RefreshJob::Group(h) => finish!(self.group, h),
+        }
+        if diagnostics {
+            self.publish_diagnostics();
+        }
+    }
+
+    /// Give the dashboard what the last diagnostics run found per node
+    fn publish_diagnostics(&mut self) {
+        if let Some((node, summary)) = self.diagnostics.as_ref().and_then(|d| d.summary()) {
+            self.cluster.set_diagnostics_summary(node, summary);
+        }
+        if let Some(group) = &self.group {
+            for (node, summary) in group.diagnostics_summaries() {
+                self.cluster.set_diagnostics_summary(node, summary);
+            }
         }
     }
 

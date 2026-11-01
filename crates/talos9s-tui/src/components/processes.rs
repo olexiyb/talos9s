@@ -792,16 +792,11 @@ impl ProcessesComponent {
         }
     }
 
-    /// Load average color relative to the node's core count
+    /// Load average color relative to the node's core count, with the
+    /// thresholds the dashboard and diagnostics use
     fn load_color(load: f64, cpu_count: usize) -> Color {
-        let threshold = cpu_count as f64;
-        if load > threshold {
-            Color::Red
-        } else if load > threshold * 0.7 {
-            Color::Yellow
-        } else {
-            Color::Green
-        }
+        use crate::ui_ext::HealthIndicatorExt;
+        talos9s_core::load_health(load, Some(cpu_count)).color()
     }
 
     /// Draw the header

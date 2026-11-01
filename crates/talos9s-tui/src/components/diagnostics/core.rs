@@ -5,6 +5,7 @@
 use super::pki::{self, CertStatus, CertificateInfo};
 use super::types::{DiagnosticCheck, DiagnosticContext, DiagnosticFix, FixAction};
 use talos_rs::TalosClient;
+use talos9s_core::HealthIndicator;
 
 /// Run all core system health checks
 pub async fn run_system_checks(
@@ -24,12 +25,15 @@ pub async fn run_system_checks(
                 let total_gb = info.mem_total as f64 / 1_073_741_824.0;
                 let msg = format!("{:.1} / {:.1} GB ({:.0}%)", used_gb, total_gb, usage_pct);
 
-                if usage_pct > 90.0 {
-                    checks.push(DiagnosticCheck::fail("memory", "Memory", &msg, None));
-                } else if usage_pct > 80.0 {
-                    checks.push(DiagnosticCheck::warn("memory", "Memory", &msg));
-                } else {
-                    checks.push(DiagnosticCheck::pass("memory", "Memory", &msg));
+                // Same thresholds as the dashboard's memory bar
+                match talos9s_core::memory_health(usage_pct as f64) {
+                    HealthIndicator::Error => {
+                        checks.push(DiagnosticCheck::fail("memory", "Memory", &msg, None))
+                    }
+                    HealthIndicator::Warning => {
+                        checks.push(DiagnosticCheck::warn("memory", "Memory", &msg))
+                    }
+                    _ => checks.push(DiagnosticCheck::pass("memory", "Memory", &msg)),
                 }
             }
         }
@@ -45,17 +49,29 @@ pub async fn run_system_checks(
         Ok(load_list) => {
             if let Some(load) = load_list.first() {
                 let msg = format!("{:.2} / {:.2} / {:.2}", load.load1, load.load5, load.load15);
-                // Scale threshold by CPU count: warn if load > cpu_count * 1.5
-                let threshold = (ctx.cpu_count as f64) * 1.5;
-                if load.load1 > threshold {
-                    checks.push(
-                        DiagnosticCheck::warn("cpu_load", "CPU Load", &msg).with_details(&format!(
-                            "Load exceeds threshold ({:.1} for {} CPUs)",
-                            threshold, ctx.cpu_count
-                        )),
-                    );
-                } else {
-                    checks.push(DiagnosticCheck::pass("cpu_load", "CPU Load", &msg));
+                // Judged per core, with the dashboard's thresholds
+                let cores = ctx.cpu_count;
+                let per_core = |per: f64| cores.map_or(0.0, |c| c as f64 * per);
+                let details = format!(
+                    "Warning above {:.0} and critical above {:.0} on {} cores",
+                    per_core(talos9s_core::constants::LOAD_WARN_PER_CORE),
+                    per_core(talos9s_core::constants::LOAD_CRITICAL_PER_CORE),
+                    cores.unwrap_or(0)
+                );
+                match talos9s_core::load_health(load.load1, cores) {
+                    HealthIndicator::Error => checks.push(
+                        DiagnosticCheck::fail("cpu_load", "CPU Load", &msg, None)
+                            .with_details(&details),
+                    ),
+                    HealthIndicator::Warning => checks.push(
+                        DiagnosticCheck::warn("cpu_load", "CPU Load", &msg).with_details(&details),
+                    ),
+                    // Without the core count there's nothing to judge it by
+                    HealthIndicator::Unknown => checks.push(
+                        DiagnosticCheck::unknown("cpu_load", "CPU Load")
+                            .with_details(&format!("{msg} (core count unavailable)")),
+                    ),
+                    _ => checks.push(DiagnosticCheck::pass("cpu_load", "CPU Load", &msg)),
                 }
             }
         }
@@ -82,11 +98,14 @@ pub async fn run_service_checks(
 
     match client.services().await {
         Ok(services_list) => {
+            // Healthy services are one line (the dashboard lists them all);
+            // only problems get a row each, with their fix
+            let (mut ok, mut total) = (0, 0);
             for node_services in services_list {
                 for service in node_services.services {
+                    total += 1;
                     let id = format!("service_{}", service.id);
                     let health = service.is_healthy();
-
                     let status_msg = format!(
                         "{} ({})",
                         service.state,
@@ -96,29 +115,20 @@ pub async fn run_service_checks(
                             None => "no health check",
                         }
                     );
-
-                    if health == Some(true) {
-                        checks.push(DiagnosticCheck::pass(&id, &service.id, &status_msg));
+                    // No health check defined (dashboard, system extensions):
+                    // running is fine, and so is a one-shot task (e.g. an
+                    // extension's setup) that finished, as in the cluster view
+                    let fine = health == Some(true)
+                        || (health.is_none()
+                            && matches!(service.state.as_str(), "Running" | "Finished"));
+                    if fine {
+                        ok += 1;
                     } else if health.is_none() {
-                        // No health check defined (dashboard, system extensions):
-                        // a running service is fine, and so is a one-shot one
-                        // (e.g. an extension's setup task) that finished, as in
-                        // the cluster view; otherwise flag its state without
-                        // claiming it is unhealthy.
-                        if service.state == "Running" {
-                            checks.push(DiagnosticCheck::pass(&id, &service.id, &status_msg));
-                        } else if service.state == "Finished" {
-                            checks.push(DiagnosticCheck::pass(
-                                &id,
-                                &service.id,
-                                "Finished (one-shot task, completed)",
-                            ));
-                        } else {
-                            checks.push(DiagnosticCheck::warn(&id, &service.id, &status_msg));
-                        }
+                        // Flag the state without claiming it is unhealthy
+                        checks.push(DiagnosticCheck::warn(&id, &service.id, &status_msg));
                     } else {
                         checks.push(DiagnosticCheck::fail(
-                            &format!("service_{}", service.id),
+                            &id,
                             &service.id,
                             &status_msg,
                             Some(DiagnosticFix {
@@ -128,6 +138,16 @@ pub async fn run_service_checks(
                         ));
                     }
                 }
+            }
+            if total > 0 {
+                checks.insert(
+                    0,
+                    DiagnosticCheck::pass(
+                        "services",
+                        "Services",
+                        &format!("{ok}/{total} running or completed"),
+                    ),
+                );
             }
         }
         Err(e) => {

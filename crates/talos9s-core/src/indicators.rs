@@ -293,9 +293,50 @@ impl HasHealth for SafetyStatus {
     }
 }
 
+/// Health of a node's memory use (percent in use)
+pub fn memory_health(used_percent: f64) -> HealthIndicator {
+    use crate::constants::{MEMORY_CRITICAL_PERCENT, MEMORY_WARN_PERCENT};
+    if used_percent > MEMORY_CRITICAL_PERCENT {
+        HealthIndicator::Error
+    } else if used_percent > MEMORY_WARN_PERCENT {
+        HealthIndicator::Warning
+    } else {
+        HealthIndicator::Healthy
+    }
+}
+
+/// Health of a node's 1-minute load average for its core count; `Unknown`
+/// without the core count, since load alone can't be judged
+pub fn load_health(load1: f64, cpu_count: Option<usize>) -> HealthIndicator {
+    use crate::constants::{LOAD_CRITICAL_PER_CORE, LOAD_WARN_PER_CORE};
+    let Some(cores) = cpu_count.filter(|c| *c > 0) else {
+        return HealthIndicator::Unknown;
+    };
+    let per_core = load1 / cores as f64;
+    if per_core > LOAD_CRITICAL_PER_CORE {
+        HealthIndicator::Error
+    } else if per_core > LOAD_WARN_PER_CORE {
+        HealthIndicator::Warning
+    } else {
+        HealthIndicator::Healthy
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_and_load_thresholds() {
+        assert_eq!(memory_health(70.0), HealthIndicator::Healthy);
+        assert_eq!(memory_health(85.0), HealthIndicator::Warning);
+        assert_eq!(memory_health(95.0), HealthIndicator::Error);
+        // Load 5.5 is fine on 32 cores, too much on 2
+        assert_eq!(load_health(5.5, Some(32)), HealthIndicator::Healthy);
+        assert_eq!(load_health(3.5, Some(2)), HealthIndicator::Warning);
+        assert_eq!(load_health(5.0, Some(2)), HealthIndicator::Error);
+        assert_eq!(load_health(5.0, None), HealthIndicator::Unknown);
+    }
 
     #[test]
     fn test_health_indicator_severity() {
