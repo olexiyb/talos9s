@@ -215,14 +215,12 @@ impl SecurityComponent {
                     if let Ok(pem_data) = context.client_cert_pem()
                         && let Ok(cert_info) = pki::parse_certificate("talosconfig", &pem_data)
                     {
-                        // Extract RBAC role from subject
-                        // Subject format is like "O=os:admin" - extract just the role part
+                        // Talos puts the role in the subject's organization
                         let role = cert_info
-                            .subject
-                            .strip_prefix("O=")
-                            .or_else(|| cert_info.subject.strip_prefix("CN="))
-                            .unwrap_or(&cert_info.subject)
-                            .to_string();
+                            .organizations
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| cert_info.subject.clone());
                         pki.rbac_role = Some(role);
                         pki.rbac_enabled = true;
                         pki.client_certs.push(cert_info);

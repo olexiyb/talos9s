@@ -3757,17 +3757,10 @@ impl NetworkStatsComponent {
 
     /// Convert hex IP to dotted decimal
     fn hex_to_ip(hex: &str) -> String {
-        if let Ok(val) = u32::from_str_radix(hex, 16) {
-            // Little-endian format in /proc/net/route
-            format!(
-                "{}.{}.{}.{}",
-                val & 0xFF,
-                (val >> 8) & 0xFF,
-                (val >> 16) & 0xFF,
-                (val >> 24) & 0xFF
-            )
-        } else {
-            hex.to_string()
+        // /proc/net/route holds addresses in host (little-endian) order
+        match u32::from_str_radix(hex, 16) {
+            Ok(val) => std::net::Ipv4Addr::from(val.to_le_bytes()).to_string(),
+            Err(_) => hex.to_string(),
         }
     }
 
@@ -4188,6 +4181,13 @@ mod tests {
         let data = net.data().unwrap();
         assert_eq!(data.rates.len(), 1);
         assert!(data.total_rx_rate < 1100, "{}", data.total_rx_rate);
+    }
+
+    #[test]
+    fn route_addresses_are_little_endian() {
+        assert_eq!(NetworkStatsComponent::hex_to_ip("0100A8C0"), "192.168.0.1");
+        assert_eq!(NetworkStatsComponent::hex_to_ip("00000000"), "0.0.0.0");
+        assert_eq!(NetworkStatsComponent::hex_to_ip("zz"), "zz");
     }
 
     #[test]

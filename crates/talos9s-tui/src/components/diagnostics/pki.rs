@@ -62,6 +62,9 @@ pub struct CertificateInfo {
     pub status: CertStatus,
     /// Whether this is a CA certificate
     pub is_ca: bool,
+    /// Subject organizations (O=): Talos puts the client's role there
+    /// (`os:admin`, `os:reader`, ...)
+    pub organizations: Vec<String>,
 }
 
 impl CertificateInfo {
@@ -156,6 +159,12 @@ pub fn parse_certificate_at(
         .map(|s| s.to_string())
         .unwrap_or_else(|| cert.subject().to_string());
 
+    let organizations = cert
+        .subject()
+        .iter_organization()
+        .filter_map(|o| o.as_str().ok().map(str::to_string))
+        .collect();
+
     // Extract issuer CN or full issuer
     let issuer = cert
         .issuer()
@@ -196,6 +205,7 @@ pub fn parse_certificate_at(
         time_remaining: CertificateInfo::format_time_remaining(not_after_chrono, now),
         status: CertificateInfo::status_at(not_after_chrono, now),
         is_ca,
+        organizations,
     })
 }
 
@@ -392,6 +402,7 @@ mod tests {
             time_remaining: CertificateInfo::format_time_remaining(not_after, now()),
             status: CertificateInfo::status_at(not_after, now()),
             is_ca: false,
+            organizations: Vec::new(),
         };
         assert_eq!(cert(in_days(-5)).expiry_text(), "EXPIRED 5 days ago");
         assert_eq!(cert(in_days(45)).expiry_text(), "expires in 45 days");

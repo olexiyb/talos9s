@@ -55,23 +55,21 @@ fn format_connection_error(msg: &str) -> String {
     }
 }
 
-/// Format a gRPC status error
+/// Format a gRPC status error by its code: the message text varies (an
+/// Unavailable status may say "connection refused" or "dns error"), the
+/// code doesn't. The message is kept where it tells what failed.
 fn format_grpc_error(status: &tonic::Status) -> String {
-    let msg = status.message().to_lowercase();
-    if msg.contains("unavailable") {
-        "Service unavailable - node may be down".to_string()
-    } else if msg.contains("permission denied") {
-        "Permission denied - check RBAC/credentials".to_string()
-    } else if msg.contains("unauthenticated") {
-        "Authentication failed - check talosconfig".to_string()
-    } else if msg.contains("deadline exceeded") || msg.contains("timeout") {
-        "Request timed out".to_string()
-    } else if msg.contains("not found") {
-        "Resource not found".to_string()
-    } else if msg.contains("already exists") {
-        "Resource already exists".to_string()
-    } else {
-        format!("gRPC error: {}", status.message())
+    use tonic::Code;
+    let detail = status.message();
+    match status.code() {
+        Code::Unavailable => format!("Service unavailable - node may be down ({detail})"),
+        Code::PermissionDenied => "Permission denied - check RBAC/credentials".to_string(),
+        Code::Unauthenticated => "Authentication failed - check talosconfig".to_string(),
+        Code::DeadlineExceeded => "Request timed out".to_string(),
+        Code::NotFound => format!("Not found: {detail}"),
+        Code::AlreadyExists => "Resource already exists".to_string(),
+        Code::Unimplemented => format!("Not supported by this Talos version: {detail}"),
+        _ => format!("gRPC error: {detail}"),
     }
 }
 
@@ -94,6 +92,32 @@ fn format_transport_error(msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grpc_errors_by_code_not_text() {
+        use tonic::Status;
+        assert_eq!(
+            format_grpc_error(&Status::unavailable("connection refused")),
+            "Service unavailable - node may be down (connection refused)"
+        );
+        assert_eq!(
+            format_grpc_error(&Status::permission_denied("not allowed")),
+            "Permission denied - check RBAC/credentials"
+        );
+        assert_eq!(
+            format_grpc_error(&Status::deadline_exceeded("")),
+            "Request timed out"
+        );
+        assert_eq!(
+            format_grpc_error(&Status::not_found("stat /x: no such file or directory")),
+            "Not found: stat /x: no such file or directory"
+        );
+        // A message that merely mentions a code's words doesn't pick it
+        assert_eq!(
+            format_grpc_error(&Status::internal("permission denied on /dev/x")),
+            "gRPC error: permission denied on /dev/x"
+        );
+    }
 
     #[test]
     fn test_format_connection_error() {

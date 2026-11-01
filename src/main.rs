@@ -50,7 +50,7 @@ struct Cli {
     tail: i32,
 
     /// Connect without TLS client certificates (for maintenance mode nodes)
-    #[arg(short, long)]
+    #[arg(short, long, requires = "endpoint")]
     insecure: bool,
 
     /// Endpoint to connect to in insecure mode (e.g., 192.168.1.100 or 192.168.1.100:50000)
@@ -103,13 +103,6 @@ async fn main() -> Result<()> {
         .init();
 
     tracing::info!("Starting talos9s");
-
-    // Validate insecure mode requires endpoint
-    if cli.insecure && cli.endpoint.is_none() {
-        eprintln!("Error: --insecure requires --endpoint <ip>");
-        eprintln!("Usage: talos9s --insecure --endpoint 192.168.1.100");
-        std::process::exit(1);
-    }
 
     if cli.insecure {
         tracing::info!("Insecure mode enabled");
