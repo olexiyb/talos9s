@@ -3591,8 +3591,17 @@ impl ClusterComponent {
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| "Cluster".to_string()),
         };
+        // A cluster refresh in flight rebuilds this table
+        let refreshing = self
+            .background_refresh
+            .get(cluster_idx)
+            .is_some_and(|h| h.is_some());
         let block = Block::default()
-            .title(format!(" {} · {} nodes ", group, nodes.len()))
+            .title(crate::ui_ext::title_with_refresh(
+                &format!("{} · {} nodes", group, nodes.len()),
+                refreshing,
+                Color::White,
+            ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
@@ -4400,16 +4409,17 @@ impl ClusterComponent {
             return;
         }
 
-        let title = format!(" {} · {} ", node_name, role);
+        let title = crate::ui_ext::title_with_refresh(
+            &format!("{} · {}", node_name, role),
+            self.node_stats_fetch.is_some(),
+            if self.focused_pane == FocusedPane::Services {
+                Color::Cyan
+            } else {
+                Color::White
+            },
+        );
         let block = Block::default()
             .title(title)
-            .title_style(
-                Style::default().fg(if self.focused_pane == FocusedPane::Services {
-                    Color::Cyan
-                } else {
-                    Color::White
-                }),
-            )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 

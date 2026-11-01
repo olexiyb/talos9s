@@ -8,6 +8,38 @@ use talos9s_core::{
     CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus,
 };
 
+/// A spinner frame for "in progress" markers, advancing with wall time so
+/// every spinner on screen turns together and nothing has to track ticks
+pub fn spinner() -> &'static str {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    FRAMES[(millis / 100 % FRAMES.len() as u128) as usize]
+}
+
+/// A window title with a "refreshing" marker appended while `refreshing`
+pub fn title_with_refresh(
+    title: &str,
+    refreshing: bool,
+    color: Color,
+) -> ratatui::text::Line<'static> {
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+    let mut spans = vec![Span::styled(
+        format!(" {title} "),
+        Style::default().fg(color),
+    )];
+    if refreshing {
+        spans.push(Span::styled(
+            format!("{} refreshing ", spinner()),
+            Style::default().dim(),
+        ));
+    }
+    ratatui::text::Line::from(spans)
+}
+
 /// Extension trait for HealthIndicator to provide ratatui colors
 pub trait HealthIndicatorExt {
     /// Get the ratatui Color for this indicator

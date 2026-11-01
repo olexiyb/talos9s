@@ -453,6 +453,11 @@ impl NetworkStatsComponent {
     /// Refresh network data from the node: start any requested action
     /// (service restart, file view, packet capture) and a stats fetch, each in
     /// a spawned task. Returns at once; `update(Tick)` applies the results.
+    /// A stats fetch is in flight
+    pub fn refreshing(&self) -> bool {
+        self.tasks.stats.is_some()
+    }
+
     pub fn refresh(&mut self) {
         let Some(client) = self.client.clone() else {
             self.set_error("No client configured".to_string());

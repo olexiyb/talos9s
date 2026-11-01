@@ -1094,15 +1094,21 @@ impl App {
             } else {
                 Color::DarkGray
             };
+            // The title says when a refresh is in flight (streams aside)
+            let refreshing = self.refresh_job.is_some()
+                || (base == View::Network && self.network.as_ref().is_some_and(|n| n.refreshing()));
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(accent))
-                .title(format!(" {} ", self.pane_title))
-                .title_style(Style::default().fg(if view_focused {
-                    Color::Cyan
-                } else {
-                    Color::White
-                }));
+                .title(crate::ui_ext::title_with_refresh(
+                    &self.pane_title,
+                    refreshing,
+                    if view_focused {
+                        Color::Cyan
+                    } else {
+                        Color::White
+                    },
+                ));
             let inner = block.inner(view_area);
             frame.render_widget(block, view_area);
             inner
