@@ -783,7 +783,7 @@ pub struct TailscaleLink {
 /// Upper bound for each per-node `talosctl get` (see [`get_resource_yaml`])
 const NODE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Upper bound for reading the full machine config
-const MACHINE_CONFIG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const MACHINE_CONFIG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Run `talosctl [--context c] get <resource> [id] -o yaml` against one node,
 /// with a timeout.
