@@ -212,6 +212,27 @@ impl CheckStatusExt for CheckStatus {
     }
 }
 
+/// A list cursor move
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Move {
+    Prev,
+    Next,
+    First,
+    Last,
+}
+
+/// The cursor after `step` in a list of `len`, kept inside it; `None` for
+/// an empty list
+pub fn moved(cursor: usize, len: usize, step: Move) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match step {
+        Move::Prev => cursor.saturating_sub(1).min(last),
+        Move::Next => (cursor + 1).min(last),
+        Move::First => 0,
+        Move::Last => last,
+    })
+}
+
 /// A `width` x `height` dialog centered in `area`, never larger than it
 pub fn centered(area: ratatui::layout::Rect, width: u16, height: u16) -> ratatui::layout::Rect {
     use ratatui::layout::Constraint;
@@ -345,6 +366,17 @@ impl<T: Clone> LineHits<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_moves_stay_in_the_list() {
+        assert_eq!(moved(0, 3, Move::Prev), Some(0));
+        assert_eq!(moved(1, 3, Move::Prev), Some(0));
+        assert_eq!(moved(2, 3, Move::Next), Some(2));
+        assert_eq!(moved(0, 3, Move::Last), Some(2));
+        // A list that shrank under the cursor
+        assert_eq!(moved(9, 3, Move::Prev), Some(2));
+        assert_eq!(moved(0, 0, Move::Next), None);
+    }
 
     #[test]
     fn dialogs_center_in_their_area_and_fit_it() {

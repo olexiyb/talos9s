@@ -826,39 +826,12 @@ impl NetworkStatsComponent {
         Self::sort_devices_by(data, sort_by);
     }
 
-    /// Navigate to previous device
-    fn select_prev(&mut self) {
-        let device_count = self.data().map(|d| d.devices.len()).unwrap_or(0);
-        if device_count > 0 && self.selected > 0 {
-            self.selected -= 1;
-            self.table_state.select(Some(self.selected));
-        }
-    }
-
-    /// Navigate to next device
-    fn select_next(&mut self) {
-        let device_count = self.data().map(|d| d.devices.len()).unwrap_or(0);
-        if device_count > 0 {
-            self.selected = (self.selected + 1).min(device_count - 1);
-            self.table_state.select(Some(self.selected));
-        }
-    }
-
-    /// Jump to top of list
-    fn select_first(&mut self) {
-        let device_count = self.data().map(|d| d.devices.len()).unwrap_or(0);
-        if device_count > 0 {
-            self.selected = 0;
-            self.table_state.select(Some(self.selected));
-        }
-    }
-
-    /// Jump to bottom of list
-    fn select_last(&mut self) {
-        let device_count = self.data().map(|d| d.devices.len()).unwrap_or(0);
-        if device_count > 0 {
-            self.selected = device_count - 1;
-            self.table_state.select(Some(self.selected));
+    /// Move the interface cursor
+    fn move_device(&mut self, step: crate::ui_ext::Move) {
+        let count = self.data().map(|d| d.devices.len()).unwrap_or(0);
+        if let Some(i) = crate::ui_ext::moved(self.selected, count, step) {
+            self.selected = i;
+            self.table_state.select(Some(i));
         }
     }
 
@@ -915,39 +888,12 @@ impl NetworkStatsComponent {
         conns
     }
 
-    /// Navigate to previous connection
-    fn conn_select_prev(&mut self) {
+    /// Move the connection cursor
+    fn move_connection(&mut self, step: crate::ui_ext::Move) {
         let count = self.get_filtered_connections().len();
-        if count > 0 && self.conn_selected > 0 {
-            self.conn_selected -= 1;
-            self.conn_table_state.select(Some(self.conn_selected));
-        }
-    }
-
-    /// Navigate to next connection
-    fn conn_select_next(&mut self) {
-        let count = self.get_filtered_connections().len();
-        if count > 0 {
-            self.conn_selected = (self.conn_selected + 1).min(count - 1);
-            self.conn_table_state.select(Some(self.conn_selected));
-        }
-    }
-
-    /// Jump to first connection
-    fn conn_select_first(&mut self) {
-        let count = self.get_filtered_connections().len();
-        if count > 0 {
-            self.conn_selected = 0;
-            self.conn_table_state.select(Some(self.conn_selected));
-        }
-    }
-
-    /// Jump to last connection
-    fn conn_select_last(&mut self) {
-        let count = self.get_filtered_connections().len();
-        if count > 0 {
-            self.conn_selected = count - 1;
-            self.conn_table_state.select(Some(self.conn_selected));
+        if let Some(i) = crate::ui_ext::moved(self.conn_selected, count, step) {
+            self.conn_selected = i;
+            self.conn_table_state.select(Some(i));
         }
     }
 
@@ -2566,19 +2512,19 @@ impl NetworkStatsComponent {
                 Ok(None)
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
+                self.move_device(crate::ui_ext::Move::Next);
                 Ok(None)
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
+                self.move_device(crate::ui_ext::Move::Prev);
                 Ok(None)
             }
             KeyCode::Char('g') => {
-                self.select_first();
+                self.move_device(crate::ui_ext::Move::First);
                 Ok(None)
             }
             KeyCode::Char('G') => {
-                self.select_last();
+                self.move_device(crate::ui_ext::Move::Last);
                 Ok(None)
             }
             KeyCode::Char('1') => {
@@ -2678,19 +2624,19 @@ impl NetworkStatsComponent {
 
             // Navigation
             KeyCode::Char('j') | KeyCode::Down => {
-                self.conn_select_next();
+                self.move_connection(crate::ui_ext::Move::Next);
                 Ok(None)
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.conn_select_prev();
+                self.move_connection(crate::ui_ext::Move::Prev);
                 Ok(None)
             }
             KeyCode::Char('g') => {
-                self.conn_select_first();
+                self.move_connection(crate::ui_ext::Move::First);
                 Ok(None)
             }
             KeyCode::Char('G') => {
-                self.conn_select_last();
+                self.move_connection(crate::ui_ext::Move::Last);
                 Ok(None)
             }
 

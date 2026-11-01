@@ -798,39 +798,12 @@ impl ProcessesComponent {
         })
     }
 
-    /// Navigate to previous process
-    fn select_prev(&mut self) {
-        let display_len = self.data().map(|d| d.display_entries.len()).unwrap_or(0);
-        if display_len > 0 {
-            self.selected = self.selected.saturating_sub(1);
-            self.table_state.select(Some(self.selected));
-        }
-    }
-
-    /// Navigate to next process
-    fn select_next(&mut self) {
-        let display_len = self.data().map(|d| d.display_entries.len()).unwrap_or(0);
-        if display_len > 0 {
-            self.selected = (self.selected + 1).min(display_len - 1);
-            self.table_state.select(Some(self.selected));
-        }
-    }
-
-    /// Jump to top of list
-    fn select_first(&mut self) {
-        let display_len = self.data().map(|d| d.display_entries.len()).unwrap_or(0);
-        if display_len > 0 {
-            self.selected = 0;
-            self.table_state.select(Some(self.selected));
-        }
-    }
-
-    /// Jump to bottom of list
-    fn select_last(&mut self) {
-        let display_len = self.data().map(|d| d.display_entries.len()).unwrap_or(0);
-        if display_len > 0 {
-            self.selected = display_len - 1;
-            self.table_state.select(Some(self.selected));
+    /// Move the process cursor
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        let count = self.data().map(|d| d.display_entries.len()).unwrap_or(0);
+        if let Some(i) = crate::ui_ext::moved(self.selected, count, step) {
+            self.selected = i;
+            self.table_state.select(Some(i));
         }
     }
 
@@ -1603,19 +1576,19 @@ impl ProcessesComponent {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
             KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
+                self.move_selection(crate::ui_ext::Move::Next);
                 Ok(None)
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
+                self.move_selection(crate::ui_ext::Move::Prev);
                 Ok(None)
             }
             KeyCode::Char('g') => {
-                self.select_first();
+                self.move_selection(crate::ui_ext::Move::First);
                 Ok(None)
             }
             KeyCode::Char('G') => {
-                self.select_last();
+                self.move_selection(crate::ui_ext::Move::Last);
                 Ok(None)
             }
             KeyCode::Char('1') => {
