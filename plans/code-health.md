@@ -1,6 +1,6 @@
 # Plan: code health — correctness fixes, dead code, simplification, tests
 
-Status: phases 1-4 done · Author: Olexiy Buyanskyy · 2026-11-01
+Status: phases 1-5 done (phase 5 partly, see its notes) · Author: Olexiy Buyanskyy · 2026-11-01
 
 ## Summary
 
@@ -178,6 +178,25 @@ refresh-interval constants (used in phase 5), `from_named_context` and
 - Test `test_shuffle_fallback_ips_does_not_panic` only tests fastrand.
 
 ## Phase 5 — simplification and library use
+
+Done (2026-11-01): log parsing → `talos9s_core::logparse`; thresholds and
+refresh intervals → `constants` (processes now uses the shared memory
+thresholds); `Severity`, Security items and etcd checks drawn through
+`HasHealth`; one age formatter, word wrap, dialog centering, cursor move,
+text-field key handler, Kubernetes `connect` (diagnostics had no timeout),
+`TalosConfig::load`, node lookup, node IP map; core CNI types and one CNI
+pod check; table-driven addon detection from CRDs only (5 API calls per
+refresh fewer); workloads in one loop; talos-rs and LINSTOR/ZFS parsers on
+serde structs, BPF programs as tables (pinned byte-for-byte by a test);
+strum for state file names; tonic codes, clap `requires`, x509
+organizations, `Ipv4Addr`, `kube::config::Kubeconfig`.
+
+Left, low value or better done with phase 6: visual selection + yank
+shared by network and logs; a deployment readiness helper (cilium,
+cert-manager); moving `update::is_newer` / `UpdateCheck::due` /
+`most_common` / `used_of_total` and the DNS and route parsers to core
+(tested where they are); the group table column spec (with the
+cluster.rs split).
 
 ### Move to talos9s-core (pure, testable)
 - Log parsing from `multi_logs.rs:817-1190`: `parse_line`,
