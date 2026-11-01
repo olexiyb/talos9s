@@ -19,7 +19,7 @@ use crate::components::diagnostics::{
 };
 use crate::ui_ext::CheckStatusExt;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -111,6 +111,8 @@ pub struct GroupComponent {
     kind: GroupKind,
     title: String,
     nodes: Vec<GroupNode>,
+    /// Where the table was drawn, for clicks on its rows
+    table_area: Rect,
     client: Option<TalosClient>,
     /// talosctl context and talosconfig, for storage queries and diagnostics
     context: Option<String>,
@@ -255,6 +257,7 @@ impl GroupComponent {
             cp_endpoint,
             state,
             table_state,
+            table_area: Rect::default(),
             show_volumes: false,
             show_all: false,
         }
@@ -865,6 +868,28 @@ fn count_cell(counts: [usize; 4]) -> Cell<'static> {
 }
 
 impl Component for GroupComponent {
+    /// A click on a table row selects it (a double-click then opens it)
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return Ok(None);
+        }
+        let area = self.table_area;
+        // Top border, header row and its margin come before the first row
+        let first_row = area.y + 3;
+        if mouse.column < area.x
+            || mouse.column >= area.x + area.width
+            || mouse.row < first_row
+            || mouse.row >= area.y + area.height
+        {
+            return Ok(None);
+        }
+        let index = (mouse.row - first_row) as usize + self.table_state.offset();
+        if index < self.row_nodes().len() {
+            self.table_state.select(Some(index));
+        }
+        Ok(None)
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         Ok(match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Some(Action::Back),
@@ -961,6 +986,7 @@ impl Component for GroupComponent {
         if self.table_state.selected().unwrap_or(0) >= row_count {
             self.table_state.select(Some(row_count.saturating_sub(1)));
         }
+        self.table_area = table;
         frame.render_stateful_widget(table_widget, table, &mut self.table_state);
         if !problems.is_empty() {
             frame.render_widget(

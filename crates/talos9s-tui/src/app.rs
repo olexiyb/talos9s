@@ -15,7 +15,8 @@ use crate::components::{GroupKind, NodeInfoTab};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::{
     Frame,
@@ -115,7 +116,13 @@ enum View {
     Group,
     /// A menu view with nothing to show for the selection (`App::hint`)
     Hint,
+    /// The KubeSpan peer matrix of `App::kubespan_nodes`, drawn by the
+    /// cluster component from its own data
+    KubeSpanMatrix,
 }
+
+/// Two clicks on the same cell within this long open the row, like Enter
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// How long the selection must rest before the view follows it, so moving
 /// through ten nodes loads one; logs restart streams, so they wait longer
@@ -159,6 +166,10 @@ pub struct App {
     pending_target: Option<(String, Instant)>,
     /// Why the menu view has nothing to show (`View::Hint`)
     hint: Option<String>,
+    /// Nodes of the KubeSpan matrix (`View::KubeSpanMatrix`)
+    kubespan_nodes: Vec<String>,
+    /// Last left click in the view, for double-clicks
+    last_click: Option<(Instant, u16, u16)>,
     /// Title of the view's window: the view and what it shows
     pane_title: String,
     /// A node view opened from a group view (Enter in its table): the group
@@ -263,6 +274,8 @@ impl App {
             applied_target: String::new(),
             pending_target: None,
             hint: None,
+            kubespan_nodes: Vec::new(),
+            last_click: None,
             pane_title: String::new(),
             drill_return: None,
             overlay_return: View::Cluster,
@@ -980,7 +993,7 @@ impl App {
     fn dispatch_view_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         Ok(match self.view {
             View::Cluster => self.cluster.handle_key_event(key)?,
-            View::Hint => match key.code {
+            View::Hint | View::KubeSpanMatrix => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::Back),
                 _ => None,
             },
@@ -1127,12 +1140,39 @@ impl App {
         {
             return node_info.handle_mouse_event(mouse);
         }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && !overlay {
+            // The click selects the row under it; a second click on the same
+            // cell opens it, like Enter
+            if self.view == View::Group
+                && let Some(group) = &mut self.group
+            {
+                group.handle_mouse_event(mouse)?;
+            }
+            if self.is_double_click(mouse.column, mouse.row) {
+                return self.dispatch_view_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            }
+            return Ok(None);
+        }
         let code = match mouse.kind {
             MouseEventKind::ScrollUp => KeyCode::Up,
             MouseEventKind::ScrollDown => KeyCode::Down,
             _ => return Ok(None),
         };
         self.dispatch_view_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Whether a left click at (column, row) is the second of a double-click
+    fn is_double_click(&mut self, column: u16, row: u16) -> bool {
+        let now = Instant::now();
+        let double = self
+            .last_click
+            .is_some_and(|(at, c, r)| c == column && r == row && now - at <= DOUBLE_CLICK);
+        self.last_click = if double {
+            None
+        } else {
+            Some((now, column, row))
+        };
+        double
     }
 
     /// Header, nodes pane and key line from the cluster component, the
@@ -1206,6 +1246,10 @@ impl App {
             View::Storage => draw!(self.storage),
             View::NodeInfo => draw!(self.node_info),
             View::Group => draw!(self.group),
+            View::KubeSpanMatrix => {
+                self.cluster
+                    .draw_kubespan_matrix_pane(frame, right, &self.kubespan_nodes)
+            }
             View::NodeOperations | View::RollingOperations => {}
         }
         match self.view {
@@ -1476,6 +1520,25 @@ impl App {
                     self.view_has_focus = false;
                 }
             },
+            Action::ShowKubeSpan(hostname, address) => {
+                self.leave_view();
+                let mut network = NetworkStatsComponent::new_kubespan(hostname, address.clone());
+                if let Some(client) = self.cluster.client() {
+                    network.set_client(client.with_node(&address));
+                    network.set_talos_context(
+                        self.cluster.current_context_name().map(str::to_string),
+                        self.config_path.clone(),
+                    );
+                    network.refresh();
+                }
+                self.network = Some(network);
+                self.show_in_pane(NavMenuItem::KubeSpan, View::Network);
+            }
+            Action::ShowKubeSpanMatrix(nodes) => {
+                self.leave_view();
+                self.kubespan_nodes = nodes;
+                self.show_in_pane(NavMenuItem::KubeSpan, View::KubeSpanMatrix);
+            }
             Action::ShowDashboard => {
                 if self.view != View::Cluster {
                     self.leave_view();
@@ -1507,7 +1570,7 @@ impl App {
                     self.cluster.refresh_selected_node();
                 }
                 match self.view {
-                    View::Cluster | View::Hint => {}
+                    View::Cluster | View::Hint | View::KubeSpanMatrix => {}
                     View::MultiLogs => {
                         if let Some(multi_logs) = &mut self.multi_logs
                             && let Some(next_action) = multi_logs.update(Action::Tick)?
@@ -1719,8 +1782,8 @@ impl App {
                             node_ops.refresh();
                         }
                     }
-                    View::RollingOperations | View::Hint => {
-                        // Rolling operations doesn't have a refresh method
+                    View::RollingOperations | View::Hint | View::KubeSpanMatrix => {
+                        // Nothing of their own to refresh
                     }
                     View::Group => {
                         if self.refresh_job.is_none()
@@ -2175,7 +2238,7 @@ impl App {
             _ => {
                 // Forward to current component
                 match self.view {
-                    View::Hint => {}
+                    View::Hint | View::KubeSpanMatrix => {}
                     View::Cluster => {
                         if let Some(next_action) = self.cluster.update(action)? {
                             Box::pin(self.handle_action(next_action)).await?;
@@ -2395,6 +2458,20 @@ mod tests {
         assert_eq!(app.cluster.focused_pane(), FocusedPane::Services);
         assert!(app.dispatch_key(key(KeyCode::Left)).unwrap().is_none());
         assert_eq!(app.cluster.focused_pane(), FocusedPane::Nodes);
+    }
+
+    /// Two clicks on one cell within the double-click time count as one
+    /// double-click; a click elsewhere, or a late one, starts over
+    #[test]
+    fn double_click_detection() {
+        let mut app = app_with_view(View::Hint);
+        assert!(!app.is_double_click(40, 9));
+        assert!(app.is_double_click(40, 9));
+        // Consumed: a third click starts a new pair
+        assert!(!app.is_double_click(40, 9));
+        assert!(!app.is_double_click(41, 9));
+        app.last_click = Some((Instant::now() - DOUBLE_CLICK * 2, 41, 9));
+        assert!(!app.is_double_click(41, 9));
     }
 
     /// Tab cycles the windows: from a view (without its own tabs) to the

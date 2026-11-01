@@ -69,6 +69,10 @@ pub enum Action {
     /// Containers, machine config or extensions of a node: (hostname,
     /// address, tab to open)
     ShowNodeInfo(String, String, crate::components::NodeInfoTab),
+    /// A node's KubeSpan peers: (hostname, address)
+    ShowKubeSpan(String, String),
+    /// The KubeSpan peer matrix of a group of nodes (by name)
+    ShowKubeSpanMatrix(Vec<String>),
     /// The dashboard (cluster and node details) on the right
     ShowDashboard,
     /// A menu view that has nothing to show for the selection, with why

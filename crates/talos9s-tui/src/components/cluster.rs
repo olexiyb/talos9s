@@ -103,6 +103,7 @@ pub enum NavMenuItem {
     Logs,
     Etcd,
     Network,
+    KubeSpan,
     Storage,
     Processes,
     Diagnostics,
@@ -116,11 +117,12 @@ pub enum NavMenuItem {
 }
 
 impl NavMenuItem {
-    pub const ALL: [NavMenuItem; 14] = [
+    pub const ALL: [NavMenuItem; 15] = [
         NavMenuItem::Dashboard,
         NavMenuItem::Logs,
         NavMenuItem::Etcd,
         NavMenuItem::Network,
+        NavMenuItem::KubeSpan,
         NavMenuItem::Storage,
         NavMenuItem::Processes,
         NavMenuItem::Diagnostics,
@@ -139,6 +141,7 @@ impl NavMenuItem {
             NavMenuItem::Logs => "Logs",
             NavMenuItem::Etcd => "etcd",
             NavMenuItem::Network => "Network",
+            NavMenuItem::KubeSpan => "KubeSpan",
             NavMenuItem::Storage => "Storage",
             NavMenuItem::Processes => "Processes",
             NavMenuItem::Diagnostics => "Diagnostics",
@@ -158,6 +161,7 @@ impl NavMenuItem {
             NavMenuItem::Logs => "L",
             NavMenuItem::Etcd => "e",
             NavMenuItem::Network => "n",
+            NavMenuItem::KubeSpan => "K",
             NavMenuItem::Storage => "s",
             NavMenuItem::Processes => "p",
             NavMenuItem::Diagnostics => "d",
@@ -1490,6 +1494,31 @@ impl ClusterComponent {
         Some(Action::ShowGroup(GroupKind::Network, title, nodes, cp))
     }
 
+    /// KubeSpan peers of the selected node, or the peer matrix of every node
+    /// under a header
+    fn kubespan_action(&self) -> Option<Action> {
+        if let Some((name, ip)) = self.selected_node_address() {
+            return Some(Action::ShowKubeSpan(name, ip));
+        }
+        let (_, names) = self.selected_nodes()?;
+        (!names.is_empty()).then_some(Action::ShowKubeSpanMatrix(names))
+    }
+
+    /// The KubeSpan peer matrix of `nodes` of the active cluster, from the
+    /// peer status the dashboard already keeps per node
+    pub fn draw_kubespan_matrix_pane(&self, frame: &mut Frame, area: Rect, nodes: &[String]) {
+        let [caption, matrix] =
+            Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " Each row: the node's WireGuard peers (● up, ✗ down, · not a peer, … not read yet)",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            caption,
+        );
+        self.draw_kubespan_matrix(frame, matrix, self.active_cluster, nodes);
+    }
+
     /// Containers, machine config or extensions of the selected node
     fn node_info_action(&self, tab: NodeInfoTab) -> Option<Action> {
         let (name, ip) = self.selected_node_address()?;
@@ -2518,6 +2547,7 @@ impl ClusterComponent {
             NavMenuItem::Logs => self.logs_action(None),
             NavMenuItem::Etcd => Some(Action::ShowEtcd),
             NavMenuItem::Network => self.network_action(),
+            NavMenuItem::KubeSpan => self.kubespan_action(),
             NavMenuItem::Storage => self.storage_action(),
             NavMenuItem::Processes => self.processes_action(),
             NavMenuItem::Diagnostics => self.diagnostics_action(),
@@ -4891,6 +4921,10 @@ mod tests {
             comp.action_for(NavMenuItem::Dashboard),
             Some(Action::ShowDashboard)
         ));
+        assert!(matches!(
+            comp.action_for(NavMenuItem::KubeSpan),
+            Some(Action::ShowKubeSpanMatrix(ref nodes)) if nodes == &["cp1", "worker1"]
+        ));
 
         assert!(comp.select_node("worker1"));
         assert_eq!(comp.target_key(), "test/worker1");
@@ -4902,6 +4936,10 @@ mod tests {
         assert!(matches!(
             comp.action_for(NavMenuItem::Network),
             Some(Action::ShowNetwork(ref n, _)) if n == "worker1"
+        ));
+        assert!(matches!(
+            comp.action_for(NavMenuItem::KubeSpan),
+            Some(Action::ShowKubeSpan(ref n, _)) if n == "worker1"
         ));
         assert!(!comp.select_node("missing"));
     }

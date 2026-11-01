@@ -128,7 +128,8 @@ view to the full width.
 | View | Shows |
 |---|---|
 | Processes | htop-like process list and tree, sorted by CPU or memory |
-| Network | Interface traffic, connections, KubeSpan peers, packet capture (filtered so it doesn't capture itself) |
+| Network | Interface traffic and connections, packet capture (filtered so it doesn't capture itself) |
+| KubeSpan | The node's WireGuard peers; on a cluster or group row, the peer matrix |
 | Storage | Disks and Talos volumes |
 | Containers | Talos system services and Kubernetes containers |
 | Machine config | The config in effect, read-only, searchable, secrets masked; flags a staged change waiting for a reboot |
@@ -185,6 +186,7 @@ mouse do the same):
 | `D` | Dashboard: node details | Dashboard: cluster or group summary |
 | `l` / `L` | Logs | Logs merged across the nodes |
 | `n` | Network | Network of every node |
+| `K` | KubeSpan peers | KubeSpan peer matrix |
 | `s` | Storage | Storage of every node |
 | `d` | Diagnostics | Diagnostics grid |
 | `p` | Processes | Processes |
@@ -204,7 +206,9 @@ Moving around:
   `Esc` returns to the Dashboard.
 - `Tab` moves to the next window: Nodes → menu → view → Nodes (`Shift+Tab`
   the other way). In a view with its own tab bar (containers, storage,
-  network, diagnostics) `Tab` switches those tabs; use `←` or `Esc` to leave.
+  diagnostics) `Tab` switches those tabs; use `←` or `Esc` to leave.
+- Mouse: click a row to select it, double-click to open it (a node from a
+  group table), click a tab or a menu entry to switch.
 - `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,
   `q` in the tree quits, `Ctrl+C` quits from anywhere.
 - `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
