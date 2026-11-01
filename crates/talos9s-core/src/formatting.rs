@@ -180,6 +180,32 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Greedy word wrap: `words` joined by single spaces into rows of at most
+/// `width` chars. A word longer than `width` gets a row of its own.
+///
+/// ```
+/// use talos9s_core::wrap_words;
+/// assert_eq!(wrap_words("a bb ccc".split(' '), 4), ["a bb", "ccc"]);
+/// assert_eq!(wrap_words(["toolongword"], 4), ["toolongword"]);
+/// ```
+pub fn wrap_words<'a>(words: impl IntoIterator<Item = &'a str>, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    for word in words {
+        if !row.is_empty() && row.chars().count() + 1 + word.chars().count() > width {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    rows
+}
+
 /// Format a count with singular/plural form
 ///
 /// # Examples

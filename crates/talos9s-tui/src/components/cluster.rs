@@ -1097,22 +1097,7 @@ fn warning_lines(text: &str, pane_width: u16) -> Vec<Line<'static>> {
     const HANG: &str = "      "; // continuations align under the wrapped text
     let avail = (pane_width as usize).saturating_sub(HANG.len()).max(12);
 
-    let mut wrapped: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    for word in text.split_whitespace() {
-        let sep = usize::from(!cur.is_empty());
-        if !cur.is_empty() && cur.chars().count() + sep + word.chars().count() > avail {
-            wrapped.push(std::mem::take(&mut cur));
-        }
-        if !cur.is_empty() {
-            cur.push(' ');
-        }
-        cur.push_str(word);
-    }
-    if !cur.is_empty() {
-        wrapped.push(cur);
-    }
-
+    let wrapped = talos9s_core::wrap_words(text.split_whitespace(), avail);
     let style = Style::default().fg(Color::Yellow);
     wrapped
         .into_iter()
@@ -1647,23 +1632,22 @@ fn load_color(load1: f64, cpu_count: Option<usize>) -> Color {
 /// align with the first item. Returns no lines when `items` is empty.
 fn wrap_list(label: &str, items: &[String], width: usize, style: Style) -> Vec<Line<'static>> {
     let indent = label.chars().count();
-    let mut rows: Vec<String> = Vec::new();
-    let mut row = String::new();
-    for (i, item) in items.iter().enumerate() {
-        let sep = if i + 1 < items.len() { "," } else { "" };
-        let piece = format!("{item}{sep}");
-        if !row.is_empty() && indent + row.chars().count() + 1 + piece.chars().count() > width {
-            rows.push(std::mem::take(&mut row));
-        }
-        if !row.is_empty() {
-            row.push(' ');
-        }
-        row.push_str(&piece);
-    }
-    if !row.is_empty() {
-        rows.push(row);
-    }
-
+    // Commas stay with the item before them
+    let pieces: Vec<String> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            if i + 1 < items.len() {
+                format!("{item},")
+            } else {
+                item.clone()
+            }
+        })
+        .collect();
+    let rows = talos9s_core::wrap_words(
+        pieces.iter().map(String::as_str),
+        width.saturating_sub(indent),
+    );
     rows.into_iter()
         .enumerate()
         .map(|(i, row)| {
