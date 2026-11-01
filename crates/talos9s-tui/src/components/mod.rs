@@ -45,7 +45,7 @@ pub use workloads::WorkloadHealthComponent;
 use crate::action::Action;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent};
-use ratatui::{Frame, layout::Rect};
+use ratatui::{Frame, layout::Rect, text::Line};
 
 /// Trait for UI components
 ///
@@ -84,6 +84,13 @@ pub trait Component {
     /// bar); otherwise Tab moves to the next window
     fn uses_tab_key(&self) -> bool {
         false
+    }
+
+    /// The keys that act in the component right now, shown on the screen's
+    /// bottom line while the component has the keyboard. Views draw no key
+    /// line of their own.
+    fn key_hints(&self) -> Option<Line<'static>> {
+        None
     }
 
     /// Update the component state based on an action

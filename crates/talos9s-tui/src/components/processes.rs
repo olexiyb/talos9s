@@ -1353,7 +1353,16 @@ impl ProcessesComponent {
     }
 
     /// Draw the footer with keybindings
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn key_hints_line(&self) -> Line<'static> {
+        if self.mode == Mode::Filtering {
+            return Line::from(vec![
+                Span::raw(" Type to filter  "),
+                Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" apply  "),
+                Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" clear"),
+            ]);
+        }
         let auto_status = if self.auto_refresh {
             Span::styled("ON ", Style::default().fg(Color::Green))
         } else {
@@ -1379,7 +1388,7 @@ impl ProcessesComponent {
             _ => Span::raw(""),
         };
 
-        let line = Line::from(vec![
+        Line::from(vec![
             Span::styled("[1]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" cpu "),
             Span::styled("[2]", Style::default().add_modifier(Modifier::BOLD)),
@@ -1401,10 +1410,7 @@ impl ProcessesComponent {
             Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
             auto_status,
-        ]);
-
-        let para = Paragraph::new(line);
-        frame.render_widget(para, area);
+        ])
     }
 
     /// Draw the filter input bar
@@ -1431,6 +1437,10 @@ impl ProcessesComponent {
 }
 
 impl Component for ProcessesComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn captures_text(&self) -> bool {
         self.mode == Mode::Filtering
     }
@@ -1481,7 +1491,6 @@ impl Component for ProcessesComponent {
             Constraint::Length(1),              // Filter bar (in filter mode) or spacer
             Constraint::Min(5),                 // Process table
             Constraint::Length(7),              // Detail section (increased for wrapped cmd)
-            Constraint::Length(1),              // Footer
         ])
         .split(area);
 
@@ -1499,7 +1508,6 @@ impl Component for ProcessesComponent {
 
         self.draw_process_table(frame, chunks[4]);
         self.draw_detail_section(frame, chunks[5]);
-        self.draw_footer(frame, chunks[6]);
 
         Ok(())
     }

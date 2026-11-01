@@ -13,7 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -608,6 +608,15 @@ fn cert_to_item(cert: &CertificateInfo) -> SecurityItem {
 }
 
 impl Component for SecurityComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(Line::from(vec![
+            Span::styled("[↑↓]", Style::default().fg(Color::Yellow)),
+            Span::raw(" navigate  "),
+            Span::styled("[r]", Style::default().fg(Color::Yellow)),
+            Span::raw(" refresh"),
+        ]))
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
@@ -640,7 +649,6 @@ impl Component for SecurityComponent {
             Constraint::Length(3), // Header
             Constraint::Fill(1),   // Content
             Constraint::Length(5), // Details
-            Constraint::Length(2), // Footer
         ])
         .split(area);
 
@@ -691,21 +699,6 @@ impl Component for SecurityComponent {
 
         // Details panel
         self.render_details(frame, chunks[2]);
-
-        // Footer
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled("[↑↓]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Navigate").dim(),
-            Span::raw("  "),
-            Span::styled("[r]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Refresh").dim(),
-        ]))
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        frame.render_widget(footer, chunks[3]);
 
         Ok(())
     }

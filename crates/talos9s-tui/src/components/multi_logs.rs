@@ -2078,7 +2078,113 @@ fn parse_kernel_line(line: &str) -> Option<(&str, LogLevel, String)> {
     Some((ts, level, message))
 }
 
+impl MultiLogsComponent {
+    /// The keys that act in the current mode: typing a search, a search
+    /// active, a floating menu open, a selection, or none of those
+    fn key_hints_line(&self) -> Line<'static> {
+        let footer_spans = if self.search_mode == SearchMode::Input {
+            vec![
+                Span::raw(" Type to search").dim(),
+                Span::raw("  "),
+                Span::raw("[Enter]").fg(Color::Yellow),
+                Span::raw(" confirm").dim(),
+                Span::raw("  "),
+                Span::raw("[Esc]").fg(Color::Yellow),
+                Span::raw(" cancel").dim(),
+            ]
+        } else if self.search_mode == SearchMode::Active {
+            vec![
+                Span::raw(" [n/N]").fg(Color::Yellow),
+                Span::raw(" next/prev").dim(),
+                Span::raw("  "),
+                Span::raw("[/]").fg(Color::Yellow),
+                Span::raw(" new search").dim(),
+                Span::raw("  "),
+                Span::raw("[Esc]").fg(Color::Yellow),
+                Span::raw(" clear").dim(),
+            ]
+        } else if self.floating_pane != FloatingPane::None {
+            vec![
+                Span::raw(" [Space]").fg(Color::Yellow),
+                Span::raw(" toggle").dim(),
+                Span::raw("  "),
+                Span::raw("[a]").fg(Color::Yellow),
+                Span::raw(" all").dim(),
+                Span::raw("  "),
+                Span::raw("[n]").fg(Color::Yellow),
+                Span::raw(" none").dim(),
+                Span::raw("  "),
+                Span::raw("[Esc/q]").fg(Color::Yellow),
+                Span::raw(" close").dim(),
+            ]
+        } else if self.in_visual_mode() {
+            // Visual mode footer
+            vec![
+                Span::raw(" [j/k]").fg(Color::Yellow),
+                Span::raw(" extend").dim(),
+                Span::raw(" "),
+                Span::raw("[y]").fg(Color::Yellow),
+                Span::raw(" yank").dim(),
+                Span::raw(" "),
+                Span::raw("[Esc/V]").fg(Color::Yellow),
+                Span::raw(" cancel").dim(),
+            ]
+        } else {
+            let stream_text = if self.streaming { " stop" } else { " stream" };
+            let wrap_text = if self.wrap { " nowrap" } else { " wrap" };
+            let mut spans = vec![
+                Span::raw(" [s]").fg(Color::Yellow),
+                Span::raw(" svcs").dim(),
+                Span::raw(" "),
+                Span::raw("[l]").fg(Color::Yellow),
+                Span::raw(" lvls").dim(),
+                Span::raw(" "),
+                Span::raw("[1-5/0]").fg(Color::Yellow),
+                Span::raw(" only/all").dim(),
+                Span::raw(" "),
+                Span::raw("[⇧1-5]").fg(Color::Yellow),
+                Span::raw(" ±lvl").dim(),
+                Span::raw(" "),
+                Span::raw("[/]").fg(Color::Yellow),
+                Span::raw(" search").dim(),
+                Span::raw(" "),
+                Span::raw("[f]").fg(Color::Yellow),
+                Span::raw(" follow").dim(),
+                Span::raw(" "),
+                Span::raw("[F]").fg(Color::Yellow),
+                Span::raw(stream_text).dim(),
+                Span::raw(" "),
+                Span::raw("[w]").fg(Color::Yellow),
+                Span::raw(wrap_text).dim(),
+                Span::raw(" "),
+                Span::raw("[V]").fg(Color::Yellow),
+                Span::raw(" visual").dim(),
+                Span::raw(" "),
+                Span::raw("[y]").fg(Color::Yellow),
+                Span::raw(" yank").dim(),
+            ];
+            if self.multi_node() {
+                spans.splice(
+                    3..3,
+                    [
+                        Span::raw("[o]").fg(Color::Yellow),
+                        Span::raw(" nodes").dim(),
+                        Span::raw(" "),
+                    ],
+                );
+            }
+            spans
+        };
+
+        Line::from(footer_spans)
+    }
+}
+
 impl Component for MultiLogsComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn captures_text(&self) -> bool {
         self.search_mode == SearchMode::Input
     }
@@ -2120,9 +2226,9 @@ impl Component for MultiLogsComponent {
         }
 
         match key.code {
-            // Quit/back
-            KeyCode::Char('q') => Ok(Some(Action::Back)),
-            KeyCode::Esc => {
+            // q is Esc here too (Esc never arrives in some terminals): close
+            // what is open first, else back to the tree
+            KeyCode::Esc | KeyCode::Char('q') => {
                 if self.in_visual_mode() {
                     self.selection_start = None;
                 } else if self.search_mode == SearchMode::Active {
@@ -2421,14 +2527,12 @@ impl Component for MultiLogsComponent {
                 Constraint::Length(2), // Header
                 Constraint::Min(0),    // Content (logs + floating services)
                 Constraint::Length(1), // Search bar
-                Constraint::Length(2), // Footer
             ])
             .split(area)
         } else {
             Layout::vertical([
                 Constraint::Length(2), // Header
                 Constraint::Min(0),    // Content
-                Constraint::Length(2), // Footer
             ])
             .split(area)
         };
@@ -2569,117 +2673,6 @@ impl Component for MultiLogsComponent {
                 frame.render_widget(match_para, search_area);
             }
         }
-
-        // Footer
-        let footer_area = if has_search_bar {
-            main_layout[3]
-        } else {
-            main_layout[2]
-        };
-
-        let footer_spans = if self.search_mode == SearchMode::Input {
-            vec![
-                Span::raw(" Type to search").dim(),
-                Span::raw("  "),
-                Span::raw("[Enter]").fg(Color::Yellow),
-                Span::raw(" confirm").dim(),
-                Span::raw("  "),
-                Span::raw("[Esc]").fg(Color::Yellow),
-                Span::raw(" cancel").dim(),
-            ]
-        } else if self.search_mode == SearchMode::Active {
-            vec![
-                Span::raw(" [n/N]").fg(Color::Yellow),
-                Span::raw(" next/prev").dim(),
-                Span::raw("  "),
-                Span::raw("[/]").fg(Color::Yellow),
-                Span::raw(" new search").dim(),
-                Span::raw("  "),
-                Span::raw("[Esc]").fg(Color::Yellow),
-                Span::raw(" clear").dim(),
-            ]
-        } else if self.floating_pane != FloatingPane::None {
-            vec![
-                Span::raw(" [Space]").fg(Color::Yellow),
-                Span::raw(" toggle").dim(),
-                Span::raw("  "),
-                Span::raw("[a]").fg(Color::Yellow),
-                Span::raw(" all").dim(),
-                Span::raw("  "),
-                Span::raw("[n]").fg(Color::Yellow),
-                Span::raw(" none").dim(),
-                Span::raw("  "),
-                Span::raw("[Esc/q]").fg(Color::Yellow),
-                Span::raw(" close").dim(),
-            ]
-        } else if self.in_visual_mode() {
-            // Visual mode footer
-            vec![
-                Span::raw(" [j/k]").fg(Color::Yellow),
-                Span::raw(" extend").dim(),
-                Span::raw(" "),
-                Span::raw("[y]").fg(Color::Yellow),
-                Span::raw(" yank").dim(),
-                Span::raw(" "),
-                Span::raw("[Esc/V]").fg(Color::Yellow),
-                Span::raw(" cancel").dim(),
-            ]
-        } else {
-            let stream_text = if self.streaming { " stop" } else { " stream" };
-            let wrap_text = if self.wrap { " nowrap" } else { " wrap" };
-            let mut spans = vec![
-                Span::raw(" [s]").fg(Color::Yellow),
-                Span::raw(" svcs").dim(),
-                Span::raw(" "),
-                Span::raw("[l]").fg(Color::Yellow),
-                Span::raw(" lvls").dim(),
-                Span::raw(" "),
-                Span::raw("[1-5/0]").fg(Color::Yellow),
-                Span::raw(" only/all").dim(),
-                Span::raw(" "),
-                Span::raw("[⇧1-5]").fg(Color::Yellow),
-                Span::raw(" ±lvl").dim(),
-                Span::raw(" "),
-                Span::raw("[/]").fg(Color::Yellow),
-                Span::raw(" search").dim(),
-                Span::raw(" "),
-                Span::raw("[f]").fg(Color::Yellow),
-                Span::raw(" follow").dim(),
-                Span::raw(" "),
-                Span::raw("[F]").fg(Color::Yellow),
-                Span::raw(stream_text).dim(),
-                Span::raw(" "),
-                Span::raw("[w]").fg(Color::Yellow),
-                Span::raw(wrap_text).dim(),
-                Span::raw(" "),
-                Span::raw("[V]").fg(Color::Yellow),
-                Span::raw(" visual").dim(),
-                Span::raw(" "),
-                Span::raw("[y]").fg(Color::Yellow),
-                Span::raw(" yank").dim(),
-                Span::raw(" "),
-                Span::raw("[Esc/q]").fg(Color::Yellow),
-                Span::raw(" leave select").dim(),
-            ];
-            if self.multi_node() {
-                spans.splice(
-                    3..3,
-                    [
-                        Span::raw("[o]").fg(Color::Yellow),
-                        Span::raw(" nodes").dim(),
-                        Span::raw(" "),
-                    ],
-                );
-            }
-            spans
-        };
-
-        let footer = Paragraph::new(Line::from(footer_spans)).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        frame.render_widget(footer, footer_area);
 
         Ok(())
     }
@@ -2867,7 +2860,9 @@ mod tests {
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "{screen}");
         assert!(screen.contains("bc1 etcd"), "{screen}");
         assert!(screen.contains("bc3 kernel"), "{screen}");
-        assert!(screen.contains("[o]"), "{screen}");
+        // The node filter is offered in the key line, not drawn in the view
+        let hints = logs.key_hints().unwrap().to_string();
+        assert!(hints.contains("[o]"), "{hints}");
     }
 
     #[tokio::test]

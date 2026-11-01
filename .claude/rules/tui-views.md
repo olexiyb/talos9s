@@ -67,7 +67,10 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
 
 ## Conventions
 
-- Footer lists the view's keys; `Esc`/`q` goes back (clearing a filter first).
+- `key_hints()` returns the keys that act now (per mode: filter typing, a
+  dialog, a submode); the app shows them on the bottom line while the view
+  has the keyboard. Views draw no key line of their own. `Esc`/`q` go back
+  (clearing a filter first).
 - `/` filters lists or searches text; `r` refreshes; Tab or 1-n switches tabs.
 - Clickable areas: record the `Rect`s drawn (tabs, table area) and hit-test
   them in `handle_mouse_event`; table rows start 2 lines below the table's

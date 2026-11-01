@@ -2752,6 +2752,7 @@ impl ClusterComponent {
         width: Option<PaneWidth>,
         view_focused: bool,
         dashboard: bool,
+        view_hints: Option<Line<'static>>,
     ) -> (Rect, Rect) {
         let layout = Layout::vertical([
             Constraint::Length(2), // Header
@@ -2783,93 +2784,126 @@ impl ClusterComponent {
             hits.details = Rect::default();
             hits.services = None;
         }
-        self.draw_footer(frame, layout[2], view_focused);
+        self.draw_footer(frame, layout[2], view_focused, dashboard, view_hints);
         (content[0], content[1])
     }
 
     /// Bottom key line: the tree's keys, or the global ones while a view has
     /// the keyboard (it lists its own keys)
-    fn draw_footer(&self, frame: &mut Frame, area: Rect, view_focused: bool) {
+    fn draw_footer(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        view_focused: bool,
+        dashboard: bool,
+        view_hints: Option<Line<'static>>,
+    ) {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
+        let sep = || Span::raw("  ");
+        // Only what acts on the focused window now: the keys that always work
+        // there first, then the ones for the selected row and the view shown.
+        // (q is listed with Esc: some terminals, IDEA's, never deliver Esc.)
         let spans = if view_focused {
-            // q is listed with Esc: some terminals (IDEA's) never deliver Esc
-            let mut spans = match &self.back_hint {
+            match &self.back_hint {
                 Some(hint) => vec![
                     key(" [Esc/q]"),
                     Span::styled(format!(" back to {hint}"), Style::default().dim()),
-                    Span::raw("  "),
+                    sep(),
                     key("[←]"),
                     label(" tree"),
                 ],
                 None => vec![key(" [Esc/q/←]"), label(" tree")],
-            };
-            spans.extend([
-                Span::raw("  "),
-                key("[Z]"),
-                label(" zoom"),
-                Span::raw("  "),
-                key("[ [ ] ]"),
-                label(" pane width"),
-                Span::raw("  "),
-                key("[Ctrl+C]"),
-                label(" quit"),
-            ]);
-            spans
+            }
         } else {
+            let header_selected = matches!(
+                self.selected_item,
+                NodeListItem::ClusterHeader(_)
+                    | NodeListItem::ControlPlaneHeader(_)
+                    | NodeListItem::WorkersHeader(_)
+            );
+            let node_selected = self.current_node_name().is_some();
             let auto_refresh_status = if self.auto_refresh { "ON" } else { "OFF" };
             let auto_refresh_color = if self.auto_refresh {
                 Color::Green
             } else {
                 Color::DarkGray
             };
-            vec![
-                key(" [j/k]"),
-                label(" nav"),
-                Span::raw("  "),
-                key("[Space]"),
-                label(" fold"),
-                Span::raw("  "),
-                key("[Tab]"),
-                label(" pane"),
-                Span::raw("  "),
-                key("[Enter/→]"),
-                label(" into view"),
-                Span::raw("  "),
-                key("[Z]"),
-                label(" zoom"),
-                Span::raw(" "),
-                key("[ [ ] ]"),
-                label(" width"),
-                Span::raw("  "),
-                key("[o]"),
-                label(" ops"),
-                Span::raw(" "),
-                key("[O]"),
-                label(" rolling"),
-                Span::raw("  "),
-                key("[r]"),
-                label(" refresh"),
-                Span::raw("  "),
-                key("[a]"),
-                label(" auto:"),
-                Span::styled(auto_refresh_status, Style::default().fg(auto_refresh_color)),
-                Span::raw("  "),
-                key("[q]"),
-                label(" quit"),
-                Span::raw("  "),
-                // Mouse capture is on for click navigation, so the terminal's
-                // own selection needs a modifier (Option in iTerm2, Shift elsewhere)
-                key("[⌥/⇧+drag]"),
-                label(" select text"),
-            ]
+            match self.focused_pane {
+                FocusedPane::Menu => vec![
+                    key(" [j/k]"),
+                    label(" nav"),
+                    sep(),
+                    key("[Enter]"),
+                    label(" open view"),
+                ],
+                FocusedPane::Services => vec![
+                    key(" [j/k]"),
+                    label(" select"),
+                    sep(),
+                    key("[Enter]"),
+                    label(" logs"),
+                    sep(),
+                    key("[Esc/q/←]"),
+                    label(" tree"),
+                ],
+                FocusedPane::Nodes => {
+                    let mut spans = vec![key(" [j/k]"), label(" nav"), sep()];
+                    spans.extend(match (header_selected, dashboard) {
+                        (true, true) => [key("[Enter/Space]"), label(" fold")],
+                        (false, true) => [key("[Enter/→]"), label(" services")],
+                        (_, false) => [key("[Enter/→]"), label(" into view")],
+                    });
+                    spans.extend([
+                        sep(),
+                        key("[r]"),
+                        label(" refresh"),
+                        sep(),
+                        key("[a]"),
+                        label(" auto:"),
+                        Span::styled(auto_refresh_status, Style::default().fg(auto_refresh_color)),
+                    ]);
+                    if header_selected && !dashboard {
+                        spans.extend([sep(), key("[Space]"), label(" fold")]);
+                    }
+                    if node_selected {
+                        spans.extend([sep(), key("[o]"), label(" ops")]);
+                    }
+                    if !self.clusters.is_empty() {
+                        spans.extend([sep(), key("[O]"), label(" rolling")]);
+                    }
+                    if !dashboard {
+                        spans.extend([sep(), key("[Esc]"), label(" dashboard")]);
+                    }
+                    spans.extend([sep(), key("[q]"), label(" quit")]);
+                    spans
+                }
+            }
         };
-        let footer = Paragraph::new(Line::from(spans)).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        frame.render_widget(footer, area);
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let line = Line::from(spans);
+        match view_hints {
+            // The view's keys on the left, the workspace keys on the right
+            Some(hints) if view_focused => {
+                let global_width = (line.width() as u16).min(inner.width);
+                let hints_area = Rect {
+                    width: inner.width.saturating_sub(global_width + 1),
+                    ..inner
+                };
+                let global_area = Rect {
+                    x: inner.x + inner.width - global_width,
+                    width: global_width,
+                    ..inner
+                };
+                frame.render_widget(Paragraph::new(hints), hints_area);
+                frame.render_widget(Paragraph::new(line), global_area);
+            }
+            _ => frame.render_widget(Paragraph::new(line), inner),
+        }
     }
 }
 
@@ -3174,7 +3208,7 @@ impl Component for ClusterComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let (_, details) = self.draw_frame(frame, area, None, false, true);
+        let (_, details) = self.draw_frame(frame, area, None, false, true, None);
         self.draw_details_pane(frame, details);
         Ok(())
     }
@@ -3183,63 +3217,28 @@ impl Component for ClusterComponent {
 impl ClusterComponent {
     /// Draw compact header with status indicators
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
-        // Count connected clusters
-        let connected_count = self.clusters.iter().filter(|c| c.connected).count();
-        let total_count = self.clusters.len();
-
-        let loading_count = self.clusters.iter().filter(|c| c.loading).count();
-
-        let (status_indicator, status_text) = if loading_count > 0 {
-            (
-                Span::styled(" ◌ ", Style::default().fg(Color::Yellow)),
-                "Connecting",
-            )
-        } else if connected_count == total_count && total_count > 0 {
-            (
-                Span::styled(" ● ", Style::default().fg(Color::Green)),
-                "Connected",
-            )
-        } else if connected_count > 0 {
-            (
-                Span::styled(" ◐ ", Style::default().fg(Color::Yellow)),
-                "Partial",
-            )
-        } else if total_count == 0 {
-            (
-                Span::styled(" ○ ", Style::default().fg(Color::DarkGray)),
-                "No clusters",
-            )
-        } else {
-            (
-                Span::styled(" ✗ ", Style::default().fg(Color::Red)),
-                "Disconnected",
-            )
-        };
-
-        // Cluster count
-        let cluster_count_span = if total_count > 1 {
-            vec![
-                Span::raw("   "),
-                Span::styled(
-                    format!("{} clusters", total_count),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]
-        } else {
-            vec![]
-        };
-
-        let mut header_spans = vec![
-            Span::styled(
-                " talos9s ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            status_indicator,
-            Span::styled(status_text, Style::default().dim()),
-        ];
-        header_spans.extend(cluster_count_span);
+        // Only clusters that aren't connected are worth a word here: every
+        // row of the tree carries its own status, so a healthy set says nothing
+        let mut header_spans = vec![Span::styled(
+            " talos9s ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )];
+        for cluster in &self.clusters {
+            let (symbol, word, color) = if cluster.loading {
+                ("◌", "connecting", Color::Yellow)
+            } else if !cluster.connected {
+                ("✗", "disconnected", Color::Red)
+            } else {
+                continue;
+            };
+            header_spans.extend([
+                Span::styled(format!("  {symbol} "), Style::default().fg(color)),
+                Span::styled(cluster.name.clone(), Style::default().fg(color)),
+                Span::styled(format!(" {word}"), Style::default().dim()),
+            ]);
+        }
 
         // Active cluster name on the right
         let active_name = self
@@ -3261,16 +3260,47 @@ impl ClusterComponent {
 
         let inner = header_block.inner(area);
         frame.render_widget(header_block, area);
+        let left_width = left_content.width() as u16;
         frame.render_widget(Paragraph::new(left_content), inner);
 
         // Right-align active cluster name
+        let name_width = active_name.chars().count() as u16 + 3;
         let right_area = Rect {
-            x: area.x + area.width.saturating_sub(active_name.len() as u16 + 3),
+            x: area.x + area.width.saturating_sub(name_width),
             y: area.y,
-            width: active_name.len() as u16 + 3,
+            width: name_width,
             height: 1,
         };
         frame.render_widget(Paragraph::new(right_content), right_area);
+
+        // The keys that work in every window, before the name; left out when
+        // the line is too narrow for them
+        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
+        let label = |l: &'static str| Span::styled(l, Style::default().dim());
+        let global = Line::from(vec![
+            key("[Tab]"),
+            label(" next window  "),
+            key("[Z]"),
+            label(" zoom  "),
+            key("[ [ ] ]"),
+            label(" pane width  "),
+            key("[Ctrl+C]"),
+            label(" quit  "),
+            // Mouse capture is on for click navigation, so the terminal's own
+            // selection needs a modifier (Option in iTerm2, Shift elsewhere)
+            key("[⌥/⇧+drag]"),
+            label(" select text "),
+        ]);
+        let global_width = global.width() as u16;
+        if left_width + 2 + global_width + name_width <= area.width {
+            let global_area = Rect {
+                x: right_area.x - global_width,
+                y: area.y,
+                width: global_width,
+                height: 1,
+            };
+            frame.render_widget(Paragraph::new(global), global_area);
+        }
     }
 
     /// Draw the nodes pane (left column) with navigation menu below
@@ -5124,7 +5154,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
         let mut tree = Rect::default();
         terminal
-            .draw(|f| tree = comp.draw_frame(f, f.area(), None, false, false).0)
+            .draw(|f| tree = comp.draw_frame(f, f.area(), None, false, false, None).0)
             .unwrap();
         let (list, menu) = {
             let hits = comp.hits.borrow();
@@ -5203,7 +5233,7 @@ mod tests {
                 let mut terminal = Terminal::new(TestBackend::new(columns, 40)).unwrap();
                 let mut areas = (Rect::default(), Rect::default());
                 terminal
-                    .draw(|f| areas = comp.draw_frame(f, f.area(), width, false, false))
+                    .draw(|f| areas = comp.draw_frame(f, f.area(), width, false, false, None))
                     .unwrap();
                 let (tree, view) = areas;
                 let expected = comp.resolve_pane_width(columns, width).1;

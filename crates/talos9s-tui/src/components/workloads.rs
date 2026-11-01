@@ -1200,7 +1200,7 @@ impl WorkloadHealthComponent {
     }
 
     /// Draw the footer with keybindings
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn key_hints_line(&self) -> Line<'static> {
         let auto_status = if self.auto_refresh {
             Span::styled("ON ", Style::default().fg(Color::Green))
         } else {
@@ -1232,13 +1232,15 @@ impl WorkloadHealthComponent {
             auto_status,
         ]);
 
-        let line = Line::from(spans);
-        let para = Paragraph::new(line);
-        frame.render_widget(para, area);
+        Line::from(spans)
     }
 }
 
 impl Component for WorkloadHealthComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -1320,7 +1322,6 @@ impl Component for WorkloadHealthComponent {
         let chunks = Layout::vertical([
             Constraint::Length(2), // Summary
             Constraint::Fill(1),   // Content (list or drill-down)
-            Constraint::Length(1), // Footer
         ])
         .split(inner);
 
@@ -1331,8 +1332,6 @@ impl Component for WorkloadHealthComponent {
         } else {
             self.draw_namespace_list(frame, chunks[1]);
         }
-
-        self.draw_footer(frame, chunks[2]);
 
         Ok(())
     }

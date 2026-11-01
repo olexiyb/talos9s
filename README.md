@@ -212,7 +212,11 @@ Moving around:
 - `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,
   `q` in the tree quits, `Ctrl+C` quits from anywhere.
 - `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
-- Inside a view, `/` filters or searches and its footer lists its keys.
+- The top line lists the keys that work everywhere (`Tab`, `Z`, `[` `]`,
+  `Ctrl+C`); the bottom line lists only what acts in the focused window
+  right now, so `Space` fold appears on an expandable row, `o` ops on a
+  node, and a view's own keys (filters, search, submodes) while it has the
+  keyboard.
 
 ## Safety
 

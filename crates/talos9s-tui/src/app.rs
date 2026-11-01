@@ -22,6 +22,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
+    text::Line,
     widgets::{Block, Borders, Paragraph},
 };
 use std::time::{Duration, Instant};
@@ -1162,6 +1163,29 @@ impl App {
         self.dispatch_view_key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
+    /// The keys the view on the right acts on right now, for the bottom line
+    fn view_key_hints(&self) -> Option<Line<'static>> {
+        match self.view {
+            View::MultiLogs => self.multi_logs.as_ref().and_then(|c| c.key_hints()),
+            View::Etcd => self.etcd.as_ref().and_then(|c| c.key_hints()),
+            View::Processes => self.processes.as_ref().and_then(|c| c.key_hints()),
+            View::Network => self.network.as_ref().and_then(|c| c.key_hints()),
+            View::Diagnostics => self.diagnostics.as_ref().and_then(|c| c.key_hints()),
+            View::Security => self.security.as_ref().and_then(|c| c.key_hints()),
+            View::Lifecycle => self.lifecycle.as_ref().and_then(|c| c.key_hints()),
+            View::Workloads => self.workloads.as_ref().and_then(|c| c.key_hints()),
+            View::Volumes => self.volumes.as_ref().and_then(|c| c.key_hints()),
+            View::Storage => self.storage.as_ref().and_then(|c| c.key_hints()),
+            View::NodeInfo => self.node_info.as_ref().and_then(|c| c.key_hints()),
+            View::Group => self.group.as_ref().and_then(|c| c.key_hints()),
+            View::Cluster
+            | View::Hint
+            | View::KubeSpanMatrix
+            | View::NodeOperations
+            | View::RollingOperations => None,
+        }
+    }
+
     /// Whether a left click at (column, row) is the second of a double-click
     fn is_double_click(&mut self, column: u16, row: u16) -> bool {
         let now = Instant::now();
@@ -1187,9 +1211,14 @@ impl App {
         };
         let dashboard = base == View::Cluster;
         let view_focused = self.view_has_focus && !dashboard && !overlay;
+        let hints = if view_focused {
+            self.view_key_hints()
+        } else {
+            None
+        };
         let (tree, view_area) =
             self.cluster
-                .draw_frame(frame, area, self.pane_width, view_focused, dashboard);
+                .draw_frame(frame, area, self.pane_width, view_focused, dashboard, hints);
         self.tree_area = tree;
         self.view_area = view_area;
         // Every view sits in a window like the dashboard's: titled with what

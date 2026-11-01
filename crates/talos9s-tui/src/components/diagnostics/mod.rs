@@ -1002,6 +1002,34 @@ fn log_stage(address: &str, stage: &str, lap: &mut std::time::Instant) {
 }
 
 impl Component for DiagnosticsComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        let spans = if self.show_details {
+            vec![key("[Esc]"), Span::raw(" close")]
+        } else if self.show_confirmation {
+            vec![
+                key("[←/→]"),
+                Span::raw(" choose  "),
+                key("[Enter]"),
+                Span::raw(" confirm  "),
+                key("[Esc]"),
+                Span::raw(" cancel"),
+            ]
+        } else {
+            vec![
+                key("[j/k]"),
+                Span::raw(" navigate  "),
+                key("[Tab]"),
+                Span::raw(" section  "),
+                key("[Enter]"),
+                Span::raw(" details/fix  "),
+                key("[r]"),
+                Span::raw(" refresh"),
+            ]
+        };
+        Some(Line::from(spans))
+    }
+
     fn uses_tab_key(&self) -> bool {
         true
     }
@@ -1117,12 +1145,7 @@ impl Component for DiagnosticsComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let chunks = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-            Constraint::Length(2),
-        ])
-        .split(area);
+        let chunks = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).split(area);
 
         // Get header info from data
         let (hostname, address, cni_label) = self
@@ -1220,19 +1243,6 @@ impl Component for DiagnosticsComponent {
                 );
             }
         }
-
-        // Footer
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Navigate  "),
-            Span::styled("[Tab]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Section  "),
-            Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Details/Fix  "),
-            Span::styled("[r]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Refresh"),
-        ]));
-        frame.render_widget(footer, chunks[2]);
 
         if self.show_confirmation {
             self.render_confirmation(frame, area);

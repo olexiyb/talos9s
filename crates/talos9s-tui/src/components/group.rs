@@ -868,6 +868,10 @@ fn count_cell(counts: [usize; 4]) -> Cell<'static> {
 }
 
 impl Component for GroupComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.footer_line())
+    }
+
     /// A click on a table row selects it (a double-click then opens it)
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -961,12 +965,11 @@ impl Component for GroupComponent {
         } else {
             (problems.len() as u16 + 2).min(area.height / 2)
         };
-        let [title, warnings, table, problems_area, footer] = Layout::vertical([
+        let [title, warnings, table, problems_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(errors.len() as u16),
             Constraint::Min(4),
             Constraint::Length(problems_height),
-            Constraint::Length(1),
         ])
         .areas(area);
 
@@ -998,7 +1001,6 @@ impl Component for GroupComponent {
                 problems_area,
             );
         }
-        frame.render_widget(Paragraph::new(self.footer_line()), footer);
         Ok(())
     }
 }

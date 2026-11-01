@@ -556,6 +556,18 @@ impl StorageComponent {
 }
 
 impl Component for StorageComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        Some(Line::from(vec![
+            key("[Tab]"),
+            Span::raw(" disks/partitions  "),
+            key("[↑/↓]"),
+            Span::raw(" navigate  "),
+            key("[r]"),
+            Span::raw(" refresh"),
+        ]))
+    }
+
     fn uses_tab_key(&self) -> bool {
         true
     }
@@ -617,7 +629,6 @@ impl Component for StorageComponent {
         let chunks = Layout::vertical([
             Constraint::Length(1), // Tabs
             Constraint::Min(0),    // Content
-            Constraint::Length(1), // Help
         ])
         .split(area);
 

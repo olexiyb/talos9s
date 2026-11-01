@@ -832,7 +832,7 @@ impl NodeInfoComponent {
         );
     }
 
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn key_hints_line(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
         let query = self.query();
         let spans = if query.editing {
@@ -878,10 +878,7 @@ impl NodeInfoComponent {
             spans.extend([key("r"), Span::raw(" refresh")]);
             spans
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray)),
-            area,
-        );
+        Line::from(spans)
     }
 }
 
@@ -939,6 +936,10 @@ fn config_spans(text: &str, masked: bool) -> Vec<Span<'static>> {
 }
 
 impl Component for NodeInfoComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn captures_text(&self) -> bool {
         self.query().editing
     }
@@ -1085,12 +1086,7 @@ impl Component for NodeInfoComponent {
             );
             return Ok(());
         }
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(area);
+        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
         self.draw_tabs(frame, chunks[0]);
         let attempted = self.data().is_some_and(|d| d.attempted[self.tab.index()]);
         if !attempted {
@@ -1111,7 +1107,6 @@ impl Component for NodeInfoComponent {
                 NodeInfoTab::Extensions => self.draw_extensions(frame, chunks[1]),
             }
         }
-        self.draw_footer(frame, chunks[2]);
         Ok(())
     }
 }

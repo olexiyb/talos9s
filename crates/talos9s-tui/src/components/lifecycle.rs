@@ -1072,7 +1072,7 @@ impl LifecycleComponent {
     }
 
     /// Draw the footer
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn key_hints_line(&self) -> Line<'static> {
         let spans = vec![
             Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
             Span::raw(" navigate  "),
@@ -1080,12 +1080,15 @@ impl LifecycleComponent {
             Span::raw(" refresh"),
         ];
 
-        let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(footer, area);
+        Line::from(spans)
     }
 }
 
 impl Component for LifecycleComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
@@ -1147,7 +1150,6 @@ impl Component for LifecycleComponent {
             Constraint::Length(7),  // Pre-Operation Checks (4 lines + border + padding)
             Constraint::Min(6),     // Node table
             Constraint::Length(6),  // Alerts (3 lines + border)
-            Constraint::Length(1),  // Footer
         ])
         .split(area);
 
@@ -1170,9 +1172,6 @@ impl Component for LifecycleComponent {
 
         // Alerts
         self.draw_alerts_section(frame, chunks[4]);
-
-        // Footer
-        self.draw_footer(frame, chunks[5]);
 
         Ok(())
     }

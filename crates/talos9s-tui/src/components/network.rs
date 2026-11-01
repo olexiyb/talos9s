@@ -1580,7 +1580,7 @@ impl NetworkStatsComponent {
     }
 
     /// Draw the footer with keybindings (interfaces view)
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn interfaces_key_hints(&self) -> Line<'static> {
         let auto_label = if self.auto_refresh {
             "auto:ON"
         } else {
@@ -1607,8 +1607,7 @@ impl NetworkStatsComponent {
             Span::raw(format!(" {}", auto_label)),
         ];
 
-        let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(footer, area);
+        Line::from(spans)
     }
 
     // ========== Connection Drill-Down View ==========
@@ -1872,7 +1871,7 @@ impl NetworkStatsComponent {
     }
 
     /// Draw footer for connection view
-    fn draw_conn_footer(&self, frame: &mut Frame, area: Rect) {
+    fn connections_key_hints(&self) -> Line<'static> {
         let listen_label = if self.listening_only { "all" } else { "listen" };
         let all_label = if self.show_all_connections {
             "iface"
@@ -1919,8 +1918,7 @@ impl NetworkStatsComponent {
             ]
         };
 
-        let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(footer, area);
+        Line::from(spans)
     }
 
     /// Draw the selected connection detail section
@@ -2091,7 +2089,6 @@ impl NetworkStatsComponent {
             Constraint::Length(1), // Summary bar
             Constraint::Min(5),    // Connection table
             Constraint::Length(5), // Detail section (4 lines + border)
-            Constraint::Length(1), // Footer
         ])
         .split(area);
 
@@ -2099,15 +2096,13 @@ impl NetworkStatsComponent {
         self.draw_conn_summary_bar(frame, chunks[1]);
         self.draw_conn_table(frame, chunks[2]);
         self.draw_conn_detail(frame, chunks[3]);
-        self.draw_conn_footer(frame, chunks[4]);
     }
 
     /// Draw the KubeSpan peer status view
     fn draw_kubespan_view(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::vertical([
-            Constraint::Length(1), // Tab bar
+            Constraint::Length(1), // Caption
             Constraint::Min(5),    // Content
-            Constraint::Length(1), // Footer
         ])
         .split(area);
 
@@ -2141,17 +2136,6 @@ impl NetworkStatsComponent {
                 self.draw_kubespan_loading(frame, chunks[1]);
             }
         }
-
-        // Footer
-        let footer = Line::from(vec![
-            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
-            Span::raw(" cycle views "),
-            Span::styled("j/k", Style::default().fg(Color::Cyan)),
-            Span::raw(" navigate "),
-            Span::styled("r", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh"),
-        ]);
-        frame.render_widget(Paragraph::new(footer), chunks[2]);
     }
 
     /// Draw KubeSpan disabled message
@@ -2816,7 +2800,6 @@ impl NetworkStatsComponent {
 
         constraints.push(Constraint::Min(5)); // Device table (takes remaining space)
         constraints.push(Constraint::Length(4)); // Detail section
-        constraints.push(Constraint::Length(1)); // Footer
 
         let chunks = Layout::vertical(constraints).split(area);
 
@@ -2856,14 +2839,47 @@ impl NetworkStatsComponent {
 
         // Detail section
         self.draw_detail_section(frame, chunks[idx]);
-        idx += 1;
-
-        // Footer
-        self.draw_footer(frame, chunks[idx]);
     }
 }
 
 impl Component for NetworkStatsComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        if self.file_viewer.is_some() {
+            return Some(Line::from(vec![
+                key("[j/k]"),
+                Span::raw(" scroll  "),
+                key("[g/G]"),
+                Span::raw(" top/bottom  "),
+                key("[Esc/q]"),
+                Span::raw(" close"),
+            ]));
+        }
+        if self.pending_action.is_some() {
+            return Some(Line::from(vec![
+                key("[y]"),
+                Span::raw(" confirm  "),
+                key("[n/Esc]"),
+                Span::raw(" cancel"),
+            ]));
+        }
+        let mut line = match self.view_mode {
+            ViewMode::Interfaces => self.interfaces_key_hints(),
+            ViewMode::Connections => self.connections_key_hints(),
+            ViewMode::KubeSpan => Line::from(vec![
+                key("[j/k]"),
+                Span::raw(" navigate  "),
+                key("[r]"),
+                Span::raw(" refresh"),
+            ]),
+        };
+        if self.show_output_pane {
+            line.spans
+                .extend([Span::raw("  "), key("[Esc]"), Span::raw(" close output")]);
+        }
+        Some(line)
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // If file viewer is shown, handle its keys
         if self.file_viewer.is_some() {

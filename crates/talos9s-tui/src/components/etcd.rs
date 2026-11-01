@@ -1159,14 +1159,14 @@ impl EtcdComponent {
     }
 
     /// Draw the footer with keybindings
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn key_hints_line(&self) -> Line<'static> {
         let auto_status = if self.auto_refresh {
             Span::styled("ON ", Style::default().fg(Color::Green))
         } else {
             Span::styled("OFF", Style::default().fg(Color::DarkGray))
         };
 
-        let line = Line::from(vec![
+        Line::from(vec![
             Span::styled("[j/k]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" select  "),
             Span::styled("[r]", Style::default().add_modifier(Modifier::BOLD)),
@@ -1176,14 +1176,15 @@ impl EtcdComponent {
             Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
             auto_status,
-        ]);
-
-        let para = Paragraph::new(line);
-        frame.render_widget(para, area);
+        ])
     }
 }
 
 impl Component for EtcdComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
@@ -1255,12 +1256,11 @@ impl Component for EtcdComponent {
             + member_checks(data.members.items()).len().max(1)
             + 2) as u16;
 
-        let [status, table, alarms, log, footer] = Layout::vertical([
+        let [status, table, alarms, log] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Length(table_height),
             Constraint::Length(alarm_height),
             Constraint::Min(3),
-            Constraint::Length(1),
         ])
         .areas(area);
 
@@ -1268,7 +1268,6 @@ impl Component for EtcdComponent {
         self.draw_member_table(frame, table);
         self.draw_alarms(frame, alarms);
         self.draw_log(frame, log);
-        self.draw_footer(frame, footer);
 
         Ok(())
     }

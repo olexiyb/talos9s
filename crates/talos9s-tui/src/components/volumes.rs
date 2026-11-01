@@ -848,7 +848,7 @@ impl VolumesComponent {
         self.copied_at = Some(std::time::Instant::now());
     }
 
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
+    fn key_hints_line(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, Style::default().bold());
         let spans = if self.filter_editing {
             vec![
@@ -900,7 +900,7 @@ impl VolumesComponent {
             }
             spans
         };
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        Line::from(spans)
     }
 }
 
@@ -1051,6 +1051,10 @@ fn nodes_line(row: &VolumeRow) -> Line<'static> {
 }
 
 impl Component for VolumesComponent {
+    fn key_hints(&self) -> Option<Line<'static>> {
+        Some(self.key_hints_line())
+    }
+
     fn captures_text(&self) -> bool {
         self.filter_editing
     }
@@ -1157,11 +1161,10 @@ impl Component for VolumesComponent {
             .map(|line| line.width().max(1).div_ceil(width))
             .sum();
         let detail_height = (wrapped_rows as u16 + 1).min(inner.height * 3 / 5);
-        let [summary_area, table_area, detail_area, footer_area] = Layout::vertical([
+        let [summary_area, table_area, detail_area] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Fill(1),
             Constraint::Length(detail_height),
-            Constraint::Length(1),
         ])
         .areas(inner);
 
@@ -1173,7 +1176,6 @@ impl Component for VolumesComponent {
                 .block(Block::default().borders(Borders::TOP)),
             detail_area,
         );
-        self.draw_footer(frame, footer_area);
         Ok(())
     }
 }
