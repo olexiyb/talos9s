@@ -12,6 +12,9 @@
 //! - DRBD debugfs `resources/<res>/connections/<peer>/debug`: `ap_in_flight`
 //! - the Mounts API on the Primary's node: size of the filesystem on the
 //!   DRBD device, which a resize must grow too
+//! - the kernel log (Dmesg API), only on nodes with a StandAlone link, for
+//!   why DRBD stopped reconnecting: whether a split-brain caused the
+//!   StandAlone the kernel reports now
 //!
 //! debugfs is marked "format will change without notice"; anything that
 //! can't be read or parsed is reported as unknown, never as a problem.
@@ -118,6 +121,10 @@ pub struct PeerObserved {
     pub ap_in_flight_kib: Option<u64>,
     /// Progress of a running resync or verify with the peer
     pub sync: Option<SyncProgress>,
+    /// The link is StandAlone because DRBD detected a split-brain it could
+    /// not resolve, per the kernel log. `false` when the log doesn't show
+    /// it, e.g. rotated out of the ring buffer.
+    pub split_brain: bool,
 }
 
 /// A resync (or online verify) in progress, from the `sync'ed:` /
@@ -574,6 +581,212 @@ pub async fn observe_drbd(
             }
         }
     }
+
+    // Why a link is StandAlone is only in the kernel log; read it only on
+    // the nodes that have one
+    let mut nodes: Vec<&String> = volumes
+        .iter()
+        .flat_map(|v| &v.replicas)
+        .filter(|r| r.peers.iter().any(|p| standalone(r, &p.peer)))
+        .map(|r| &r.node)
+        .collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    let reads = nodes.into_iter().filter_map(|node| {
+        let client = talos.with_node(node_ips.get(node)?);
+        Some(async move {
+            let log = tokio::time::timeout(DMESG_TIMEOUT, client.dmesg(false, false))
+                .await
+                .ok()?
+                .ok()?;
+            Some((node.clone(), split_brain_links(&log)))
+        })
+    });
+    let split_brains: HashMap<String, Vec<(String, String)>> = futures::future::join_all(reads)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    for volume in volumes.iter_mut() {
+        for replica in &mut volume.replicas {
+            let Some(links) = split_brains.get(&replica.node) else {
+                continue;
+            };
+            let Some(observed) = &mut replica.drbd else {
+                continue;
+            };
+            for (peer, seen) in &mut observed.peers {
+                seen.split_brain = links
+                    .iter()
+                    .any(|(res, p)| res == &volume.resource && p == peer);
+            }
+        }
+    }
+}
+
+/// Upper bound for reading a node's kernel log
+const DMESG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The replica's link to `peer` is StandAlone (DRBD stopped trying to
+/// connect), per LINSTOR or the kernel
+fn standalone(replica: &Replica, peer: &str) -> bool {
+    let kernel = replica
+        .drbd
+        .as_ref()
+        .and_then(|d| d.peers.get(peer))
+        .and_then(|p| p.cs.as_deref());
+    kernel == Some("StandAlone")
+        || replica
+            .peers
+            .iter()
+            .any(|p| p.peer == peer && !p.connected && p.message == "StandAlone")
+}
+
+/// `(resource, peer)` links a node's kernel log shows as StandAlone because
+/// of an unresolved split-brain, from Talos kernel log lines such as
+/// `kern: err: [ts]: drbd pvc-1 bc2: Split-Brain detected but unresolved,
+/// dropping connection!` and `… drbd pvc-1 bc2: conn( Disconnecting ->
+/// StandAlone ) [disconnected]`.
+///
+/// Only the link's latest StandAlone counts, and only when no other
+/// connection change came between it and the split-brain: a split-brain
+/// resolved by a later reconnect, or a StandAlone from a later manual
+/// `disconnect`, is not reported.
+fn split_brain_links(log: &str) -> Vec<(String, String)> {
+    // Per link: split-brain seen since its last connection attempt, and
+    // whether its latest StandAlone followed one
+    let mut pending: HashMap<(String, String), bool> = HashMap::new();
+    let mut result: HashMap<(String, String), bool> = HashMap::new();
+    for line in log.lines() {
+        let Some(rest) = line.split_once("]: drbd ").map(|(_, r)| r) else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        let Some(resource) = words.next() else {
+            continue;
+        };
+        if resource.ends_with(':') {
+            // Resource-level line, no peer
+            continue;
+        }
+        let resource = resource.split('/').next().unwrap_or(resource);
+        // The peer is the first word ending in ':', after the minor
+        // (`drbd1002`) on device lines; the minor alone means no peer
+        let Some(peer) = words.find_map(|w| w.strip_suffix(':')) else {
+            continue;
+        };
+        if peer.starts_with("drbd") && peer[4..].bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Some((_, text)) = rest.split_once(&format!("{peer}: ")) else {
+            continue;
+        };
+        let link = (resource.to_string(), peer.to_string());
+        if text.starts_with("Split-Brain detected") && text.contains("unresolved") {
+            pending.insert(link, true);
+        } else if let Some(change) = text.strip_prefix("conn( ") {
+            let Some((from, to)) = change.split_once(" -> ") else {
+                continue;
+            };
+            let to = to.split_whitespace().next().unwrap_or_default();
+            if to == "StandAlone" {
+                let after_split_brain = pending.remove(&link).unwrap_or(false);
+                result.insert(link, after_split_brain);
+            } else if from == "StandAlone" || matches!(to, "Unconnected" | "Connecting") {
+                // Left StandAlone, or tried connecting again
+                pending.remove(&link);
+                result.remove(&link);
+            }
+        }
+    }
+    let mut links: Vec<_> = result
+        .into_iter()
+        .filter(|(_, split_brain)| *split_brain)
+        .map(|(link, _)| link)
+        .collect();
+    links.sort();
+    links
+}
+
+/// A link reported broken by one or both ends
+struct BrokenLink<'a> {
+    /// The pair, sorted
+    a: &'a str,
+    b: &'a str,
+    /// Each reporting end and its state, StandAlone ends first
+    ends: Vec<(&'a str, &'a str)>,
+    split_brain: bool,
+}
+
+impl BrokenLink<'_> {
+    fn standalone(&self) -> bool {
+        self.ends.iter().any(|(_, state)| *state == "StandAlone")
+    }
+
+    fn text(&self) -> String {
+        let (a, b) = (self.a, self.b);
+        let states = if self.ends.iter().all(|(_, s)| *s == self.ends[0].1) {
+            self.ends[0].1.to_string()
+        } else {
+            self.ends
+                .iter()
+                .map(|(node, state)| format!("{state} on {node}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if self.split_brain {
+            format!("{a} ↔ {b}: split-brain, {states}: DRBD won't reconnect by itself")
+        } else if self.standalone() {
+            format!("{a} ↔ {b}: {states}: DRBD won't reconnect by itself")
+        } else {
+            format!("{a} ↔ {b}: {states}")
+        }
+    }
+}
+
+/// Links not connected, once per pair, sorted
+fn broken_links(volume: &LinstorVolume) -> Vec<BrokenLink<'_>> {
+    let mut links: Vec<BrokenLink> = Vec::new();
+    for r in volume.replicas.iter().filter(|r| r.drbd_layer) {
+        for p in r.peers.iter().filter(|p| !p.connected) {
+            let (a, b) = if r.node < p.peer {
+                (r.node.as_str(), p.peer.as_str())
+            } else {
+                (p.peer.as_str(), r.node.as_str())
+            };
+            let state = if standalone(r, &p.peer) {
+                "StandAlone"
+            } else {
+                p.message.as_str()
+            };
+            let split_brain = r
+                .drbd
+                .as_ref()
+                .and_then(|d| d.peers.get(&p.peer))
+                .is_some_and(|seen| seen.split_brain);
+            let index = match links.iter().position(|l| l.a == a && l.b == b) {
+                Some(i) => i,
+                None => {
+                    links.push(BrokenLink {
+                        a,
+                        b,
+                        ends: Vec::new(),
+                        split_brain: false,
+                    });
+                    links.len() - 1
+                }
+            };
+            let link = &mut links[index];
+            link.ends.push((r.node.as_str(), state));
+            link.split_brain |= split_brain;
+        }
+    }
+    for link in &mut links {
+        link.ends
+            .sort_by_key(|(node, state)| (*state != "StandAlone", *node));
+    }
+    links.sort_by(|x, y| (x.a, x.b).cmp(&(y.a, y.b)));
+    links
 }
 
 /// Mounted filesystems per node name, one Mounts call per node, each
@@ -750,6 +963,11 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
         push(issue.severity, issue.text);
     }
 
+    // Both ends report a broken link; name the pair once
+    for link in broken_links(volume) {
+        push(Severity::Error, link.text());
+    }
+
     for r in &volume.replicas {
         if !r.drbd_layer {
             continue;
@@ -767,16 +985,8 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
                 );
             }
         }
-        for p in &r.peers {
-            // Both ends report a broken link; name the pair once
-            let (a, b) = if r.node < p.peer {
-                (&r.node, &p.peer)
-            } else {
-                (&p.peer, &r.node)
-            };
-            if !p.connected {
-                push(Severity::Error, format!("{a} ↔ {b}: {}", p.message));
-            } else if let Some(rep) = p.replication.as_deref()
+        for p in r.peers.iter().filter(|p| p.connected) {
+            if let Some(rep) = p.replication.as_deref()
                 && rep != "Established"
             {
                 push(
@@ -888,8 +1098,9 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
     issues
 }
 
-/// Suggested manual fixes for stale out-of-sync bits on established links,
-/// with each command run in the satellite pod of the node it must run on.
+/// Suggested manual fixes for stale out-of-sync bits on established links
+/// and for StandAlone links (see [`standalone_remedies`]), with each command
+/// run in the satellite pod of the node it must run on.
 ///
 /// - Bits between the Primary and a peer: from the Primary, optionally verify
 ///   the peer (read-only), then `invalidate-remote` it, so the peer copies
@@ -899,24 +1110,35 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
 ///   them, never touching the Primary (as home-operations/miroir#500 does).
 ///   A reconnect with equal UUIDs drops the bits without copying data.
 ///
-/// Nothing is suggested while a resync is running or without a Primary.
-/// `kubectl` is the command pinned to the cluster's context.
+/// Nothing is suggested for stale bits while a resync is running or without
+/// a Primary. `kubectl` is the command pinned to the cluster's context.
 pub fn remediation(
     volume: &LinstorVolume,
     satellites: &HashMap<String, SatellitePod>,
     kubectl: &str,
 ) -> Vec<Remedy> {
-    let Some(primary) = volume.replicas.iter().find(|r| r.in_use) else {
-        return Vec::new();
-    };
-    let target = |peer: &str| {
-        if volume.volume_number == 0 {
-            format!("{}:{peer}", volume.resource)
-        } else {
-            format!("{}:{peer}/{}", volume.resource, volume.volume_number)
-        }
-    };
-    let exec = |node: &str, drbdadm: String| match satellites.get(node) {
+    let mut remedies = stale_bit_remedies(volume, satellites, kubectl);
+    remedies.extend(standalone_remedies(volume, satellites, kubectl));
+    remedies
+}
+
+/// `res:peer`, or `res:peer/vol` past the first volume, for `drbdadm`
+fn drbdadm_target(volume: &LinstorVolume, peer: &str) -> String {
+    if volume.volume_number == 0 {
+        format!("{}:{peer}", volume.resource)
+    } else {
+        format!("{}:{peer}/{}", volume.resource, volume.volume_number)
+    }
+}
+
+/// `drbdadm` run in the satellite pod of `node`
+fn drbdadm_on(
+    satellites: &HashMap<String, SatellitePod>,
+    kubectl: &str,
+    node: &str,
+    drbdadm: String,
+) -> String {
+    match satellites.get(node) {
         Some(pod) => format!(
             "{kubectl} -n {} exec {} -c {SATELLITE_CONTAINER} -- drbdadm {drbdadm}",
             pod.namespace, pod.name
@@ -925,7 +1147,134 @@ pub fn remediation(
             "{kubectl} -n piraeus-datastore exec <linstor-satellite pod on {node}> \
              -c {SATELLITE_CONTAINER} -- drbdadm {drbdadm}"
         ),
+    }
+}
+
+/// DRBD's guide to resolving a split-brain by hand
+const SPLIT_BRAIN_GUIDE: &str =
+    "https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-resolve-split-brain";
+
+/// Fixes for StandAlone links, which DRBD never reconnects by itself.
+///
+/// Commands only when it can't lose data: both ends Secondary, each
+/// UpToDate (or diskless), and a Primary Established to both with nothing
+/// out of sync either way. Both then hold the Primary's data, so:
+/// 1. `connect` the StandAlone ends: with the same current UUID the link
+///    comes back without a resync (DRBD's `no-sync by rule=reconnected`)
+/// 2. if it drops back to StandAlone (split-brain on their histories),
+///    discard one end's copy: it resyncs the differing blocks from the other
+///
+/// Otherwise (the Primary on the link, no Primary, an end behind) only a
+/// note: which side's writes to keep is the operator's call.
+fn standalone_remedies(
+    volume: &LinstorVolume,
+    satellites: &HashMap<String, SatellitePod>,
+    kubectl: &str,
+) -> Vec<Remedy> {
+    let exec = |node: &str, drbdadm: String| drbdadm_on(satellites, kubectl, node, drbdadm);
+    let target = |peer: &str| drbdadm_target(volume, peer);
+    let replica = |node: &str| volume.replicas.iter().find(|r| r.node == node);
+    let primary = volume.replicas.iter().find(|r| r.in_use);
+    let oos = |from: &Replica, to: &str| {
+        from.drbd
+            .as_ref()
+            .and_then(|d| d.peers.get(to))
+            .and_then(|p| p.oos_kib)
+            .unwrap_or(0)
     };
+    // `node` holds exactly the Primary's data
+    let in_sync_with = |primary: &Replica, node: &str| {
+        let Some(r) = replica(node) else {
+            return false;
+        };
+        let link = primary.peers.iter().any(|p| {
+            p.peer == node && p.connected && p.replication.as_deref() == Some("Established")
+        });
+        (r.diskless || r.disk_state == "UpToDate")
+            && link
+            && oos(primary, node) == 0
+            && oos(r, &primary.node) == 0
+    };
+
+    let mut remedies = Vec::new();
+    for link in broken_links(volume).into_iter().filter(|l| l.standalone()) {
+        let (a, b) = (link.a, link.b);
+        let reason = match primary {
+            None => Some("no Primary to compare them with".to_string()),
+            Some(p) if p.node == a || p.node == b => Some(format!(
+                "Primary {} is one end, and its writes since the split may be the ones to keep",
+                p.node
+            )),
+            Some(p) if p.diskless || p.disk_state != "UpToDate" => {
+                Some(format!("Primary {} is not UpToDate", p.node))
+            }
+            Some(p) => [a, b]
+                .into_iter()
+                .find(|n| !in_sync_with(p, n))
+                .map(|n| format!("{n} is not UpToDate and in sync with Primary {}", p.node)),
+        };
+        if let Some(reason) = reason {
+            remedies.push(Remedy {
+                summary: format!(
+                    "Reconnect {a} ↔ {b} by hand: {reason}, so which side's data to discard \
+                     is your call ({SPLIT_BRAIN_GUIDE})"
+                ),
+                commands: Vec::new(),
+            });
+            continue;
+        }
+        let primary = primary.map_or("", |p| p.node.as_str());
+        let standalone_ends: Vec<&str> = link
+            .ends
+            .iter()
+            .filter(|(_, state)| *state == "StandAlone")
+            .map(|(node, _)| *node)
+            .collect();
+        let other = |node: &str| if node == a { b } else { a };
+        remedies.push(Remedy {
+            summary: format!(
+                "Reconnect Secondaries {a} ↔ {b}: both match Primary {primary}, so this \
+                 resyncs nothing"
+            ),
+            commands: standalone_ends
+                .iter()
+                .map(|n| exec(n, format!("connect {}", target(other(n)))))
+                .collect(),
+        });
+        let diskful = [a, b]
+            .into_iter()
+            .all(|n| replica(n).is_some_and(|r| !r.diskless));
+        if diskful && let Some(victim) = standalone_ends.first() {
+            let keep = other(victim);
+            remedies.push(Remedy {
+                summary: format!(
+                    "Only if it drops back to StandAlone (split-brain): discard {victim}'s \
+                     copy, it resyncs the differing blocks from {keep}"
+                ),
+                commands: vec![
+                    exec(
+                        victim,
+                        format!("connect --discard-my-data {}", target(keep)),
+                    ),
+                    exec(keep, format!("connect {}", target(victim))),
+                ],
+            });
+        }
+    }
+    remedies
+}
+
+/// Fixes for stale out-of-sync bits on established links
+fn stale_bit_remedies(
+    volume: &LinstorVolume,
+    satellites: &HashMap<String, SatellitePod>,
+    kubectl: &str,
+) -> Vec<Remedy> {
+    let Some(primary) = volume.replicas.iter().find(|r| r.in_use) else {
+        return Vec::new();
+    };
+    let target = |peer: &str| drbdadm_target(volume, peer);
+    let exec = |node: &str, drbdadm: String| drbdadm_on(satellites, kubectl, node, drbdadm);
 
     // Established links with stale bits: (holder, peer)
     let mut stale: Vec<(&str, &str)> = Vec::new();
@@ -1268,6 +1617,7 @@ mod tests {
                     oos_kib: Some(oos),
                     ap_in_flight_kib: Some(ap),
                     sync: None,
+                    split_brain: false,
                 },
             )]),
         };
@@ -1308,6 +1658,7 @@ mod tests {
                             oos_kib: Some(*oos),
                             ap_in_flight_kib: Some(0),
                             sync: None,
+                            split_brain: false,
                         },
                     )
                 })
@@ -1369,6 +1720,158 @@ mod tests {
         assert!(remedies[1].commands[0].contains("<linstor-satellite pod on bc2>"));
         assert!(remedies[1].commands[0].ends_with("drbdadm disconnect pvc-1:bc4"));
         assert!(remedies[1].commands.iter().all(|c| !c.contains("bc1")));
+    }
+
+    /// The 2026-10-31 autokuma-data case: Primary bc1 in sync with both
+    /// Secondaries, bc2 ↔ bc4 dropped by a split-brain on their histories;
+    /// bc2 already retried (`Connecting`), bc4 still StandAlone
+    fn secondaries_split_brain() -> LinstorVolume {
+        let established = |p: &'static str| (p, true, "Established");
+        let resources = json!([
+            resource(
+                "bc1",
+                true,
+                "UpToDate",
+                &[established("bc2"), established("bc4")]
+            ),
+            resource(
+                "bc2",
+                false,
+                "UpToDate",
+                &[established("bc1"), ("bc4", false, "Off")]
+            ),
+            resource(
+                "bc4",
+                false,
+                "UpToDate",
+                &[established("bc1"), ("bc2", false, "Off")]
+            ),
+        ]);
+        let mut volume = volumes_from(&resources, &definitions()).remove(0);
+        let peer = |cs: &str, split_brain: bool| PeerObserved {
+            cs: Some(cs.to_string()),
+            oos_kib: Some(0),
+            split_brain,
+            ..Default::default()
+        };
+        let observed = |peers: [(&str, PeerObserved); 2]| DrbdObserved {
+            peers: peers.into_iter().map(|(n, p)| (n.to_string(), p)).collect(),
+            ..Default::default()
+        };
+        volume.replicas[0].drbd = Some(observed([
+            ("bc2", peer("Established", false)),
+            ("bc4", peer("Established", false)),
+        ]));
+        volume.replicas[1].drbd = Some(observed([
+            ("bc1", peer("Established", false)),
+            ("bc4", peer("Connecting", false)),
+        ]));
+        volume.replicas[2].drbd = Some(observed([
+            ("bc1", peer("Established", false)),
+            ("bc2", peer("StandAlone", true)),
+        ]));
+        volume.replicas[2].peers[1].message = "StandAlone".to_string();
+        volume
+    }
+
+    #[test]
+    fn finds_split_brains_behind_the_latest_standalone() {
+        let log = "\
+kern:    info: [2026-10-31T08:25:01.10Z]: drbd pvc-1 bc2: conn( Unconnected -> Connecting ) [connecting]
+kern:    info: [2026-10-31T08:25:01.20Z]: drbd pvc-1/0 drbd1002 bc2: uuid_compare()=split-brain-disconnect by rule=history-both
+kern:   alert: [2026-10-31T08:25:01.21Z]: drbd pvc-1/0 drbd1002 bc2: Split-Brain detected but unresolved, dropping connection!
+kern:    info: [2026-10-31T08:25:01.22Z]: drbd pvc-1 bc2: conn( Connected -> Disconnecting ) [disconnected]
+kern:    info: [2026-10-31T08:25:01.23Z]: drbd pvc-1 bc2: conn( Disconnecting -> StandAlone ) [disconnected]
+kern:   alert: [2026-10-31T08:26:00.00Z]: drbd pvc-2 bc1: Split-Brain detected but unresolved, dropping connection!
+kern:    info: [2026-10-31T08:26:00.01Z]: drbd pvc-2 bc1: conn( Disconnecting -> StandAlone ) [disconnected]
+kern:    info: [2026-10-31T08:34:01.00Z]: drbd pvc-2 bc1: conn( StandAlone -> Unconnected ) [connect]
+kern:   alert: [2026-10-31T08:40:00.00Z]: drbd pvc-3 bc1: Split-Brain detected but unresolved, dropping connection!
+kern:    info: [2026-10-31T08:40:00.01Z]: drbd pvc-3 bc1: conn( Disconnecting -> Unconnected ) [disconnected]
+kern:    info: [2026-10-31T08:40:00.02Z]: drbd pvc-3 bc1: conn( Unconnected -> Connecting ) [connecting]
+kern:    info: [2026-10-31T08:50:00.00Z]: drbd pvc-3 bc1: conn( Connecting -> StandAlone ) [disconnect]
+kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate -> Outdated )
+";
+        // pvc-2 reconnected since; pvc-3's StandAlone is a later disconnect
+        assert_eq!(
+            split_brain_links(log),
+            [("pvc-1".to_string(), "bc2".to_string())]
+        );
+        assert!(split_brain_links("").is_empty());
+    }
+
+    #[test]
+    fn standalone_link_is_one_issue_naming_split_brain() {
+        let mut volume = secondaries_split_brain();
+        let texts = |v: &LinstorVolume| -> Vec<String> {
+            volume_issues(v).into_iter().map(|i| i.text).collect()
+        };
+        assert_eq!(
+            texts(&volume),
+            [
+                "bc2 ↔ bc4: split-brain, StandAlone on bc4, Connecting on bc2: \
+              DRBD won't reconnect by itself"
+            ]
+        );
+        // Without the kernel log's word for it, only what the state shows
+        let bc4 = volume.replicas[2].drbd.as_mut().unwrap();
+        bc4.peers.get_mut("bc2").unwrap().split_brain = false;
+        assert_eq!(
+            texts(&volume),
+            ["bc2 ↔ bc4: StandAlone on bc4, Connecting on bc2: DRBD won't reconnect by itself"]
+        );
+    }
+
+    #[test]
+    fn reconnects_standalone_secondaries_in_sync_with_the_primary() {
+        let remedies = remediation(&secondaries_split_brain(), &HashMap::new(), "kubectl");
+        assert_eq!(remedies.len(), 2);
+        assert!(
+            remedies[0]
+                .summary
+                .starts_with("Reconnect Secondaries bc2 ↔ bc4")
+        );
+        // Only the StandAlone end needs it; bc2 is already connecting
+        assert_eq!(remedies[0].commands.len(), 1);
+        assert!(remedies[0].commands[0].contains("<linstor-satellite pod on bc4>"));
+        assert!(remedies[0].commands[0].ends_with("drbdadm connect pvc-1:bc2"));
+        assert!(remedies[1].summary.starts_with("Only if it drops back"));
+        assert!(remedies[1].commands[0].contains("<linstor-satellite pod on bc4>"));
+        assert!(remedies[1].commands[0].ends_with("drbdadm connect --discard-my-data pvc-1:bc2"));
+        assert!(remedies[1].commands[1].contains("<linstor-satellite pod on bc2>"));
+        assert!(remedies[1].commands[1].ends_with("drbdadm connect pvc-1:bc4"));
+        // The Primary is never touched
+        assert!(
+            remedies
+                .iter()
+                .flat_map(|r| &r.commands)
+                .all(|c| !c.contains("bc1"))
+        );
+    }
+
+    #[test]
+    fn no_commands_for_a_split_brain_with_the_primary_or_a_secondary_behind() {
+        let mut volume = secondaries_split_brain();
+        volume.replicas[0].in_use = false;
+        volume.replicas[1].in_use = true;
+        let remedies = remediation(&volume, &HashMap::new(), "kubectl");
+        assert_eq!(remedies.len(), 1);
+        assert!(remedies[0].summary.contains("Primary bc2 is one end"));
+        assert!(remedies[0].commands.is_empty());
+
+        let mut volume = secondaries_split_brain();
+        let bc1 = volume.replicas[0].drbd.as_mut().unwrap();
+        bc1.peers.get_mut("bc4").unwrap().oos_kib = Some(48);
+        let remedies: Vec<_> = remediation(&volume, &HashMap::new(), "kubectl")
+            .into_iter()
+            .filter(|r| r.summary.contains("bc2 ↔ bc4"))
+            .collect();
+        assert_eq!(remedies.len(), 1);
+        assert!(
+            remedies[0]
+                .summary
+                .contains("bc4 is not UpToDate and in sync with Primary bc1")
+        );
+        assert!(remedies[0].commands.is_empty());
     }
 
     #[test]

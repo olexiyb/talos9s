@@ -1241,6 +1241,7 @@ mod tests {
                                 oos_kib: Some(oos),
                                 ap_in_flight_kib: Some(0),
                                 sync: None,
+                                split_brain: false,
                             },
                         )
                     })
