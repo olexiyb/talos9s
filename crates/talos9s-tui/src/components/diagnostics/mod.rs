@@ -19,7 +19,7 @@ pub mod types;
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -74,6 +74,8 @@ pub struct DiagnosticsComponent {
     selected_check: usize,
     /// Table state for rendering
     table_state: TableState,
+    /// Where each category's checks were drawn, for clicks
+    category_rows: [crate::ui_ext::RowHits; 5],
 
     /// Pending action (waiting for confirmation)
     pending_action: Option<PendingAction>,
@@ -148,6 +150,7 @@ impl DiagnosticsComponent {
             selected_category: 0,
             selected_check: 0,
             table_state,
+            category_rows: Default::default(),
             pending_action: None,
             show_confirmation: false,
             confirmation_selection: 1,
@@ -677,7 +680,7 @@ impl DiagnosticsComponent {
 
     /// Render a category section
     fn render_category(
-        &self,
+        &mut self,
         frame: &mut Frame,
         area: Rect,
         category_idx: usize,
@@ -744,6 +747,8 @@ impl DiagnosticsComponent {
             Constraint::Fill(1),
         ];
 
+        self.category_rows[category_idx] =
+            crate::ui_ext::RowHits::new(inner, false, 0, 0, checks.len());
         let table = Table::new(rows, widths);
         frame.render_widget(table, inner);
     }
@@ -1002,6 +1007,24 @@ fn log_stage(address: &str, stage: &str, lap: &mut std::time::Instant) {
 }
 
 impl Component for DiagnosticsComponent {
+    /// A click on a check selects it and its category
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if self.show_confirmation || self.show_details {
+            return Ok(None);
+        }
+        let hit = self
+            .category_rows
+            .iter()
+            .enumerate()
+            .find_map(|(category, rows)| rows.clicked(&mouse).map(|i| (category, i)));
+        if let Some((category, check)) = hit {
+            self.selected_category = category;
+            self.selected_check = check;
+            self.update_table_state();
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
         let spans = if self.show_details {
@@ -1145,6 +1168,8 @@ impl Component for DiagnosticsComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        // Only what this frame draws is clickable (e.g. no hidden Addons)
+        self.category_rows = Default::default();
         let chunks = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).split(area);
 
         // Get header info from data

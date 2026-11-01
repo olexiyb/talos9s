@@ -25,7 +25,7 @@ use crate::linstor_volumes::{
 use crate::orphans::{Orphan, PvIndex, fetch_pv_index};
 use crate::zfs::{ZfsVolume, apply_zfs_mounts, fetch_zfs_volumes, zfs_volume_issues};
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use kube::Client;
 use ratatui::{
     Frame,
@@ -301,6 +301,8 @@ pub struct VolumesComponent {
 
     selected: usize,
     table_state: TableState,
+    /// Where the rows were drawn, for clicks
+    rows: crate::ui_ext::RowHits,
     /// Volume to select once the first scan lands (from a previous visit)
     pending_select: Option<(String, u32)>,
     /// When the selected volume's fix commands were copied, for feedback
@@ -329,6 +331,7 @@ impl VolumesComponent {
             filter_editing: false,
             selected: 0,
             table_state,
+            rows: Default::default(),
             pending_select: None,
             copied_at: None,
             opened_at: std::time::Instant::now(),
@@ -703,6 +706,7 @@ impl VolumesComponent {
             "", "Volume", "Type", "Size", "Used", "Copies", "Nodes", "Issues",
         ])
         .style(Style::default().fg(Color::Gray).bold());
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .column_spacing(2)
@@ -712,6 +716,8 @@ impl VolumesComponent {
                     .add_modifier(Modifier::BOLD),
             );
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), row_count);
 
         if empty {
             let message = if !self.show_all && self.filter.is_empty() {
@@ -1051,6 +1057,14 @@ fn nodes_line(row: &VolumeRow) -> Line<'static> {
 }
 
 impl Component for VolumesComponent {
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if let Some(i) = self.rows.clicked(&mouse) {
+            self.selected = i;
+            self.table_state.select(Some(i));
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(self.key_hints_line())
     }

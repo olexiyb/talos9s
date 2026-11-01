@@ -15,7 +15,7 @@ use crate::action::Action;
 use crate::components::Component;
 use crate::ui_ext::HealthIndicatorExt;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
@@ -242,6 +242,9 @@ pub struct WorkloadHealthComponent {
 
     /// Table state for rendering
     table_state: TableState,
+    /// Where the rows were drawn, for clicks
+    rows: crate::ui_ext::RowHits,
+    drill_rows: crate::ui_ext::RowHits,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -262,6 +265,8 @@ impl WorkloadHealthComponent {
             selected_item: 0,
             drill_down: false,
             table_state,
+            rows: Default::default(),
+            drill_rows: Default::default(),
             auto_refresh: true,
         }
     }
@@ -1066,6 +1071,7 @@ impl WorkloadHealthComponent {
         .style(Style::default().add_modifier(Modifier::DIM))
         .bottom_margin(1);
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .row_highlight_style(
@@ -1076,6 +1082,8 @@ impl WorkloadHealthComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
     }
 
     /// Collect drill-down row data for the selected namespace
@@ -1186,6 +1194,7 @@ impl WorkloadHealthComponent {
             drill_table_state.select(Some(self.selected_item));
         }
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .block(Block::default().title(title).borders(Borders::ALL))
@@ -1197,6 +1206,8 @@ impl WorkloadHealthComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut drill_table_state);
+        self.drill_rows =
+            crate::ui_ext::RowHits::new(area, true, 2, drill_table_state.offset(), row_count);
     }
 
     /// Draw the footer with keybindings
@@ -1237,6 +1248,18 @@ impl WorkloadHealthComponent {
 }
 
 impl Component for WorkloadHealthComponent {
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if self.drill_down {
+            if let Some(i) = self.drill_rows.clicked(&mouse) {
+                self.selected_item = i;
+            }
+        } else if let Some(i) = self.rows.clicked(&mouse) {
+            self.selected_namespace = i;
+            self.table_state.select(Some(i));
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(self.key_hints_line())
     }

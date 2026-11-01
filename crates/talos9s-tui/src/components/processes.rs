@@ -10,7 +10,7 @@
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -286,6 +286,8 @@ pub struct ProcessesComponent {
     selected: usize,
     /// Table state for rendering
     table_state: TableState,
+    /// Where the rows were drawn, for clicks
+    rows: crate::ui_ext::RowHits,
     /// Current sort order
     sort_by: SortBy,
     /// Tree view enabled
@@ -339,6 +341,7 @@ impl ProcessesComponent {
             state,
             selected: 0,
             table_state,
+            rows: Default::default(),
             sort_by: SortBy::CpuPercent,
             tree_view: false,
             tree_root: None,
@@ -1266,6 +1269,7 @@ impl ProcessesComponent {
             .style(Style::default().add_modifier(Modifier::DIM))
             .bottom_margin(1);
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .row_highlight_style(
@@ -1276,6 +1280,8 @@ impl ProcessesComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
     }
 
     /// Draw the detail section for selected process
@@ -1446,6 +1452,14 @@ impl ProcessesComponent {
 }
 
 impl Component for ProcessesComponent {
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if let Some(i) = self.rows.clicked(&mouse) {
+            self.selected = i;
+            self.table_state.select(Some(i));
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(self.key_hints_line())
     }

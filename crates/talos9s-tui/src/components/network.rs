@@ -1361,6 +1361,7 @@ impl NetworkStatsComponent {
         let Some(data) = self.data() else {
             let table = Table::new(Vec::<Row>::new(), [Constraint::Fill(1)]).header(header);
             frame.render_stateful_widget(table, area, &mut self.table_state);
+            self.hits.device_rows = Default::default();
             return;
         };
 
@@ -1433,6 +1434,7 @@ impl NetworkStatsComponent {
             Constraint::Length(8),  // TX DROP
         ];
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .row_highlight_style(
@@ -1443,6 +1445,8 @@ impl NetworkStatsComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.hits.device_rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
     }
 
     /// Draw the detail section for selected device
@@ -1887,6 +1891,7 @@ impl NetworkStatsComponent {
             Constraint::Min(16),    // PROCESS (takes remaining space)
         ];
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .row_highlight_style(
@@ -1897,6 +1902,8 @@ impl NetworkStatsComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.conn_table_state);
+        self.hits.connection_rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.conn_table_state.offset(), row_count);
     }
 
     /// Draw footer for connection view
@@ -2130,7 +2137,7 @@ impl NetworkStatsComponent {
 
     /// Draw the KubeSpan peer status view
     fn draw_kubespan_view(&mut self, frame: &mut Frame, area: Rect) {
-        self.hits.kubespan = Rect::default();
+        self.hits.peer_rows = Default::default();
         let chunks = Layout::vertical([
             Constraint::Length(1), // Caption
             Constraint::Min(5),    // Content
@@ -2385,6 +2392,7 @@ impl NetworkStatsComponent {
             })
             .collect();
 
+        let row_count = rows.len();
         let table = Table::new(
             rows,
             [
@@ -2399,8 +2407,15 @@ impl NetworkStatsComponent {
         .header(header_row)
         .block(Block::default().borders(Borders::TOP));
 
-        self.hits.kubespan = content_chunks[1];
         frame.render_stateful_widget(table, content_chunks[1], &mut self.kubespan_table_state);
+        // Top border and the header come before the first row
+        self.hits.peer_rows = crate::ui_ext::RowHits::new(
+            content_chunks[1],
+            false,
+            2,
+            self.kubespan_table_state.offset(),
+            row_count,
+        );
 
         // Detail section for selected peer
         if let Some(peer) = kubespan_peers.get(self.kubespan_selected) {
@@ -2877,10 +2892,14 @@ impl NetworkStatsComponent {
 /// Areas drawn last frame, in screen coordinates
 #[derive(Debug, Default, Clone, Copy)]
 struct NetworkHits {
+    /// Tables (their top line is the header) and the breadcrumb
     devices: Rect,
     connections: Rect,
     breadcrumb: Rect,
-    kubespan: Rect,
+    /// Rows of each table
+    device_rows: crate::ui_ext::RowHits,
+    connection_rows: crate::ui_ext::RowHits,
+    peer_rows: crate::ui_ext::RowHits,
 }
 
 fn contains(r: Rect, column: u16, row: u16) -> bool {
@@ -2898,13 +2917,6 @@ fn column_at(area: Rect, widths: &[u16], x: u16) -> Option<usize> {
         left += w + 1;
     }
     None
-}
-
-/// Row of a table under `y`: `header` lines (header + its margin) below the
-/// table's top, plus the rows scrolled away
-fn row_at(area: Rect, header: u16, offset: usize, y: u16) -> Option<usize> {
-    let first = area.y + header;
-    (y >= first && y < area.bottom()).then(|| offset + (y - first) as usize)
 }
 
 impl NetworkStatsComponent {
@@ -2928,10 +2940,7 @@ impl NetworkStatsComponent {
                     self.sort_devices();
                     return;
                 }
-                let count = self.data().map_or(0, |d| d.devices.len());
-                if let Some(i) = row_at(area, 2, self.table_state.offset(), row)
-                    && i < count
-                {
+                if let Some(i) = self.hits.device_rows.row_at(column, row) {
                     self.selected = i;
                     self.table_state.select(Some(i));
                 }
@@ -2959,23 +2968,14 @@ impl NetworkStatsComponent {
                     self.conn_selection_start = None;
                     return;
                 }
-                let count = self.get_filtered_connections().len();
-                if let Some(i) = row_at(area, 2, self.conn_table_state.offset(), row)
-                    && i < count
-                {
+                if let Some(i) = self.hits.connection_rows.row_at(column, row) {
                     self.conn_selected = i;
                     self.conn_table_state.select(Some(i));
                     self.conn_selection_start = None;
                 }
             }
             ViewMode::KubeSpan => {
-                let area = self.hits.kubespan;
-                // Top border, then the header
-                let count = self.data().map_or(0, |d| d.kubespan_peers.len());
-                if let Some(i) = row_at(area, 2, self.kubespan_table_state.offset(), row)
-                    && contains(area, column, row)
-                    && i < count
-                {
+                if let Some(i) = self.hits.peer_rows.row_at(column, row) {
                     self.kubespan_selected = i;
                     self.kubespan_table_state.select(Some(i));
                 }
@@ -4013,7 +4013,7 @@ impl NetworkStatsComponent {
 mod click_tests {
     use super::*;
 
-    /// Header and row hit-testing for the device and connection tables
+    /// Column hit-testing for the sortable headers
     #[test]
     fn columns_and_rows_under_the_mouse() {
         let area = Rect::new(31, 8, 100, 20);
@@ -4027,10 +4027,5 @@ mod click_tests {
         assert_eq!(column_at(area, &widths, 63), Some(2));
         assert_eq!(column_at(area, &widths, 88), Some(3));
         assert_eq!(column_at(area, &widths, 100), None);
-        // Header and its margin, then rows from the scroll offset
-        assert_eq!(row_at(area, 2, 0, 9), None);
-        assert_eq!(row_at(area, 2, 0, 10), Some(0));
-        assert_eq!(row_at(area, 2, 30, 12), Some(32));
-        assert_eq!(row_at(area, 2, 0, 28), None);
     }
 }

@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -67,8 +67,8 @@ pub struct StorageComponent {
 
     /// Table state for volume list
     volume_table_state: TableState,
-    /// Where the table was drawn last, for clicks
-    table_area: Rect,
+    /// Where the table's rows were drawn last, for clicks
+    rows: crate::ui_ext::RowHits,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -128,7 +128,7 @@ impl StorageComponent {
             view_mode: StorageViewMode::Disks,
             disk_table_state,
             volume_table_state,
-            table_area: Rect::default(),
+            rows: Default::default(),
             auto_refresh: true,
             client: None,
             node_address,
@@ -326,6 +326,7 @@ impl StorageComponent {
             Constraint::Min(20),
         ];
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .block(
@@ -336,8 +337,14 @@ impl StorageComponent {
             )
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        self.table_area = chunks[0];
         frame.render_stateful_widget(table, chunks[0], &mut self.disk_table_state);
+        self.rows = crate::ui_ext::RowHits::new(
+            chunks[0],
+            true,
+            1,
+            self.disk_table_state.offset(),
+            row_count,
+        );
 
         // Draw detail section
         self.draw_disk_detail(frame, chunks[1]);
@@ -465,6 +472,7 @@ impl StorageComponent {
             Constraint::Min(15),
         ];
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .block(
@@ -475,8 +483,14 @@ impl StorageComponent {
             )
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        self.table_area = chunks[0];
         frame.render_stateful_widget(table, chunks[0], &mut self.volume_table_state);
+        self.rows = crate::ui_ext::RowHits::new(
+            chunks[0],
+            true,
+            1,
+            self.volume_table_state.offset(),
+            row_count,
+        );
 
         // Draw detail section
         self.draw_volume_detail(frame, chunks[1]);
@@ -532,41 +546,11 @@ impl StorageComponent {
 }
 
 impl Component for StorageComponent {
-    /// A click on a row selects it (the table has a border and a header)
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return Ok(None);
-        }
-        let area = self.table_area;
-        let first = area.y + 2;
-        if mouse.column < area.x || mouse.column >= area.right() {
-            return Ok(None);
-        }
-        if mouse.row < first || mouse.row + 1 >= area.bottom() {
-            return Ok(None);
-        }
-        let line = (mouse.row - first) as usize;
-        let count = |data: Option<&StorageData>, disks: bool| {
-            data.map_or(0, |d| {
-                if disks {
-                    d.disks.len()
-                } else {
-                    d.volumes.len()
-                }
-            })
-        };
-        match self.view_mode {
-            StorageViewMode::Disks => {
-                let i = self.disk_table_state.offset() + line;
-                if i < count(self.data(), true) {
-                    self.disk_table_state.select(Some(i));
-                }
-            }
-            StorageViewMode::Partitions => {
-                let i = self.volume_table_state.offset() + line;
-                if i < count(self.data(), false) {
-                    self.volume_table_state.select(Some(i));
-                }
+        if let Some(i) = self.rows.clicked(&mouse) {
+            match self.view_mode {
+                StorageViewMode::Disks => self.disk_table_state.select(Some(i)),
+                StorageViewMode::Partitions => self.volume_table_state.select(Some(i)),
             }
         }
         Ok(None)

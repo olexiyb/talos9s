@@ -8,7 +8,7 @@
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -296,6 +296,8 @@ pub struct MultiLogsComponent {
     selected_level: usize,
     /// Levels list state
     levels_state: ListState,
+    /// Entries of the open floating panel by line, for clicks
+    panel_lines: crate::ui_ext::LineHits<usize>,
 
     /// Async state for log data (entries and visible indices)
     state: AsyncState<MultiLogsData>,
@@ -435,6 +437,7 @@ impl MultiLogsComponent {
             levels,
             selected_level: 0,
             levels_state,
+            panel_lines: Default::default(),
             state: {
                 let mut state = AsyncState::new();
                 state.start_loading();
@@ -1664,6 +1667,14 @@ impl MultiLogsComponent {
         }
 
         frame.render_stateful_widget(list, panel_area, &mut adjusted_state);
+        let mut lines = crate::ui_ext::LineHits::new(
+            panel_area.inner(ratatui::layout::Margin::new(1, 1)),
+            adjusted_state.offset(),
+        );
+        for (index, _) in &filtered_services {
+            lines.push(Some(*index));
+        }
+        self.panel_lines = lines;
     }
 
     /// Draw the levels filter panel
@@ -1708,6 +1719,7 @@ impl MultiLogsComponent {
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
         frame.render_stateful_widget(list, panel_area, &mut self.levels_state);
+        self.panel_lines = panel_lines(panel_area, self.levels_state.offset(), self.levels.len());
     }
 
     /// Draw the nodes filter panel, with each node's stream problems
@@ -1752,6 +1764,7 @@ impl MultiLogsComponent {
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
         frame.render_stateful_widget(list, panel_area, &mut self.nodes_state);
+        self.panel_lines = panel_lines(panel_area, self.nodes_state.offset(), self.nodes.len());
     }
 
     /// Draw the logs area
@@ -2180,7 +2193,44 @@ impl MultiLogsComponent {
     }
 }
 
+/// Lines of a bordered floating panel listing entries `0..len` from `offset`
+fn panel_lines(area: Rect, offset: usize, len: usize) -> crate::ui_ext::LineHits<usize> {
+    let mut lines =
+        crate::ui_ext::LineHits::new(area.inner(ratatui::layout::Margin::new(1, 1)), offset);
+    for i in 0..len {
+        lines.push(Some(i));
+    }
+    lines
+}
+
 impl Component for MultiLogsComponent {
+    /// A click on an entry of the open panel selects and toggles it, like
+    /// Space
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        let Some(i) = self.panel_lines.clicked(&mouse) else {
+            return Ok(None);
+        };
+        match self.floating_pane {
+            FloatingPane::Services => {
+                self.selected_service = i;
+                self.sidebar_state.select(Some(i));
+                self.toggle_service(i);
+            }
+            FloatingPane::Levels => {
+                self.selected_level = i;
+                self.levels_state.select(Some(i));
+                self.toggle_level(i);
+            }
+            FloatingPane::Nodes => {
+                self.selected_node = i;
+                self.nodes_state.select(Some(i));
+                self.toggle_node(i);
+            }
+            FloatingPane::None => {}
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(self.key_hints_line())
     }
@@ -2633,6 +2683,7 @@ impl Component for MultiLogsComponent {
         self.draw_logs(frame, content_area);
 
         // Draw floating panel on top based on which pane is open
+        self.panel_lines = Default::default();
         match self.floating_pane {
             FloatingPane::Services => self.draw_services_panel(frame, content_area),
             FloatingPane::Levels => self.draw_levels_panel(frame, content_area),

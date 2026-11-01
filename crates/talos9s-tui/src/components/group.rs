@@ -20,7 +20,7 @@ use crate::components::diagnostics::{
 use crate::components::storage::StorageViewMode;
 use crate::ui_ext::CheckStatusExt;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -118,8 +118,8 @@ pub struct GroupComponent {
     kind: GroupKind,
     title: String,
     nodes: Vec<GroupNode>,
-    /// Where the table was drawn, for clicks on its rows
-    table_area: Rect,
+    /// Where the table's rows were drawn, for clicks
+    rows: crate::ui_ext::RowHits,
     client: Option<TalosClient>,
     /// talosctl context and talosconfig, for storage queries and diagnostics
     context: Option<String>,
@@ -262,7 +262,7 @@ impl GroupComponent {
             cp_endpoint,
             state,
             table_state,
-            table_area: Rect::default(),
+            rows: Default::default(),
             show_all: false,
         }
     }
@@ -877,22 +877,8 @@ impl Component for GroupComponent {
 
     /// A click on a table row selects it (a double-click then opens it)
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return Ok(None);
-        }
-        let area = self.table_area;
-        // Top border, header row and its margin come before the first row
-        let first_row = area.y + 3;
-        if mouse.column < area.x
-            || mouse.column >= area.x + area.width
-            || mouse.row < first_row
-            || mouse.row >= area.y + area.height
-        {
-            return Ok(None);
-        }
-        let index = (mouse.row - first_row) as usize + self.table_state.offset();
-        if index < self.row_nodes().len() {
-            self.table_state.select(Some(index));
+        if let Some(i) = self.rows.clicked(&mouse) {
+            self.table_state.select(Some(i));
         }
         Ok(None)
     }
@@ -987,8 +973,10 @@ impl Component for GroupComponent {
         if self.table_state.selected().unwrap_or(0) >= row_count {
             self.table_state.select(Some(row_count.saturating_sub(1)));
         }
-        self.table_area = table;
         frame.render_stateful_widget(table_widget, table, &mut self.table_state);
+        // Border, header and its margin come before the first row
+        self.rows =
+            crate::ui_ext::RowHits::new(table, true, 2, self.table_state.offset(), row_count);
         if !problems.is_empty() {
             frame.render_widget(
                 Paragraph::new(problems).block(

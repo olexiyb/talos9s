@@ -9,7 +9,7 @@ use crate::components::diagnostics::pki::{
     VolumeEncryption,
 };
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -45,6 +45,8 @@ pub struct SecurityComponent {
 
     /// Currently selected item index
     selected: usize,
+    /// Which drawn line shows which item, for clicks
+    lines: crate::ui_ext::LineHits<usize>,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -121,6 +123,7 @@ impl SecurityComponent {
         Self {
             state,
             selected: 0,
+            lines: Default::default(),
             auto_refresh: true,
             client: None,
             config_path,
@@ -608,6 +611,14 @@ fn cert_to_item(cert: &CertificateInfo) -> SecurityItem {
 }
 
 impl Component for SecurityComponent {
+    /// A click on a certificate selects it (headings aren't selectable)
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if let Some(i) = self.lines.clicked(&mouse) {
+            self.selected = i;
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(Line::from(vec![
             Span::styled("[↑↓]", Style::default().fg(Color::Yellow)),
@@ -682,6 +693,7 @@ impl Component for SecurityComponent {
         frame.render_widget(header, chunks[0]);
 
         // Content - render items or error/loading state
+        self.lines = Default::default();
         if self.state.is_loading() && !self.state.has_data() {
             let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, chunks[1]);
@@ -705,7 +717,7 @@ impl Component for SecurityComponent {
 }
 
 impl SecurityComponent {
-    fn render_items(&self, frame: &mut Frame, area: Rect) {
+    fn render_items(&mut self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Certificate Status ")
@@ -720,6 +732,7 @@ impl SecurityComponent {
         };
 
         let mut lines: Vec<Line> = Vec::new();
+        let mut hits = crate::ui_ext::LineHits::new(inner, 0);
 
         for (i, item) in data.items.iter().enumerate() {
             let is_selected = i == self.selected;
@@ -729,7 +742,9 @@ impl SecurityComponent {
                     // Section header - blank line before (except first)
                     if !lines.is_empty() {
                         lines.push(Line::from(""));
+                        hits.push(None);
                     }
+                    hits.push(None);
                     Line::from(Span::styled(
                         &item.name,
                         Style::default()
@@ -738,6 +753,7 @@ impl SecurityComponent {
                     ))
                 }
                 _ => {
+                    hits.push(Some(i));
                     let (indicator, color) = item.status.indicator();
                     let style = if is_selected {
                         Style::default().bg(Color::DarkGray)
@@ -766,6 +782,7 @@ impl SecurityComponent {
 
         let content = Paragraph::new(lines);
         frame.render_widget(content, inner);
+        self.lines = hits;
     }
 
     fn render_details(&self, frame: &mut Frame, area: Rect) {

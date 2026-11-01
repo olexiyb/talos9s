@@ -17,7 +17,7 @@ use crate::action::Action;
 use crate::components::Component;
 use crate::ui_ext::QuorumStateExt;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use k8s_openapi::serde_json::{self, Value};
 use ratatui::{
     Frame,
@@ -442,6 +442,8 @@ pub struct EtcdComponent {
 
     /// Table state for rendering (synced with members selection)
     table_state: TableState,
+    /// Where the rows were drawn, for clicks
+    rows: crate::ui_ext::RowHits,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -474,6 +476,7 @@ impl EtcdComponent {
         Self {
             state: AsyncState::new(),
             table_state,
+            rows: Default::default(),
             auto_refresh: true,
             client: None,
             context: None,
@@ -1045,6 +1048,7 @@ impl EtcdComponent {
             Constraint::Length(6),  // ERRORS
         ];
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .row_highlight_style(
@@ -1055,6 +1059,8 @@ impl EtcdComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
     }
 
     /// Draw the selected member's live etcd log, newest at the bottom
@@ -1181,6 +1187,17 @@ impl EtcdComponent {
 }
 
 impl Component for EtcdComponent {
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if let Some(i) = self.rows.clicked(&mouse) {
+            if let Some(data) = self.state.data_mut() {
+                data.members.select(i);
+            }
+            self.table_state.select(Some(i));
+            self.follow_selected_log();
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(self.key_hints_line())
     }

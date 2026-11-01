@@ -72,9 +72,13 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
   has the keyboard. Views draw no key line of their own. `Esc`/`q` go back
   (clearing a filter first).
 - `/` filters lists or searches text; `r` refreshes; Tab or 1-n switches tabs.
-- Clickable areas: record the `Rect`s drawn (tabs, table area) and hit-test
-  them in `handle_mouse_event`; table rows start 2 lines below the table's
-  top (border + header) plus `TableState::offset()`.
+- Clicks: every view gets left clicks through `handle_mouse_event`; a click
+  on a row selects it (a double-click arrives as `Enter`). Record rows with
+  `ui_ext::RowHits::new(area, bordered, header_lines, state.offset(), rows)`
+  right after rendering a table or list, and `ui_ext::LineHits` (one
+  `push` per drawn line) for lists drawn as text; then
+  `rows.clicked(&mouse)` gives the index. Other targets (tabs, column
+  headers) record their `Rect`s.
 - Widths: size to content where possible (see `nodes_pane_width`) instead of
   fixed percentages; never let one long error line set a pane's width.
 - Test drawing and clicks with `ratatui::backend::TestBackend`.

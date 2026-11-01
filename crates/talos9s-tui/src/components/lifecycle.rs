@@ -11,7 +11,7 @@ use crate::components::diagnostics::k8s::{
 use crate::reachability::prefer_reachable_addresses;
 use crate::ui_ext::HealthIndicatorExt;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use kube::Client;
 use ratatui::{
     Frame,
@@ -204,6 +204,8 @@ pub struct LifecycleComponent {
 
     /// Table state for rendering (synced with node_statuses selection)
     table_state: TableState,
+    /// Where the rows were drawn, for clicks
+    rows: crate::ui_ext::RowHits,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -243,6 +245,7 @@ impl LifecycleComponent {
         Self {
             state,
             table_state,
+            rows: Default::default(),
             auto_refresh: true,
             client: None,
             k8s_client: None,
@@ -854,6 +857,7 @@ impl LifecycleComponent {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
+        let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .block(block)
@@ -865,6 +869,8 @@ impl LifecycleComponent {
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, true, 1, self.table_state.offset(), row_count);
     }
 
     /// Draw the alerts section
@@ -1085,6 +1091,16 @@ impl LifecycleComponent {
 }
 
 impl Component for LifecycleComponent {
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if let Some(i) = self.rows.clicked(&mouse) {
+            if let Some(data) = self.data_mut() {
+                data.node_statuses.select(i);
+            }
+            self.table_state.select(Some(i));
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(self.key_hints_line())
     }
