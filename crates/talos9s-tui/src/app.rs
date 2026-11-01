@@ -2,6 +2,7 @@
 
 use crate::action::Action;
 use crate::components::BackgroundRefresh;
+use crate::components::cluster::{FocusedPane, NavMenuItem, PaneWidth};
 use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
 use crate::components::{
@@ -10,12 +11,19 @@ use crate::components::{
     NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent, SecurityComponent,
     StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
+use crate::components::{GroupKind, NodeInfoTab};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
-use std::time::Duration;
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Color, Style},
+    widgets::{Block, Borders, Paragraph},
+};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -105,18 +113,62 @@ enum View {
     NodeOperations,
     RollingOperations,
     Group,
+    /// A menu view with nothing to show for the selection (`App::hint`)
+    Hint,
+}
+
+/// How long the selection must rest before the view follows it, so moving
+/// through ten nodes loads one; logs restart streams, so they wait longer
+const FOLLOW_DELAY: Duration = Duration::from_millis(300);
+const FOLLOW_DELAY_LOGS: Duration = Duration::from_millis(500);
+/// Views kept for coming back to them
+const VIEW_CACHE_SIZE: usize = 4;
+
+/// A view put aside when another replaced it, by (view, selection)
+enum CachedView {
+    Network(Box<NetworkStatsComponent>),
+    Storage(Box<StorageComponent>),
+    NodeInfo(Box<NodeInfoComponent>),
+    Processes(Box<ProcessesComponent>),
+    Diagnostics(Box<DiagnosticsComponent>),
+    Group(Box<GroupComponent>),
+    Volumes(Box<VolumesComponent>),
+    Workloads(Box<WorkloadHealthComponent>),
+    Etcd(Box<EtcdComponent>),
+    Security(Box<SecurityComponent>),
+    Lifecycle(Box<LifecycleComponent>),
 }
 
 /// Main application state
 pub struct App {
     /// Whether the application should quit
     should_quit: bool,
-    /// Current view
+    /// Component shown on the right (or an operations overlay over everything)
     view: View,
-    /// View the logs screen was opened from, to go back to
-    logs_return: View,
-    /// A single-node view opened from a group view goes back to it
-    return_to_group: bool,
+    /// Menu entry the right side shows; `view` is the component realizing it
+    /// for the selection (e.g. Network is a node's or a group's view)
+    pane: NavMenuItem,
+    /// The keyboard is in the view on the right rather than the tree
+    view_has_focus: bool,
+    /// Nodes pane width chosen with `[` `]` `Z`; `None` fits it to the screen
+    pane_width: Option<PaneWidth>,
+    /// Width to return to when zoom is turned off
+    width_before_zoom: Option<Option<PaneWidth>>,
+    /// Selection the right side shows, and a newer one waiting out `FOLLOW_DELAY`
+    applied_target: String,
+    pending_target: Option<(String, Instant)>,
+    /// Why the menu view has nothing to show (`View::Hint`)
+    hint: Option<String>,
+    /// View under an operations overlay, shown again when it closes
+    overlay_return: View,
+    /// Nodes pane and view areas of the last frame, for the mouse
+    tree_area: Rect,
+    view_area: Rect,
+    /// Recently replaced views, oldest first
+    view_cache: Vec<(String, CachedView)>,
+    /// The key being handled opens a view from the menu or services list,
+    /// which then takes the keyboard
+    focus_after_show: bool,
     /// Cluster component
     cluster: ClusterComponent,
     /// Multi-service logs component (created when viewing logs)
@@ -199,8 +251,18 @@ impl App {
         Self {
             should_quit: false,
             view: View::Cluster,
-            logs_return: View::Cluster,
-            return_to_group: false,
+            pane: NavMenuItem::Dashboard,
+            view_has_focus: false,
+            pane_width: None,
+            width_before_zoom: None,
+            applied_target: String::new(),
+            pending_target: None,
+            hint: None,
+            overlay_return: View::Cluster,
+            tree_area: Rect::default(),
+            view_area: Rect::default(),
+            view_cache: Vec::new(),
+            focus_after_show: false,
             cluster: ClusterComponent::new(config_path.clone(), context),
             multi_logs: None,
             log_level_filter: crate::components::multi_logs::ALL_LEVELS,
@@ -602,85 +664,7 @@ impl App {
                 if area.width == 0 || area.height == 0 {
                     return;
                 }
-                match self.view {
-                    View::Cluster => {
-                        let _ = self.cluster.draw(frame, area);
-                    }
-                    View::MultiLogs => {
-                        if let Some(multi_logs) = &mut self.multi_logs {
-                            let _ = multi_logs.draw(frame, area);
-                        }
-                    }
-                    View::Etcd => {
-                        if let Some(etcd) = &mut self.etcd {
-                            let _ = etcd.draw(frame, area);
-                        }
-                    }
-                    View::Processes => {
-                        if let Some(processes) = &mut self.processes {
-                            let _ = processes.draw(frame, area);
-                        }
-                    }
-                    View::Network => {
-                        if let Some(network) = &mut self.network {
-                            let _ = network.draw(frame, area);
-                        }
-                    }
-                    View::Diagnostics => {
-                        if let Some(diagnostics) = &mut self.diagnostics {
-                            let _ = diagnostics.draw(frame, area);
-                        }
-                    }
-                    View::Security => {
-                        if let Some(security) = &mut self.security {
-                            let _ = security.draw(frame, area);
-                        }
-                    }
-                    View::Lifecycle => {
-                        if let Some(lifecycle) = &mut self.lifecycle {
-                            let _ = lifecycle.draw(frame, area);
-                        }
-                    }
-                    View::Workloads => {
-                        if let Some(workloads) = &mut self.workloads {
-                            let _ = workloads.draw(frame, area);
-                        }
-                    }
-                    View::Volumes => {
-                        if let Some(volumes) = &mut self.volumes {
-                            let _ = volumes.draw(frame, area);
-                        }
-                    }
-                    View::Storage => {
-                        if let Some(storage) = &mut self.storage {
-                            let _ = storage.draw(frame, area);
-                        }
-                    }
-                    View::NodeInfo => {
-                        if let Some(node_info) = &mut self.node_info {
-                            let _ = node_info.draw(frame, area);
-                        }
-                    }
-                    View::NodeOperations => {
-                        // Draw cluster in background, then overlay
-                        let _ = self.cluster.draw(frame, area);
-                        if let Some(node_ops) = &mut self.node_operations {
-                            let _ = node_ops.draw(frame, area);
-                        }
-                    }
-                    View::RollingOperations => {
-                        // Draw cluster in background, then overlay
-                        let _ = self.cluster.draw(frame, area);
-                        if let Some(rolling_ops) = &mut self.rolling_operations {
-                            let _ = rolling_ops.draw(frame, area);
-                        }
-                    }
-                    View::Group => {
-                        if let Some(group) = &mut self.group {
-                            let _ = group.draw(frame, area);
-                        }
-                    }
-                }
+                self.draw_workspace(frame, area);
             })?;
 
             // Handle events with timeout
@@ -695,6 +679,7 @@ impl App {
                         if let Some(action) = self.dispatch_key(key)? {
                             self.handle_action(action).await?;
                         }
+                        self.focus_after_show = false;
                     }
                     Event::Mouse(mouse) => {
                         if let Some(action) = self.dispatch_mouse(mouse)? {
@@ -720,6 +705,7 @@ impl App {
             // Check async results (non-blocking)
             self.poll_refresh_job();
             self.poll_view_setup();
+            self.follow_selection().await?;
 
             while let Ok(result) = self.action_rx.try_recv() {
                 match result {
@@ -815,10 +801,97 @@ impl App {
         }
     }
 
-    /// Route a key press to the component for the current view
+    /// Route a key press: overlays first, then the layout keys, then the
+    /// tree or the view on the right, whichever has the keyboard
     fn dispatch_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        if matches!(self.view, View::NodeOperations | View::RollingOperations) {
+            return self.dispatch_view_key(key);
+        }
+        if !self.view_captures_text() && self.layout_key(key) {
+            return Ok(None);
+        }
+        if self.view == View::Cluster || !self.view_has_focus {
+            return self.dispatch_tree_key(key);
+        }
+        self.dispatch_view_key(key)
+    }
+
+    /// `Z` zoom, `[` narrower and `]` wider nodes pane; true when handled
+    fn layout_key(&mut self, key: KeyEvent) -> bool {
+        let total = self.tree_area.width + self.view_area.width;
+        let (current, _) = self.cluster.resolve_pane_width(total, self.pane_width);
+        self.pane_width = match key.code {
+            KeyCode::Char('Z') if current == PaneWidth::Hidden => {
+                self.width_before_zoom.take().flatten()
+            }
+            KeyCode::Char('Z') => {
+                self.width_before_zoom = Some(self.pane_width);
+                Some(PaneWidth::Hidden)
+            }
+            KeyCode::Char('[') => Some(match current {
+                PaneWidth::Full => PaneWidth::Compact,
+                PaneWidth::Compact | PaneWidth::Hidden => PaneWidth::Hidden,
+            }),
+            KeyCode::Char(']') => Some(match current {
+                PaneWidth::Hidden => PaneWidth::Compact,
+                PaneWidth::Compact | PaneWidth::Full => PaneWidth::Full,
+            }),
+            _ => return false,
+        };
+        true
+    }
+
+    /// A view is taking typed text (a filter or search), so letters are its
+    fn view_captures_text(&self) -> bool {
+        match self.view {
+            View::MultiLogs => self.multi_logs.as_ref().is_some_and(|c| c.captures_text()),
+            View::Processes => self.processes.as_ref().is_some_and(|c| c.captures_text()),
+            View::Volumes => self.volumes.as_ref().is_some_and(|c| c.captures_text()),
+            View::NodeInfo => self.node_info.as_ref().is_some_and(|c| c.captures_text()),
+            _ => false,
+        }
+    }
+
+    /// Keys for the tree and menu. Where the dashboard has its services list,
+    /// Tab / Shift+Tab move into the view instead.
+    fn dispatch_tree_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        let pane = self.cluster.focused_pane();
+        if self.view != View::Cluster {
+            // Enter on any tree row (group rows too: Space folds them)
+            let into_view = match key.code {
+                KeyCode::Tab => pane == FocusedPane::Menu,
+                KeyCode::BackTab | KeyCode::Enter => pane == FocusedPane::Nodes,
+                _ => false,
+            };
+            if into_view {
+                self.focus_view();
+                return Ok(None);
+            }
+        }
+        self.focus_after_show =
+            key.code == KeyCode::Enter && matches!(pane, FocusedPane::Menu | FocusedPane::Services);
+        self.cluster.handle_key_event(key)
+    }
+
+    /// Give the keyboard to the view on the right (the dashboard's is its
+    /// services list)
+    fn focus_view(&mut self) {
+        if self.view == View::Cluster {
+            self.cluster.set_focused_pane(FocusedPane::Services);
+        } else {
+            self.view_has_focus = true;
+            self.cluster.set_focused_pane(FocusedPane::Nodes);
+        }
+    }
+
+    /// Route a key press to the component on the right (or the overlay)
+    fn dispatch_view_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         Ok(match self.view {
             View::Cluster => self.cluster.handle_key_event(key)?,
+            View::Hint => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Some(Action::Back),
+                _ => None,
+            },
             View::MultiLogs => {
                 if let Some(multi_logs) = &mut self.multi_logs {
                     multi_logs.handle_key_event(key)?
@@ -920,12 +993,29 @@ impl App {
         })
     }
 
-    /// Route a mouse event: the cluster and node info views handle clicks
-    /// and the wheel themselves; other views get the wheel as Up/Down key presses so lists and
-    /// logs scroll without per-component mouse code.
+    /// Route a mouse event to the pane under the pointer; a click also gives
+    /// that pane the keyboard. The tree, the dashboard and the node info view
+    /// handle the mouse themselves; other views get the wheel as Up/Down.
     fn dispatch_mouse(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        if self.view == View::Cluster {
+        let overlay = matches!(self.view, View::NodeOperations | View::RollingOperations);
+        let at = |r: Rect| {
+            mouse.column >= r.x
+                && mouse.column < r.x + r.width
+                && mouse.row >= r.y
+                && mouse.row < r.y + r.height
+        };
+        let click = matches!(mouse.kind, MouseEventKind::Down(_));
+        if !overlay && (self.view == View::Cluster || at(self.tree_area)) {
+            if click {
+                self.view_has_focus = false;
+            }
             return self.cluster.handle_mouse_event(mouse);
+        }
+        if !overlay && !at(self.view_area) {
+            return Ok(None);
+        }
+        if click && !overlay {
+            self.focus_view();
         }
         if self.view == View::NodeInfo
             && let Some(node_info) = &mut self.node_info
@@ -937,7 +1027,283 @@ impl App {
             MouseEventKind::ScrollDown => KeyCode::Down,
             _ => return Ok(None),
         };
-        self.dispatch_key(KeyEvent::new(code, KeyModifiers::NONE))
+        self.dispatch_view_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Header, nodes pane and key line from the cluster component, the
+    /// current view on the right, and an operations overlay on top
+    fn draw_workspace(&mut self, frame: &mut Frame, area: Rect) {
+        let overlay = matches!(self.view, View::NodeOperations | View::RollingOperations);
+        let base = if overlay {
+            self.overlay_return.clone()
+        } else {
+            self.view.clone()
+        };
+        let dashboard = base == View::Cluster;
+        let view_focused = self.view_has_focus && !dashboard && !overlay;
+        let (tree, right) =
+            self.cluster
+                .draw_frame(frame, area, self.pane_width, view_focused, dashboard);
+        self.tree_area = tree;
+        self.view_area = right;
+        macro_rules! draw {
+            ($slot:expr) => {
+                if let Some(c) = &mut $slot {
+                    let _ = c.draw(frame, right);
+                }
+            };
+        }
+        match base {
+            View::Cluster => self.cluster.draw_details_pane(frame, right),
+            View::Hint => {
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(format!(" {} ", self.pane.label()));
+                let text = Paragraph::new(format!("\n  {}", self.hint.as_deref().unwrap_or("")))
+                    .style(Style::default().fg(Color::DarkGray))
+                    .block(block);
+                frame.render_widget(text, right);
+            }
+            View::MultiLogs => draw!(self.multi_logs),
+            View::Etcd => draw!(self.etcd),
+            View::Processes => draw!(self.processes),
+            View::Network => draw!(self.network),
+            View::Diagnostics => draw!(self.diagnostics),
+            View::Security => draw!(self.security),
+            View::Lifecycle => draw!(self.lifecycle),
+            View::Workloads => draw!(self.workloads),
+            View::Volumes => draw!(self.volumes),
+            View::Storage => draw!(self.storage),
+            View::NodeInfo => draw!(self.node_info),
+            View::Group => draw!(self.group),
+            View::NodeOperations | View::RollingOperations => {}
+        }
+        match self.view {
+            View::NodeOperations => {
+                if let Some(c) = &mut self.node_operations {
+                    let _ = c.draw(frame, area);
+                }
+            }
+            View::RollingOperations => {
+                if let Some(c) = &mut self.rolling_operations {
+                    let _ = c.draw(frame, area);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Selection key of what the menu view `item` shows: cluster-wide views
+    /// change only with the cluster
+    fn scope_key(&self, item: NavMenuItem) -> String {
+        match item {
+            NavMenuItem::Etcd | NavMenuItem::Certs | NavMenuItem::Lifecycle => {
+                self.cluster.cluster_key()
+            }
+            _ => self.cluster.target_key(),
+        }
+    }
+
+    /// Bookkeeping once `view` shows menu entry `item` for the selection
+    fn show_in_pane(&mut self, item: NavMenuItem, view: View) {
+        self.pane = item;
+        self.view = view;
+        self.cluster.set_active_menu(item);
+        self.applied_target = self.scope_key(item);
+        self.pending_target = None;
+        if self.view == View::Cluster {
+            self.view_has_focus = false;
+        } else {
+            if self.cluster.focused_pane() == FocusedPane::Services {
+                self.cluster.set_focused_pane(FocusedPane::Nodes);
+            }
+            if std::mem::take(&mut self.focus_after_show) {
+                self.view_has_focus = true;
+            }
+        }
+    }
+
+    /// Close the view on the right before another replaces it: stop log
+    /// streams, keep settings that carry over, and cache the rest so coming
+    /// back shows it at once
+    fn leave_view(&mut self) {
+        self.cancel_refresh_job();
+        self.hint = None;
+        let key = format!("{:?}|{}", self.pane, self.applied_target);
+        let cached = match self.view {
+            View::MultiLogs => {
+                if let Some(mut logs) = self.multi_logs.take() {
+                    logs.stop_streaming();
+                    self.log_level_filter = logs.level_filter();
+                }
+                None
+            }
+            View::Volumes => self.volumes.take().map(|v| {
+                self.volumes_view_state = Some(v.view_state());
+                CachedView::Volumes(Box::new(v))
+            }),
+            View::Network => self
+                .network
+                .take()
+                .map(|c| CachedView::Network(Box::new(c))),
+            View::Storage => self
+                .storage
+                .take()
+                .map(|c| CachedView::Storage(Box::new(c))),
+            View::NodeInfo => self
+                .node_info
+                .take()
+                .map(|c| CachedView::NodeInfo(Box::new(c))),
+            View::Processes => self
+                .processes
+                .take()
+                .map(|c| CachedView::Processes(Box::new(c))),
+            View::Diagnostics => self
+                .diagnostics
+                .take()
+                .map(|c| CachedView::Diagnostics(Box::new(c))),
+            View::Group => self.group.take().map(|c| CachedView::Group(Box::new(c))),
+            View::Workloads => self
+                .workloads
+                .take()
+                .map(|c| CachedView::Workloads(Box::new(c))),
+            View::Etcd => self.etcd.take().map(|c| CachedView::Etcd(Box::new(c))),
+            View::Security => self
+                .security
+                .take()
+                .map(|c| CachedView::Security(Box::new(c))),
+            View::Lifecycle => self
+                .lifecycle
+                .take()
+                .map(|c| CachedView::Lifecycle(Box::new(c))),
+            _ => None,
+        };
+        if let Some(cached) = cached {
+            self.view_cache.retain(|(k, _)| *k != key);
+            self.view_cache.push((key, cached));
+            if self.view_cache.len() > VIEW_CACHE_SIZE {
+                self.view_cache.remove(0);
+            }
+        }
+    }
+
+    /// Show the view for the current selection once it has rested for
+    /// `FOLLOW_DELAY`
+    async fn follow_selection(&mut self) -> Result<()> {
+        if matches!(
+            self.view,
+            View::Cluster | View::NodeOperations | View::RollingOperations
+        ) {
+            return Ok(());
+        }
+        let key = self.scope_key(self.pane);
+        if key == self.applied_target {
+            self.pending_target = None;
+            return Ok(());
+        }
+        let now = Instant::now();
+        match &self.pending_target {
+            Some((pending, due)) if *pending == key => {
+                if now < *due {
+                    return Ok(());
+                }
+            }
+            _ => {
+                let delay = if self.pane == NavMenuItem::Logs {
+                    FOLLOW_DELAY_LOGS
+                } else {
+                    FOLLOW_DELAY
+                };
+                self.pending_target = Some((key, now + delay));
+                return Ok(());
+            }
+        }
+        self.pending_target = None;
+        self.retarget().await
+    }
+
+    /// Show the current menu view for the selection: from the cache when it
+    /// was shown recently (then refreshed), otherwise built anew
+    async fn retarget(&mut self) -> Result<()> {
+        // The node view keeps the tab the user switched to
+        let item = match (&self.view, &self.node_info) {
+            (View::NodeInfo, Some(n)) => match n.tab() {
+                NodeInfoTab::Containers => NavMenuItem::Containers,
+                NodeInfoTab::Config => NavMenuItem::Config,
+                NodeInfoTab::Extensions => NavMenuItem::Extensions,
+            },
+            _ => self.pane,
+        };
+        let key = format!("{:?}|{}", item, self.scope_key(item));
+        if self.view_cache.iter().any(|(k, _)| *k == key) {
+            self.leave_view();
+            if let Some(i) = self.view_cache.iter().position(|(k, _)| *k == key) {
+                let (_, cached) = self.view_cache.remove(i);
+                self.restore_view(item, cached);
+                return Box::pin(self.handle_action(Action::Refresh)).await;
+            }
+        }
+        match self.cluster.action_for(item) {
+            Some(action) => Box::pin(self.handle_action(action)).await,
+            None => {
+                self.leave_view();
+                self.hint = Some("Nothing to show for this selection".to_string());
+                self.show_in_pane(item, View::Hint);
+                Ok(())
+            }
+        }
+    }
+
+    /// Put a cached view back on the right
+    fn restore_view(&mut self, item: NavMenuItem, cached: CachedView) {
+        let view = match cached {
+            CachedView::Network(c) => {
+                self.network = Some(*c);
+                View::Network
+            }
+            CachedView::Storage(c) => {
+                self.storage = Some(*c);
+                View::Storage
+            }
+            CachedView::NodeInfo(c) => {
+                self.node_info = Some(*c);
+                View::NodeInfo
+            }
+            CachedView::Processes(c) => {
+                self.processes = Some(*c);
+                View::Processes
+            }
+            CachedView::Diagnostics(c) => {
+                self.diagnostics = Some(*c);
+                View::Diagnostics
+            }
+            CachedView::Group(c) => {
+                self.group = Some(*c);
+                View::Group
+            }
+            CachedView::Volumes(c) => {
+                self.volumes = Some(*c);
+                View::Volumes
+            }
+            CachedView::Workloads(c) => {
+                self.workloads = Some(*c);
+                View::Workloads
+            }
+            CachedView::Etcd(c) => {
+                self.etcd = Some(*c);
+                View::Etcd
+            }
+            CachedView::Security(c) => {
+                self.security = Some(*c);
+                View::Security
+            }
+            CachedView::Lifecycle(c) => {
+                self.lifecycle = Some(*c);
+                View::Lifecycle
+            }
+        };
+        self.show_in_pane(item, view);
     }
 
     async fn handle_action(&mut self, action: Action) -> Result<()> {
@@ -945,93 +1311,49 @@ impl App {
             Action::Quit => {
                 self.should_quit = true;
             }
-            Action::Back => {
-                match self.view {
-                    View::MultiLogs => {
-                        // Stop streaming if active
-                        if let Some(multi_logs) = &mut self.multi_logs {
-                            multi_logs.stop_streaming();
-                            self.log_level_filter = multi_logs.level_filter();
-                        }
-                        self.multi_logs = None;
-                    }
-                    View::Etcd => {
-                        self.etcd = None;
-                    }
-                    View::Processes => {
-                        self.processes = None;
-                    }
-                    View::Network => {
-                        self.network = None;
-                    }
-                    View::Diagnostics => {
-                        self.diagnostics = None;
-                    }
-                    View::Security => {
-                        self.security = None;
-                    }
-                    View::Lifecycle => {
-                        self.lifecycle = None;
-                    }
-                    View::Workloads => {
-                        self.workloads = None;
-                    }
-                    View::Volumes => {
-                        if let Some(volumes) = self.volumes.take() {
-                            self.volumes_view_state = Some(volumes.view_state());
-                        }
-                    }
-                    View::Storage => {
-                        self.storage = None;
-                    }
-                    View::NodeInfo => {
-                        self.node_info = None;
-                    }
-                    View::NodeOperations => {
-                        self.node_operations = None;
-                    }
-                    View::RollingOperations => {
-                        self.rolling_operations = None;
-                    }
-                    View::Group => {
-                        self.group = None;
-                    }
-                    View::Cluster => {}
+            Action::Back => match self.view {
+                // An overlay closes onto the view under it
+                View::NodeOperations => {
+                    self.node_operations = None;
+                    self.view = std::mem::replace(&mut self.overlay_return, View::Cluster);
                 }
-                // Logs go back to the view they were opened from, a node
-                // opened from a group view to the group (their components
-                // are still there), everything else to the cluster
-                let from_group =
-                    matches!(self.view, View::Diagnostics | View::Storage | View::Network)
-                        && std::mem::take(&mut self.return_to_group)
-                        && self.group.is_some();
-                self.view = if self.view == View::MultiLogs {
-                    std::mem::replace(&mut self.logs_return, View::Cluster)
-                } else if from_group {
-                    View::Group
-                } else {
-                    View::Cluster
-                };
+                View::RollingOperations => {
+                    self.rolling_operations = None;
+                    self.view = std::mem::replace(&mut self.overlay_return, View::Cluster);
+                }
+                // A view hands the keyboard back to the tree and stays shown
+                _ => self.view_has_focus = false,
+            },
+            Action::ShowDashboard => {
+                if self.view != View::Cluster {
+                    self.leave_view();
+                    self.show_in_pane(NavMenuItem::Dashboard, View::Cluster);
+                }
             }
+            Action::ShowHint(item, message) => {
+                self.leave_view();
+                self.hint = Some(message);
+                self.show_in_pane(item, View::Hint);
+            }
+            Action::FocusView => self.focus_view(),
             Action::Tick => {
-                // Update animations, etc.
+                // The tree stays on screen with every view: keep it current
+                if let Some(next_action) = self.cluster.update(Action::Tick)? {
+                    Box::pin(self.handle_action(next_action)).await?;
+                }
+                // Rebuild the node list in the background so nodes that
+                // went away (e.g. rebooted) come back without pressing r
+                self.cluster.apply_background_refresh();
+                self.cluster.start_background_refresh();
+                self.cluster.poll_network_info();
+                // Auto-refresh selected node stats every 5 seconds, in
+                // the background so a struggling node can't freeze the UI
+                self.cluster.poll_selected_node_refresh();
+                if self.cluster.should_auto_refresh() {
+                    self.cluster.refresh_selected_node();
+                }
                 match self.view {
-                    View::Cluster => {
-                        if let Some(next_action) = self.cluster.update(Action::Tick)? {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                        // Rebuild the node list in the background so nodes that
-                        // went away (e.g. rebooted) come back without pressing r
-                        self.cluster.apply_background_refresh();
-                        self.cluster.start_background_refresh();
-                        self.cluster.poll_network_info();
-                        // Auto-refresh selected node stats every 5 seconds, in
-                        // the background so a struggling node can't freeze the UI
-                        self.cluster.poll_selected_node_refresh();
-                        if self.cluster.should_auto_refresh() {
-                            self.cluster.refresh_selected_node();
-                        }
-                    }
+                    View::Cluster | View::Hint => {}
                     View::MultiLogs => {
                         if let Some(multi_logs) = &mut self.multi_logs
                             && let Some(next_action) = multi_logs.update(Action::Tick)?
@@ -1243,7 +1565,7 @@ impl App {
                             node_ops.refresh();
                         }
                     }
-                    View::RollingOperations => {
+                    View::RollingOperations | View::Hint => {
                         // Rolling operations doesn't have a refresh method
                     }
                     View::Group => {
@@ -1266,9 +1588,7 @@ impl App {
             }
             Action::ShowMultiLogs(title, subtitle, nodes, active_services, all_services) => {
                 tracing::info!("Viewing logs of {} ({} nodes)", title, nodes.len());
-                if self.view != View::MultiLogs {
-                    self.logs_return = self.view.clone();
-                }
+                self.leave_view();
 
                 // Create multi-logs component with all services, marking active ones
                 let mut multi_logs =
@@ -1286,14 +1606,17 @@ impl App {
                 }
 
                 self.multi_logs = Some(multi_logs);
-                self.view = View::MultiLogs;
+                self.show_in_pane(NavMenuItem::Logs, View::MultiLogs);
             }
             Action::ShowNodeDetails(_, _) => {
                 // Legacy - no longer used, we use ShowMultiLogs now
             }
             Action::ShowDiagnostics(hostname, address, role, cp_endpoint) => {
-                self.return_to_group = self.view == View::Group;
-                self.cancel_refresh_job();
+                // A node opened from a group view: the tree follows
+                if self.view == View::Group {
+                    self.cluster.select_node(&hostname);
+                }
+                self.leave_view();
                 // Switch to diagnostics view for a node
                 tracing::info!(
                     "ShowDiagnostics: hostname='{}', address='{}', role='{}', cp_endpoint={:?}",
@@ -1325,7 +1648,7 @@ impl App {
                 }
 
                 self.diagnostics = Some(diagnostics);
-                self.view = View::Diagnostics;
+                self.show_in_pane(NavMenuItem::Diagnostics, View::Diagnostics);
             }
             Action::ApplyDiagnosticFix => {
                 // Apply a diagnostic fix (from confirmation dialog)
@@ -1347,7 +1670,7 @@ impl App {
                 }
             }
             Action::ShowEtcd => {
-                self.cancel_refresh_job();
+                self.leave_view();
                 // Switch to etcd status view
                 tracing::info!("Viewing etcd cluster status");
 
@@ -1365,10 +1688,10 @@ impl App {
                 self.refresh_job = Some(RefreshJob::Etcd(spawn_refresh!(etcd)));
 
                 self.etcd = Some(etcd);
-                self.view = View::Etcd;
+                self.show_in_pane(NavMenuItem::Etcd, View::Etcd);
             }
             Action::ShowProcesses(title, nodes) => {
-                self.cancel_refresh_job();
+                self.leave_view();
                 tracing::info!("ShowProcesses: '{}' ({} node(s))", title, nodes.len());
 
                 let mut processes = ProcessesComponent::new(title, nodes);
@@ -1383,10 +1706,13 @@ impl App {
                 }
 
                 self.processes = Some(processes);
-                self.view = View::Processes;
+                self.show_in_pane(NavMenuItem::Processes, View::Processes);
             }
             Action::ShowNetwork(hostname, address) => {
-                self.return_to_group = self.view == View::Group;
+                if self.view == View::Group {
+                    self.cluster.select_node(&hostname);
+                }
+                self.leave_view();
                 // Switch to network stats view for a node
                 tracing::info!(
                     "ShowNetwork: hostname='{}', address='{}'",
@@ -1411,10 +1737,10 @@ impl App {
                 }
 
                 self.network = Some(network);
-                self.view = View::Network;
+                self.show_in_pane(NavMenuItem::Network, View::Network);
             }
             Action::ShowSecurity => {
-                self.cancel_refresh_job();
+                self.leave_view();
                 // Switch to security/certificates view
                 tracing::info!("Viewing security/certificates");
 
@@ -1435,10 +1761,10 @@ impl App {
                 self.refresh_job = Some(RefreshJob::Security(spawn_refresh!(security)));
 
                 self.security = Some(security);
-                self.view = View::Security;
+                self.show_in_pane(NavMenuItem::Certs, View::Security);
             }
             Action::ShowLifecycle => {
-                self.cancel_refresh_job();
+                self.leave_view();
                 // Switch to lifecycle/version view
                 tracing::info!("Viewing lifecycle/versions");
 
@@ -1459,10 +1785,10 @@ impl App {
                 self.refresh_job = Some(RefreshJob::Lifecycle(spawn_refresh!(lifecycle)));
 
                 self.lifecycle = Some(lifecycle);
-                self.view = View::Lifecycle;
+                self.show_in_pane(NavMenuItem::Lifecycle, View::Lifecycle);
             }
             Action::ShowWorkloads(title, nodes) => {
-                self.cancel_refresh_job();
+                self.leave_view();
                 tracing::info!(
                     "ShowWorkloads: '{}' ({})",
                     title,
@@ -1487,10 +1813,10 @@ impl App {
                 }
 
                 self.workloads = Some(workloads);
-                self.view = View::Workloads;
+                self.show_in_pane(NavMenuItem::Workloads, View::Workloads);
             }
             Action::ShowVolumes(title, nodes) => {
-                self.cancel_refresh_job();
+                self.leave_view();
                 tracing::info!("ShowVolumes: '{}'", title);
 
                 let mut volumes = VolumesComponent::new(title, nodes);
@@ -1513,10 +1839,15 @@ impl App {
                 }
 
                 self.volumes = Some(volumes);
-                self.view = View::Volumes;
+                self.show_in_pane(NavMenuItem::Volumes, View::Volumes);
             }
             Action::ShowGroup(kind, title, nodes, cp_endpoint) => {
-                self.cancel_refresh_job();
+                self.leave_view();
+                let item = match kind {
+                    GroupKind::Network => NavMenuItem::Network,
+                    GroupKind::Storage => NavMenuItem::Storage,
+                    GroupKind::Diagnostics => NavMenuItem::Diagnostics,
+                };
                 tracing::info!(
                     "ShowGroup: {:?} of '{}' ({} node(s))",
                     kind,
@@ -1537,11 +1868,13 @@ impl App {
                 }
                 self.refresh_job = Some(RefreshJob::Group(spawn_refresh!(group)));
                 self.group = Some(group);
-                self.view = View::Group;
+                self.show_in_pane(item, View::Group);
             }
             Action::ShowStorage(hostname, address) => {
-                self.return_to_group = self.view == View::Group;
-                self.cancel_refresh_job();
+                if self.view == View::Group {
+                    self.cluster.select_node(&hostname);
+                }
+                self.leave_view();
                 // Switch to storage view for a node
                 tracing::info!(
                     "ShowStorage: hostname='{}', address='{}'",
@@ -1566,10 +1899,15 @@ impl App {
                 }
 
                 self.storage = Some(storage);
-                self.view = View::Storage;
+                self.show_in_pane(NavMenuItem::Storage, View::Storage);
             }
             Action::ShowNodeInfo(hostname, address, tab) => {
-                self.cancel_refresh_job();
+                self.leave_view();
+                let item = match tab {
+                    NodeInfoTab::Containers => NavMenuItem::Containers,
+                    NodeInfoTab::Config => NavMenuItem::Config,
+                    NodeInfoTab::Extensions => NavMenuItem::Extensions,
+                };
                 let context = self.cluster.current_context_name().map(|s| s.to_string());
                 let config_path = self.cluster.config_path().map(|s| s.to_string());
                 let mut node_info =
@@ -1581,7 +1919,7 @@ impl App {
                     node_info.set_error("No Talos client configured".to_string());
                 }
                 self.node_info = Some(node_info);
-                self.view = View::NodeInfo;
+                self.show_in_pane(item, View::NodeInfo);
             }
             Action::ShowNodeOperations(hostname, address, is_controlplane) => {
                 // Show node operations overlay
@@ -1599,6 +1937,9 @@ impl App {
                 node_ops.refresh();
 
                 self.node_operations = Some(node_ops);
+                if !matches!(self.view, View::NodeOperations | View::RollingOperations) {
+                    self.overlay_return = self.view.clone();
+                }
                 self.view = View::NodeOperations;
             }
             Action::ShowRollingOperations(nodes) => {
@@ -1654,11 +1995,15 @@ impl App {
                 }
 
                 self.rolling_operations = Some(rolling_ops);
+                if !matches!(self.view, View::NodeOperations | View::RollingOperations) {
+                    self.overlay_return = self.view.clone();
+                }
                 self.view = View::RollingOperations;
             }
             _ => {
                 // Forward to current component
                 match self.view {
+                    View::Hint => {}
                     View::Cluster => {
                         if let Some(next_action) = self.cluster.update(action)? {
                             Box::pin(self.handle_action(next_action)).await?;
@@ -1766,5 +2111,85 @@ impl App {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_with_view(view: View) -> App {
+        App {
+            view,
+            tree_area: Rect::new(0, 2, 30, 40),
+            view_area: Rect::new(30, 2, 170, 40),
+            ..Default::default()
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn layout_keys_zoom_and_step_the_pane_width() {
+        let mut app = app_with_view(View::Hint);
+        assert!(app.layout_key(key(KeyCode::Char('Z'))));
+        assert_eq!(app.pane_width, Some(PaneWidth::Hidden));
+        assert!(app.layout_key(key(KeyCode::Char('Z'))));
+        assert_eq!(app.pane_width, None);
+
+        assert!(app.layout_key(key(KeyCode::Char('['))));
+        assert_eq!(app.pane_width, Some(PaneWidth::Compact));
+        assert!(app.layout_key(key(KeyCode::Char('['))));
+        assert_eq!(app.pane_width, Some(PaneWidth::Hidden));
+        assert!(app.layout_key(key(KeyCode::Char(']'))));
+        assert_eq!(app.pane_width, Some(PaneWidth::Compact));
+        assert!(app.layout_key(key(KeyCode::Char(']'))));
+        assert_eq!(app.pane_width, Some(PaneWidth::Full));
+        assert!(!app.layout_key(key(KeyCode::Char('n'))));
+    }
+
+    /// Enter in the tree gives the view the keyboard; Esc in the view hands
+    /// it back without closing the view
+    #[tokio::test]
+    async fn focus_moves_between_tree_and_view() {
+        let mut app = app_with_view(View::Hint);
+        app.cluster.set_focused_pane(FocusedPane::Nodes);
+        assert!(app.dispatch_key(key(KeyCode::Enter)).unwrap().is_none());
+        assert!(app.view_has_focus);
+
+        let action = app.dispatch_key(key(KeyCode::Esc)).unwrap();
+        assert!(matches!(action, Some(Action::Back)));
+        app.handle_action(Action::Back).await.unwrap();
+        assert!(!app.view_has_focus);
+        assert_eq!(app.view, View::Hint);
+
+        // Tab from the menu goes into the view too
+        app.cluster.set_focused_pane(FocusedPane::Menu);
+        assert!(app.dispatch_key(key(KeyCode::Tab)).unwrap().is_none());
+        assert!(app.view_has_focus);
+    }
+
+    /// Esc in the tree returns to the dashboard; a hint shows its reason
+    #[tokio::test]
+    async fn dashboard_and_hints() {
+        let mut app = app_with_view(View::Cluster);
+        app.handle_action(Action::ShowHint(
+            NavMenuItem::Containers,
+            "Select a node".to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(app.view, View::Hint);
+        assert_eq!(app.pane, NavMenuItem::Containers);
+        assert_eq!(app.hint.as_deref(), Some("Select a node"));
+
+        let action = app.dispatch_key(key(KeyCode::Esc)).unwrap();
+        assert!(matches!(action, Some(Action::ShowDashboard)));
+        app.handle_action(Action::ShowDashboard).await.unwrap();
+        assert_eq!(app.view, View::Cluster);
+        assert_eq!(app.pane, NavMenuItem::Dashboard);
+        assert_eq!(app.hint, None);
     }
 }

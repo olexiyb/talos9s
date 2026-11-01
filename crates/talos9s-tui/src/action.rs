@@ -69,6 +69,12 @@ pub enum Action {
     /// Containers, machine config or extensions of a node: (hostname,
     /// address, tab to open)
     ShowNodeInfo(String, String, crate::components::NodeInfoTab),
+    /// The dashboard (cluster and node details) on the right
+    ShowDashboard,
+    /// A menu view that has nothing to show for the selection, with why
+    ShowHint(crate::components::cluster::NavMenuItem, String),
+    /// Move the keyboard from the tree into the view on the right
+    FocusView,
     /// Show node operations overlay: (hostname, address, is_controlplane)
     ShowNodeOperations(String, String, bool),
     /// Show rolling operations overlay with node list: Vec<(hostname, address, is_controlplane)>

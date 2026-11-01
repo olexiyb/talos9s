@@ -67,6 +67,12 @@ pub trait Component {
         Ok(None)
     }
 
+    /// Whether the component is taking typed text (a filter or search box),
+    /// so keys the app would otherwise use (layout keys) belong to it
+    fn captures_text(&self) -> bool {
+        false
+    }
+
     /// Update the component state based on an action
     fn update(&mut self, action: Action) -> Result<Option<Action>>;
 

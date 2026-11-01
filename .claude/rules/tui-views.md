@@ -24,6 +24,27 @@ paths:
 - Show a loading message for each part until its data arrives (an empty table
   looks like "no data"); load what the open tab needs first.
 
+## The workspace
+
+`app.rs` draws one screen: `ClusterComponent::draw_frame` (header, nodes pane
+at `PaneWidth` Full/Compact/Hidden, key line) and the current view in the
+area it returns. `App::pane` is the menu entry shown, `App::view` the
+component realizing it for the selection (Network is `View::Network` on a
+node, `View::Group` on a group). Overlays (operations) draw over everything.
+
+- **Focus:** the tree or the view (`view_has_focus`). Keys go to the focused
+  side only, so views keep their letters; a component's `Action::Back` hands
+  focus back to the tree (the view stays). Layout keys `Z` `[` `]` work in
+  both unless the view `captures_text()` (implement it for filter/search
+  inputs).
+- **Following the selection:** `follow_selection` compares
+  `scope_key(pane)` (cluster-wide views use `cluster_key`) with
+  `applied_target`, waits `FOLLOW_DELAY` (logs longer), then `retarget`s via
+  `ClusterComponent::action_for(item)`.
+- **Leaving a view:** every `Show…` handler calls `leave_view()` first (stops
+  log streams, keeps settings that carry over, caches the component by
+  (pane, target)) and ends with `show_in_pane(item, View::…)`.
+
 ## Wiring a new view (all of these, or it silently does nothing)
 
 1. `action.rs`: a `Show…` variant with what the view needs (hostname, address, tab).
@@ -31,16 +52,17 @@ paths:
 3. `app.rs`:
    - import; `View::…`; `Option<…Component>` field, `None` in `new`
    - `RefreshJob::…` + its arms in `is_finished`, `abort`, `finish!`
-   - draw arm, key dispatch arm, `update(action)` dispatch arm
-   - `Action::Back`: drop the component
+   - `draw_workspace` arm, `dispatch_view_key` arm, `update(action)` arm
    - `Action::Tick` arm (component `update(Tick)`), `Action::Refresh` arm
      (start `spawn_refresh!` only when `refresh_job.is_none()`)
-   - the `Show…` handler: build the component, set the node client
-     (`client.with_node(&address)`), start the first refresh, set the view
+   - the `Show…` handler: `leave_view()`, build the component, set the node
+     client (`client.with_node(&address)`), start the first refresh,
+     `show_in_pane(item, View::…)`
+   - `leave_view` / `CachedView` / `restore_view` arms to cache it
    - `dispatch_mouse` if the view handles clicks (otherwise the wheel arrives
      as Up/Down keys)
-4. `cluster.rs`: hotkey in the key handler and, for menu entries, `NavMenuItem`
-   (`ALL`, `label` with the full name, `hotkey`, `navigate_to_selected_menu`).
+4. `cluster.rs`: a `NavMenuItem` (`ALL`, `label` with the full name,
+   `hotkey`) and its arm in `action_for` (hotkeys come from `hotkey`).
 5. README: the feature row and the key binding.
 
 ## Conventions

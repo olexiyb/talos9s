@@ -97,7 +97,16 @@ talos9s --insecure --endpoint <node-ip>
 
 ## Features
 
-### Cluster overview
+### One workspace
+
+The cluster tree and the menu stay on the left; the chosen view fills the
+right side for whatever is selected. Move the selection and the view follows
+(a node's network, then the next node's, or the whole group's on a group
+row); pick another menu entry and the selection stays. Recently shown views
+come back instantly. `[` / `]` narrow or widen the left pane, `Z` zooms the
+view to the full width.
+
+### Cluster overview (Dashboard)
 
 - All contexts at once, each with its control plane and workers, node health
   and etcd quorum.
@@ -168,10 +177,12 @@ written to the audit log.
 
 ## Keys
 
-In the cluster view (most also work from the left menu, and with the mouse):
+In the tree (each key switches the view on the right; the left menu and the
+mouse do the same):
 
 | Key | On a node | On a cluster, control plane or workers row |
 |---|---|---|
+| `D` | Dashboard: node details | Dashboard: cluster or group summary |
 | `l` / `L` | Logs | Logs merged across the nodes |
 | `n` | Network | Network of every node |
 | `s` | Storage | Storage of every node |
@@ -183,9 +194,16 @@ In the cluster view (most also work from the left menu, and with the mouse):
 | `e` `y` `c` | etcd, lifecycle, security (cluster-wide) | same |
 | `O` | Rolling operations | Rolling operations |
 
-General: `j`/`k` or arrows move, `Enter` opens, `Space` folds, `Tab` switches
-panes, `r` refreshes, `a` toggles auto-refresh, `/` filters or searches,
-`Esc` goes back, `q` quits. Each view lists its own keys in its footer.
+Moving around:
+
+- `j`/`k` or arrows move the selection; the view follows after a moment.
+- `Enter` (or `Tab` from the menu, or a click) puts the keyboard in the view;
+  `Esc` gives it back to the tree (after closing the view's own filter or
+  search). In the tree, `Esc` returns to the Dashboard.
+- `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,
+  `q` quits (`Ctrl+C` from anywhere).
+- `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
+- Inside a view, `/` filters or searches and its footer lists its keys.
 
 ## Safety
 

@@ -2079,6 +2079,10 @@ fn parse_kernel_line(line: &str) -> Option<(&str, LogLevel, String)> {
 }
 
 impl Component for MultiLogsComponent {
+    fn captures_text(&self) -> bool {
+        self.search_mode == SearchMode::Input
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle search input mode
         if self.search_mode == SearchMode::Input {

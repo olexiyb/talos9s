@@ -1056,6 +1056,10 @@ fn nodes_line(row: &VolumeRow) -> Line<'static> {
 }
 
 impl Component for VolumesComponent {
+    fn captures_text(&self) -> bool {
+        self.filter_editing
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.filter_editing {
             match key.code {

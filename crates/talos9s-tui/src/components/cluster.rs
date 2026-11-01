@@ -63,9 +63,27 @@ pub enum FocusedPane {
 /// Narrowest the nodes pane gets, so a short list keeps its look
 const NODES_PANE_MIN_WIDTH: u16 = 30;
 
-/// Navigation menu items for quick screen access
+/// Width of the nodes pane on the left of the workspace
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneWidth {
+    /// Sized to the node list and menu
+    Full,
+    /// Node names and menu keys only
+    Compact,
+    /// Not shown: the view gets the whole width
+    Hidden,
+}
+
+/// The compact nodes pane: about the longest node name, within these bounds
+const COMPACT_PANE_MIN_WIDTH: u16 = 14;
+const COMPACT_PANE_MAX_WIDTH: u16 = 22;
+/// Columns the view keeps before the nodes pane turns compact on its own
+const VIEW_MIN_WIDTH: u16 = 100;
+
+/// Navigation menu items for quick screen access
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NavMenuItem {
+    Dashboard,
     Logs,
     Etcd,
     Network,
@@ -82,7 +100,8 @@ pub enum NavMenuItem {
 }
 
 impl NavMenuItem {
-    const ALL: [NavMenuItem; 13] = [
+    pub const ALL: [NavMenuItem; 14] = [
+        NavMenuItem::Dashboard,
         NavMenuItem::Logs,
         NavMenuItem::Etcd,
         NavMenuItem::Network,
@@ -98,8 +117,9 @@ impl NavMenuItem {
         NavMenuItem::Extensions,
     ];
 
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
+            NavMenuItem::Dashboard => "Dashboard",
             NavMenuItem::Logs => "Logs",
             NavMenuItem::Etcd => "etcd",
             NavMenuItem::Network => "Network",
@@ -118,6 +138,7 @@ impl NavMenuItem {
 
     fn hotkey(&self) -> &'static str {
         match self {
+            NavMenuItem::Dashboard => "D",
             NavMenuItem::Logs => "L",
             NavMenuItem::Etcd => "e",
             NavMenuItem::Network => "n",
@@ -894,6 +915,8 @@ pub struct ClusterComponent {
     node_stats_fetch: Option<tokio::task::JoinHandle<NodeStatsFetch>>,
     /// Screen regions from the last draw, for mapping mouse clicks
     hits: std::cell::RefCell<HitMap>,
+    /// The view on the right has the keyboard, not the tree (set per draw)
+    view_focused: bool,
 }
 
 /// Where clickable things were drawn on the last frame
@@ -1306,6 +1329,7 @@ impl ClusterComponent {
             clock_info: HashMap::new(),
             node_stats_fetch: None,
             hits: std::cell::RefCell::new(HitMap::default()),
+            view_focused: false,
         }
     }
 
@@ -2405,22 +2429,251 @@ impl ClusterComponent {
         if self.selected_menu_item == 0 || self.selected_menu_item > NavMenuItem::ALL.len() {
             return Ok(None);
         }
-        let menu_item = NavMenuItem::ALL[self.selected_menu_item - 1];
-        match menu_item {
-            NavMenuItem::Logs => Ok(self.logs_action(None)),
-            NavMenuItem::Etcd => Ok(Some(Action::ShowEtcd)),
-            NavMenuItem::Network => Ok(self.network_action()),
-            NavMenuItem::Storage => Ok(self.storage_action()),
-            NavMenuItem::Processes => Ok(self.processes_action()),
-            NavMenuItem::Diagnostics => Ok(self.diagnostics_action()),
-            NavMenuItem::Certs => Ok(Some(Action::ShowSecurity)),
-            NavMenuItem::Lifecycle => Ok(Some(Action::ShowLifecycle)),
-            NavMenuItem::Workloads => Ok(Some(self.workloads_action())),
-            NavMenuItem::Volumes => Ok(Some(self.volumes_action())),
-            NavMenuItem::Containers => Ok(self.node_info_action(NodeInfoTab::Containers)),
-            NavMenuItem::Config => Ok(self.node_info_action(NodeInfoTab::Config)),
-            NavMenuItem::Extensions => Ok(self.node_info_action(NodeInfoTab::Extensions)),
+        Ok(self.action_for(NavMenuItem::ALL[self.selected_menu_item - 1]))
+    }
+
+    /// The view a menu item shows for the current selection. Views of a
+    /// single node give a hint on a group instead of nothing.
+    pub fn action_for(&self, item: NavMenuItem) -> Option<Action> {
+        let node_only = |tab| {
+            self.node_info_action(tab).or_else(|| {
+                Some(Action::ShowHint(
+                    item,
+                    format!("Select a node to see its {}", item.label().to_lowercase()),
+                ))
+            })
+        };
+        match item {
+            NavMenuItem::Dashboard => Some(Action::ShowDashboard),
+            NavMenuItem::Logs => self.logs_action(None),
+            NavMenuItem::Etcd => Some(Action::ShowEtcd),
+            NavMenuItem::Network => self.network_action(),
+            NavMenuItem::Storage => self.storage_action(),
+            NavMenuItem::Processes => self.processes_action(),
+            NavMenuItem::Diagnostics => self.diagnostics_action(),
+            NavMenuItem::Certs => Some(Action::ShowSecurity),
+            NavMenuItem::Lifecycle => Some(Action::ShowLifecycle),
+            NavMenuItem::Workloads => Some(self.workloads_action()),
+            NavMenuItem::Volumes => Some(self.volumes_action()),
+            NavMenuItem::Containers => node_only(NodeInfoTab::Containers),
+            NavMenuItem::Config => node_only(NodeInfoTab::Config),
+            NavMenuItem::Extensions => node_only(NodeInfoTab::Extensions),
         }
+    }
+
+    /// Identity of the selected tree row (cluster, group or node), for
+    /// following the selection
+    pub fn target_key(&self) -> String {
+        let cluster = self.cluster_key();
+        match &self.selected_item {
+            NodeListItem::ClusterHeader(_) => cluster,
+            NodeListItem::ControlPlaneHeader(_) => format!("{cluster}/control-plane"),
+            NodeListItem::WorkersHeader(_) => format!("{cluster}/workers"),
+            NodeListItem::ControlPlaneNode(..) | NodeListItem::WorkerNode(..) => {
+                format!("{cluster}/{}", self.current_node_name().unwrap_or_default())
+            }
+        }
+    }
+
+    /// Name of the cluster the selection belongs to
+    pub fn cluster_key(&self) -> String {
+        let idx = self.selected_cluster_index().unwrap_or(self.active_cluster);
+        self.clusters
+            .get(idx)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// Select the node named `name` in the active cluster (e.g. opened from
+    /// a group view), unfolding its group; false when it isn't listed
+    pub fn select_node(&mut self, name: &str) -> bool {
+        let idx = self.active_cluster;
+        let cp = self
+            .controlplane_nodes_for(idx)
+            .iter()
+            .position(|(_, v)| v.node == name);
+        let workers = self
+            .worker_nodes_for(idx)
+            .iter()
+            .position(|(_, v)| v.node == name);
+        let (item, cp_group) = match (cp, workers) {
+            (Some(i), _) => (NodeListItem::ControlPlaneNode(idx, i), true),
+            (None, Some(i)) => (NodeListItem::WorkerNode(idx, i), false),
+            _ => return false,
+        };
+        if let Some(cluster) = self.clusters.get_mut(idx) {
+            cluster.expanded = true;
+            if cp_group {
+                cluster.controlplane_expanded = true;
+            } else {
+                cluster.workers_expanded = true;
+            }
+        }
+        self.selected_item = item;
+        true
+    }
+
+    pub fn focused_pane(&self) -> FocusedPane {
+        self.focused_pane
+    }
+
+    pub fn set_focused_pane(&mut self, pane: FocusedPane) {
+        self.focused_pane = pane;
+    }
+
+    /// Mark `item` as the view shown on the right
+    pub fn set_active_menu(&mut self, item: NavMenuItem) {
+        if let Some(i) = NavMenuItem::ALL.iter().position(|m| *m == item) {
+            self.selected_menu_item = i + 1;
+        }
+    }
+
+    /// The nodes pane's mode and width for a content area `total` columns
+    /// wide; `None` picks Full when the view keeps `VIEW_MIN_WIDTH`
+    pub fn resolve_pane_width(&self, total: u16, choice: Option<PaneWidth>) -> (PaneWidth, u16) {
+        // As wide as its content, at most 40%: the view needs the room more
+        let full = self
+            .nodes_pane_width()
+            .min(total * 2 / 5)
+            .max(NODES_PANE_MIN_WIDTH.min(total));
+        let mode = choice.unwrap_or(if total.saturating_sub(full) >= VIEW_MIN_WIDTH {
+            PaneWidth::Full
+        } else {
+            PaneWidth::Compact
+        });
+        let width = match mode {
+            PaneWidth::Full => full,
+            PaneWidth::Compact => self.compact_pane_width().min(total),
+            PaneWidth::Hidden => 0,
+        };
+        (mode, width)
+    }
+
+    /// Indent, selector and health dot, then the longest node name
+    fn compact_pane_width(&self) -> u16 {
+        let longest = self
+            .clusters
+            .iter()
+            .flat_map(|c| c.versions.iter().map(|v| v.node.chars().count()))
+            .max()
+            .unwrap_or(0);
+        (longest as u16 + 11).clamp(COMPACT_PANE_MIN_WIDTH, COMPACT_PANE_MAX_WIDTH)
+    }
+
+    /// Draw the header, the nodes pane at `width` and the bottom key line,
+    /// and return the nodes pane's and the view's areas. `dashboard`: the
+    /// details pane will be drawn in the view's area (mouse hits stay valid).
+    pub fn draw_frame(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        width: Option<PaneWidth>,
+        view_focused: bool,
+        dashboard: bool,
+    ) -> (Rect, Rect) {
+        let layout = Layout::vertical([
+            Constraint::Length(2), // Header
+            Constraint::Min(8),    // Nodes pane and view
+            Constraint::Length(2), // Footer
+        ])
+        .split(area);
+        self.draw_header(frame, layout[0]);
+
+        let (_, nodes_width) = self.resolve_pane_width(layout[1].width, width);
+        let content = Layout::horizontal([Constraint::Length(nodes_width), Constraint::Min(0)])
+            .split(layout[1]);
+
+        self.view_focused = view_focused;
+        if nodes_width > 0 {
+            self.draw_nodes_pane(frame, content[0]);
+        } else {
+            let mut hits = self.hits.borrow_mut();
+            hits.node_list = Rect::default();
+            hits.node_rows.clear();
+            hits.menu = Rect::default();
+        }
+        if !dashboard {
+            let mut hits = self.hits.borrow_mut();
+            hits.details = Rect::default();
+            hits.services = None;
+        }
+        self.draw_footer(frame, layout[2], view_focused);
+        (content[0], content[1])
+    }
+
+    /// Bottom key line: the tree's keys, or the global ones while a view has
+    /// the keyboard (it lists its own keys)
+    fn draw_footer(&self, frame: &mut Frame, area: Rect, view_focused: bool) {
+        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
+        let label = |l: &'static str| Span::styled(l, Style::default().dim());
+        let spans = if view_focused {
+            vec![
+                key(" [Esc]"),
+                label(" back to tree"),
+                Span::raw("  "),
+                key("[Z]"),
+                label(" zoom"),
+                Span::raw("  "),
+                key("[ [ ] ]"),
+                label(" pane width"),
+                Span::raw("  "),
+                key("[Ctrl+C]"),
+                label(" quit"),
+            ]
+        } else {
+            let auto_refresh_status = if self.auto_refresh { "ON" } else { "OFF" };
+            let auto_refresh_color = if self.auto_refresh {
+                Color::Green
+            } else {
+                Color::DarkGray
+            };
+            vec![
+                key(" [j/k]"),
+                label(" nav"),
+                Span::raw("  "),
+                key("[Space]"),
+                label(" fold"),
+                Span::raw("  "),
+                key("[Tab]"),
+                label(" pane"),
+                Span::raw("  "),
+                key("[Enter]"),
+                label(" into view"),
+                Span::raw("  "),
+                key("[Z]"),
+                label(" zoom"),
+                Span::raw(" "),
+                key("[ [ ] ]"),
+                label(" width"),
+                Span::raw("  "),
+                key("[o]"),
+                label(" ops"),
+                Span::raw(" "),
+                key("[O]"),
+                label(" rolling"),
+                Span::raw("  "),
+                key("[r]"),
+                label(" refresh"),
+                Span::raw("  "),
+                key("[a]"),
+                label(" auto:"),
+                Span::styled(auto_refresh_status, Style::default().fg(auto_refresh_color)),
+                Span::raw("  "),
+                key("[q]"),
+                label(" quit"),
+                Span::raw("  "),
+                // Mouse capture is on for click navigation, so the terminal's
+                // own selection needs a modifier (Option in iTerm2, Shift elsewhere)
+                key("[⌥/⇧+drag]"),
+                label(" select text"),
+            ]
+        };
+        let footer = Paragraph::new(Line::from(spans)).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+        frame.render_widget(footer, area);
     }
 }
 
@@ -2513,7 +2766,9 @@ impl Component for ClusterComponent {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Quit)),
+            KeyCode::Char('q') => Ok(Some(Action::Quit)),
+            // Back to the dashboard from another view
+            KeyCode::Esc => Ok(Some(Action::ShowDashboard)),
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
 
             // Vertical navigation within focused pane
@@ -2603,7 +2858,8 @@ impl Component for ClusterComponent {
                                 self.toggle_expand();
                                 Ok(None)
                             }
-                            _ => Ok(self.logs_action(None)),
+                            // On a node: into the view on the right
+                            _ => Ok(Some(Action::FocusView)),
                         }
                     }
                     FocusedPane::Menu => {
@@ -2619,23 +2875,16 @@ impl Component for ClusterComponent {
                 }
             }
 
-            // 'l' / 'L' - logs of the selected node, or of the selected
-            // cluster / control plane / workers across their nodes
-            KeyCode::Char('l') | KeyCode::Char('L') => Ok(self.logs_action(None)),
-
-            // Direct hotkeys for screens (always work)
-            KeyCode::Char('e') => Ok(Some(Action::ShowEtcd)),
-            KeyCode::Char('p') => Ok(self.processes_action()),
-            KeyCode::Char('n') => Ok(self.network_action()),
-            KeyCode::Char('s') => Ok(self.storage_action()),
-            KeyCode::Char('d') => Ok(self.diagnostics_action()),
-            KeyCode::Char('c') => Ok(Some(Action::ShowSecurity)),
-            KeyCode::Char('y') => Ok(Some(Action::ShowLifecycle)),
-            KeyCode::Char('w') => Ok(Some(self.workloads_action())),
-            KeyCode::Char('v') => Ok(Some(self.volumes_action())),
-            KeyCode::Char('C') => Ok(self.node_info_action(NodeInfoTab::Containers)),
-            KeyCode::Char('m') => Ok(self.node_info_action(NodeInfoTab::Config)),
-            KeyCode::Char('x') => Ok(self.node_info_action(NodeInfoTab::Extensions)),
+            // Views for the selection: 'l' / 'L' logs of the selected node,
+            // or of the selected cluster / control plane / workers
+            KeyCode::Char('l') => Ok(self.action_for(NavMenuItem::Logs)),
+            KeyCode::Char(c)
+                if let Some(item) = NavMenuItem::ALL
+                    .iter()
+                    .find(|m| m.hotkey().starts_with(c) && m.hotkey().len() == c.len_utf8()) =>
+            {
+                Ok(self.action_for(*item))
+            }
             KeyCode::Char('o') => {
                 // Show node operations overlay for selected node
                 if let Some(node_name) = self.current_node_name() {
@@ -2705,82 +2954,8 @@ impl Component for ClusterComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        // Two-column layout inspired by lazygit
-        let layout = Layout::vertical([
-            Constraint::Length(2), // Header
-            Constraint::Min(8),    // Main content (two columns)
-            Constraint::Length(2), // Footer
-        ])
-        .split(area);
-
-        // Draw header
-        self.draw_header(frame, layout[0]);
-
-        // Two-column layout for main content
-        // The nodes pane is as wide as its content, at most 40%: the details
-        // pane's tables and addresses need the room more
-        let nodes_width = self
-            .nodes_pane_width()
-            .min(layout[1].width * 2 / 5)
-            .max(NODES_PANE_MIN_WIDTH.min(layout[1].width));
-        let content_layout = Layout::horizontal([
-            Constraint::Length(nodes_width), // Nodes pane
-            Constraint::Min(0),              // Details pane
-        ])
-        .split(layout[1]);
-
-        // Draw panes with focus indication
-        self.draw_nodes_pane(frame, content_layout[0]);
-        self.draw_details_pane(frame, content_layout[1]);
-
-        // Compact footer with essential controls
-        let auto_refresh_status = if self.auto_refresh { "ON" } else { "OFF" };
-        let auto_refresh_color = if self.auto_refresh {
-            Color::Green
-        } else {
-            Color::DarkGray
-        };
-        let footer_line = Line::from(vec![
-            Span::styled(" [j/k]", Style::default().fg(Color::Yellow)),
-            Span::styled(" nav", Style::default().dim()),
-            Span::raw("  "),
-            Span::styled("[Space]", Style::default().fg(Color::Yellow)),
-            Span::styled(" fold", Style::default().dim()),
-            Span::raw("  "),
-            Span::styled("[Tab]", Style::default().fg(Color::Yellow)),
-            Span::styled(" pane", Style::default().dim()),
-            Span::raw("  "),
-            Span::styled("[l]", Style::default().fg(Color::Yellow)),
-            Span::styled(" logs", Style::default().dim()),
-            Span::raw("  "),
-            Span::styled("[o]", Style::default().fg(Color::Yellow)),
-            Span::styled(" ops", Style::default().dim()),
-            Span::raw(" "),
-            Span::styled("[O]", Style::default().fg(Color::Yellow)),
-            Span::styled(" rolling", Style::default().dim()),
-            Span::raw("  "),
-            Span::styled("[r]", Style::default().fg(Color::Yellow)),
-            Span::styled(" refresh", Style::default().dim()),
-            Span::raw("  "),
-            Span::styled("[a]", Style::default().fg(Color::Yellow)),
-            Span::styled(" auto:", Style::default().dim()),
-            Span::styled(auto_refresh_status, Style::default().fg(auto_refresh_color)),
-            Span::raw("  "),
-            Span::styled("[q]", Style::default().fg(Color::Yellow)),
-            Span::styled(" quit", Style::default().dim()),
-            Span::raw("  "),
-            // Mouse capture is on for click navigation, so the terminal's own
-            // selection needs a modifier (Option in iTerm2, Shift elsewhere)
-            Span::styled("[⌥/⇧+drag]", Style::default().fg(Color::Yellow)),
-            Span::styled(" select text", Style::default().dim()),
-        ]);
-        let footer = Paragraph::new(footer_line).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        frame.render_widget(footer, layout[2]);
-
+        let (_, details) = self.draw_frame(frame, area, None, false, true);
+        self.draw_details_pane(frame, details);
         Ok(())
     }
 }
@@ -3164,7 +3339,8 @@ impl ClusterComponent {
 
     fn draw_nodes_pane(&self, frame: &mut Frame, area: Rect) {
         // Focus indication - cyan border when focused
-        let border_color = if self.focused_pane == FocusedPane::Nodes {
+        let focused = self.focused_pane == FocusedPane::Nodes && !self.view_focused;
+        let border_color = if focused {
             Color::Cyan
         } else {
             Color::DarkGray
@@ -3172,13 +3348,7 @@ impl ClusterComponent {
 
         let block = Block::default()
             .title(" Nodes ")
-            .title_style(
-                Style::default().fg(if self.focused_pane == FocusedPane::Nodes {
-                    Color::Cyan
-                } else {
-                    Color::White
-                }),
-            )
+            .title_style(Style::default().fg(if focused { Color::Cyan } else { Color::White }))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 
@@ -3845,7 +4015,7 @@ impl ClusterComponent {
         );
     }
 
-    fn draw_details_pane(&self, frame: &mut Frame, area: Rect) {
+    pub fn draw_details_pane(&self, frame: &mut Frame, area: Rect) {
         {
             let mut hits = self.hits.borrow_mut();
             hits.details = area;
@@ -4509,6 +4679,96 @@ mod tests {
 
         assert_eq!(names(&comp.controlplane_nodes_for(0)), vec!["cp1"]);
         assert_eq!(names(&comp.worker_nodes_for(0)), vec!["worker1"]);
+    }
+
+    fn two_node_cluster() -> ClusterComponent {
+        let mut comp = ClusterComponent::default();
+        comp.clusters.push(ClusterData {
+            name: "test".to_string(),
+            versions: vec![ver("cp1"), ver("worker1")],
+            discovery_members: vec![
+                member("cp1", "10.0.0.1", "controlplane"),
+                member("worker1", "10.0.0.2", "worker"),
+            ],
+            ..Default::default()
+        });
+        comp
+    }
+
+    /// The workspace follows the selection by these keys, and node-only views
+    /// give a hint on a group instead of nothing
+    #[test]
+    fn selection_keys_and_views_per_target() {
+        let mut comp = two_node_cluster();
+        comp.selected_item = NodeListItem::ClusterHeader(0);
+        assert_eq!(comp.target_key(), "test");
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Containers),
+            Some(Action::ShowHint(NavMenuItem::Containers, ref m)) if m == "Select a node to see its containers"
+        ));
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Network),
+            Some(Action::ShowGroup(GroupKind::Network, ..))
+        ));
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Dashboard),
+            Some(Action::ShowDashboard)
+        ));
+
+        assert!(comp.select_node("worker1"));
+        assert_eq!(comp.target_key(), "test/worker1");
+        assert_eq!(comp.cluster_key(), "test");
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Containers),
+            Some(Action::ShowNodeInfo(ref n, _, NodeInfoTab::Containers)) if n == "worker1"
+        ));
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Network),
+            Some(Action::ShowNetwork(ref n, _)) if n == "worker1"
+        ));
+        assert!(!comp.select_node("missing"));
+    }
+
+    /// Full when the view keeps 100 columns, compact otherwise; hidden is 0
+    #[test]
+    fn nodes_pane_widths() {
+        let comp = two_node_cluster();
+        let (mode, full) = comp.resolve_pane_width(220, None);
+        assert_eq!(mode, PaneWidth::Full);
+        assert!(full >= NODES_PANE_MIN_WIDTH);
+        let (mode, compact) = comp.resolve_pane_width(120, None);
+        assert_eq!(mode, PaneWidth::Compact);
+        assert!((COMPACT_PANE_MIN_WIDTH..=COMPACT_PANE_MAX_WIDTH).contains(&compact));
+        assert_eq!(
+            comp.resolve_pane_width(220, Some(PaneWidth::Hidden)),
+            (PaneWidth::Hidden, 0)
+        );
+    }
+
+    /// Every width draws without overlap: the view starts where the pane ends
+    #[test]
+    fn workspace_frame_at_several_widths() {
+        use ratatui::{Terminal, backend::TestBackend};
+        for columns in [100, 160, 220] {
+            for width in [
+                None,
+                Some(PaneWidth::Full),
+                Some(PaneWidth::Compact),
+                Some(PaneWidth::Hidden),
+            ] {
+                let mut comp = two_node_cluster();
+                let mut terminal = Terminal::new(TestBackend::new(columns, 40)).unwrap();
+                let mut areas = (Rect::default(), Rect::default());
+                terminal
+                    .draw(|f| areas = comp.draw_frame(f, f.area(), width, false, false))
+                    .unwrap();
+                let (tree, view) = areas;
+                let expected = comp.resolve_pane_width(columns, width).1;
+                assert_eq!(tree.width, expected, "{columns} cols, {width:?}");
+                assert_eq!(view.x, tree.x + tree.width);
+                assert_eq!(tree.width + view.width, columns);
+            }
+        }
     }
 
     /// When discovery is unavailable (empty members), fall back to the

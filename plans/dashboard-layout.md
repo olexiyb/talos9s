@@ -1,6 +1,14 @@
 # Design: one workspace instead of full-screen views
 
-Status: draft for review · Author: Olexiy Buyanskyy · 2026-11-01
+Status: implemented (phases 0-4) · Author: Olexiy Buyanskyy · 2026-11-01
+
+Differences from this plan, as built: the details pane stays in `cluster.rs`
+(drawn into the workspace by `draw_details_pane`) instead of moving to a new
+`dashboard.rs`; `Enter` on any tree row enters the view when it isn't the
+Dashboard (`Space` folds); compact width is the longest node name within
+14-22 columns; carried-over settings are the node view's tab, the volumes
+view state and the log levels (not yet processes sorting); open questions 1
+(`Alt+key`) and 4 (remembering layout) are not done.
 Comes before [upgrades](upgrades.md); the upgrade view will use this layout.
 
 ## Summary

@@ -441,6 +441,11 @@ impl NodeInfoComponent {
         Ok(())
     }
 
+    /// The open tab
+    pub fn tab(&self) -> NodeInfoTab {
+        self.tab
+    }
+
     fn query(&self) -> &Query {
         &self.queries[self.tab.index()]
     }
@@ -939,6 +944,10 @@ fn config_spans(text: &str, masked: bool) -> Vec<Span<'static>> {
 }
 
 impl Component for NodeInfoComponent {
+    fn captures_text(&self) -> bool {
+        self.query().editing
+    }
+
     /// Click a tab to open it or a row to select it; the wheel scrolls
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         let at = |r: &Rect| {

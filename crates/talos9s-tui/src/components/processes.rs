@@ -1438,6 +1438,10 @@ impl ProcessesComponent {
 }
 
 impl Component for ProcessesComponent {
+    fn captures_text(&self) -> bool {
+        self.mode == Mode::Filtering
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match self.mode {
             Mode::Normal => self.handle_normal_key(key),
