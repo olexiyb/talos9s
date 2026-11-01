@@ -1,344 +1,260 @@
 # talos9s
 
-A terminal UI (TUI) for managing and monitoring [Talos Linux](https://www.talos.dev/) Kubernetes clusters.
+A terminal UI for [Talos Linux](https://www.talos.dev/) Kubernetes clusters:
+nodes, services, logs, etcd, network, storage and diagnostics in one place,
+with safe node operations.
 
-**talos9s** provides real-time cluster visibility, diagnostics, log streaming, network analysis, and production-ready node operations - all from your terminal.
-
-talos9s is a fork of [talos-pilot](https://github.com/Handfish/talos-pilot) by Ken Udovic, continued with storage (LINSTOR/DRBD, ZFS) views, group views across nodes, node info and more. It is a community project, not affiliated with Sidero Labs.
+talos9s is a fork of [talos-pilot](https://github.com/Handfish/talos-pilot) by
+Ken Udovic, continued with storage views (LINSTOR/DRBD, ZFS), views across a
+cluster's nodes and more. It is a community project, not affiliated with
+Sidero Labs.
 
 [![CI](https://github.com/olexiyb/talos9s/actions/workflows/ci.yml/badge.svg)](https://github.com/olexiyb/talos9s/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/olexiyb/talos9s)](https://github.com/olexiyb/talos9s/releases)
-![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-https://github.com/user-attachments/assets/4c946c32-1f7e-4ab8-9d88-9937516015d1
+Talos has no SSH; everything goes through its API, and `talosctl` is a long
+list of subcommands. talos9s puts that API, and the Kubernetes state that
+depends on it, on one screen. It complements [k9s](https://k9scli.io/) rather
+than replacing it:
 
-*Live cluster overview, interleaved log streaming, diagnostics, and safe node operations, all from the terminal.*
+| | Layer | Answers |
+|---|---|---|
+| **k9s** | Kubernetes (`:6443`) | "Why won't my pod start?" |
+| **talos9s** | Talos OS (`:50000`) and the cluster around it | "Why won't my node join?", "Is it safe to reboot this node?" |
 
-## Contents
+## Install
 
-- [Why talos9s?](#why-talos9s) · [Relationship to k9s](#relationship-to-k9s)
-- [Features](#features)
-- [Design Philosophy](#design-philosophy)
-- [Engineering Highlights](#engineering-highlights)
-- [Installation](#installation) · [Usage](#usage) · [Keyboard Navigation](#keyboard-navigation)
-- [Architecture](#architecture) · [Development](#development)
+Prebuilt binaries (macOS, Linux):
 
-## Why talos9s?
-
-Talos Linux removes SSH access for security, replacing it with an API-driven management model. While `talosctl` is powerful, it requires memorizing many subcommands. **talos9s** provides:
-
-- **Interactive cluster overview** - See all nodes, services, and health at a glance
-- **Real-time monitoring** - CPU, memory, network stats with auto-refresh
-- **Unified log viewer** - Stream logs from multiple services simultaneously (Stern-style), on one node or across a cluster's nodes, with the kernel log (dmesg)
-- **Production operations** - Drain, reboot, rolling upgrades with safety checks
-- **Diagnostics** - Automated health checks with actionable fix suggestions
-
-### Relationship to k9s
-
-**talos9s is complementary to k9s, not a replacement.** They operate at different layers:
-
-| Tool | Layer | API Port | Use Case |
-|------|-------|----------|----------|
-| **k9s** | Kubernetes | `:6443` | Pods, deployments, services, workload debugging |
-| **talos9s** | Operating System | `:50000` | Talos services, etcd, kubelet, node health, OS config |
-
-Use **k9s** for "why won't my pod start?"
-Use **talos9s** for "why won't my node join the cluster?"
-
-## Features
-
-### Cluster Management
-
-| Feature | Description |
-|---------|-------------|
-| **Cluster Overview** | Multi-cluster monitoring, node list with health indicators |
-| **Node Details** | CPU, memory, load averages, Talos/K8s versions |
-| **Service Status** | All Talos services with health indicators |
-
-### Monitoring
-
-| Feature | Description |
-|---------|-------------|
-| **Service Logs** | Scrollable, searchable (`/`), color-coded by level |
-| **Multi-Service Logs** | Stern-style interleaved logs from multiple services |
-| **Cluster Logs** | `l` on a cluster, control plane or workers row: the same services from every node, merged by time with a node column; `o` filters nodes and shows streams that failed. The `kernel` service streams dmesg |
-| **Processes View** | htop-like process list with tree view, CPU/MEM sorting |
-| **Network Stats** | Interface traffic, connections, KubeSpan peers, packet capture |
-| **Storage/Disks** | Disk list with size, transport, serial, system disk indicators |
-| **Node Info** | `C`, `m`, `x` on a node: its containers (Talos system services and Kubernetes containers, filterable), its machine config read-only with secrets masked and searchable, flagging a staged change that waits for a reboot, and its installed system extensions |
-| **Group Views** | `n`, `s`, `d` on a cluster, control plane or workers row: every node's interfaces with RX/TX rates, disks and Talos volumes, or diagnostics as a node × category grid with each warning listed once with its nodes. Virtual devices are hidden until `a`; `Enter` opens the node |
-| **etcd Status** | Quorum health, member list, alarms, leader tracking, peer/client and listen addresses (running vs config), live etcd log of the selected member |
-| **Workload Health** | K8s deployments, statefulsets, pod issues by namespace |
-| **Lifecycle View** | Version status, config drift detection, cluster alerts |
-
-### Diagnostics & Security
-
-| Feature | Description |
-|---------|-------------|
-| **System Diagnostics** | Automated health checks with actionable fixes |
-| **CNI Detection** | Flannel, Cilium, Calico with provider-specific checks |
-| **Addon Detection** | cert-manager, ArgoCD, Flux, and more |
-| **Security Audit** | PKI certificate expiry, encryption status |
-
-### Operations
-
-| Feature | Description |
-|---------|-------------|
-| **Node Drain** | PDB-aware with configurable timeouts |
-| **Node Reboot** | Post-reboot verification, auto-uncordon |
-| **Node Shutdown** | Cordon, drain, power off; the node stays cordoned until uncordoned by hand |
-| **Rolling Operations** | Sequential multi-node with progress tracking |
-| **Audit Logging** | All operations logged to `~/.talos9s/audit.log` |
-
-## Design Philosophy
-
-talos9s favors reliability in how it reports cluster health:
-
-- State over logs: health is read from system state (procfs files, Talos and Kubernetes API responses), not from log lines. A stale error in an old log does not trigger a false alarm.
-- Reliability hierarchy: checks prefer file and procfs state first, then API responses, then log parsing. Where a file like `/run/flannel/subnet.env` exists, it is read directly.
-- No false positives: when a data source is unavailable, a check reports `unknown` rather than guessing or crashing.
-- Separation of concerns: three crates. `talos-rs` is the gRPC client, `talos9s-core` holds the business logic and unit tests, and `talos9s-tui` is the ratatui UI. The logic can be tested without a terminal or a live cluster.
-
-## Engineering Highlights
-
-Some implementation notes:
-
-- The Talos API is addressed at node endpoints directly, not through the cluster VIP. The VIP depends on a healthy control plane, so using it would break diagnostics when the control plane is down.
-- The COSI resource API is not reachable on the public `:50000` port; a direct gRPC client gets `PermissionDenied`. talos9s shells out to `talosctl get` for that data instead.
-- When the Talos discovery service is disabled, there is no membership list to read. talos9s enumerates and targets nodes through the Kubernetes API, so multi-node views and rolling operations still work.
-- Packet capture streams pcap data back over the same `:50000` connection it runs on, so an unfiltered capture records its own traffic and loops. talos9s applies a BPF filter that drops traffic on the API port. It is precompiled with `tcpdump -dd` and embedded as bytecode (parameterized by port, with a variant per link type for IPv4/IPv6, TCP/UDP/SCTP, and fragmented packets), so no filter compiler is needed on the node.
-- Business logic in `talos9s-core` is unit-tested without a terminal or a live node (47 tests). The workspace has 124 tests across the three crates and builds clean under `clippy -D warnings`.
-
-## Installation
-
-### From Releases (Recommended)
-
-Download the latest release for your platform from the [Releases](https://github.com/olexiyb/talos9s/releases) page.
-
-Install prebuilt binaries via shell script:
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/olexiyb/talos9s/releases/download/<version>/talos9s-installer.sh | sh
-```
-Install prebuilt binaries via powershell script:
-```bash
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/olexiyb/talos9s/releases/download/<version>/talos9s-installer.ps1 | iex"
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/olexiyb/talos9s/releases/latest/download/talos9s-installer.sh | sh
 ```
 
-### From Source
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/olexiyb/talos9s/releases/latest/download/talos9s-installer.ps1 | iex"
+```
+
+Or download an archive from [Releases](https://github.com/olexiyb/talos9s/releases).
+
+From source (needs only a Rust toolchain):
 
 ```bash
 cargo install --git https://github.com/olexiyb/talos9s --locked talos9s
 ```
 
-or from a clone:
+With Nix:
 
 ```bash
-git clone https://github.com/olexiyb/talos9s
-cd talos9s
-cargo build --release
-./target/release/talos9s
+nix run github:olexiyb/talos9s           # try it
+nix shell github:olexiyb/talos9s         # put it on PATH
 ```
 
-Building needs only a Rust toolchain: the Talos API client code is committed, so `protoc` is required only to regenerate it (`cargo build -p talos-rs --features regenerate`) after changing `crates/talos-rs/proto/`.
-
-### NixOS
-
-talos9s is available as a Nix flake but can also be run without installing.
-
-#### Run talos9s without installing
-
-You can test the app directly by using a nix shell
-
-```bash
-nix shell github:olexiyb/talos9s
-```
-
-Or run it directly
-
-```bash
-nix run github:olexiyb/talos9s
-```
-
-#### Usage in flakes
+<details>
+<summary>NixOS flake</summary>
 
 ```nix
-# flake.nix
 {
-  inputs = {
-    # ...
-    talos9s.url = "github:olexiyb/talos9s";
-  };
-  outputs =
-    {
-      self,
-      nixpkgs,
-      talos9s,
-      # ...
-    }:
-    {
-      nixosConfigurations.mymachine = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [
-          {
-            # provides `pkgs.talos9s`
-            nixpkgs.overlays = [ talos9s.overlays.default ];
-          }
-          (
-            { pkgs, ... }:
-            {
-              # install talos9s
-              environment.systemPackages = [ pkgs.talos9s ];
-            }
-          )
-        ];
-      };
+  inputs.talos9s.url = "github:olexiyb/talos9s";
+  outputs = { nixpkgs, talos9s, ... }: {
+    nixosConfigurations.mymachine = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        { nixpkgs.overlays = [ talos9s.overlays.default ]; }
+        ({ pkgs, ... }: { environment.systemPackages = [ pkgs.talos9s ]; })
+      ];
     };
+  };
 }
 ```
 
-### Requirements
+</details>
 
-- Valid `~/.talos/config` (talosconfig)
-- Network access to Talos nodes on port 50000
-- (Building from source) Rust 2024 edition (1.85+)
+## Quick start
 
-## Usage
+You need a talosconfig (`~/.talos/config` or `$TALOSCONFIG`) and network
+access to your nodes on port 50000. The Kubernetes views fetch a kubeconfig
+through the Talos API, so no separate kubeconfig is needed.
 
 ```bash
-# Use default context from talosconfig
-talos9s
-
-# Use specific context
-talos9s --context homelab
-
-# Set log tail limit
-talos9s --tail 1000
-
-# Enable debug logging
+talos9s                         # every context in the talosconfig
+talos9s --context homelab       # one context
+talos9s --tail 1000             # lines of log history to load
 talos9s --debug --log-file ~/talos9s.log
-
-# Without --log-file each instance logs to <temp dir>/talos9s-<pid>.log
-# ($TMPDIR on macOS); logs older than a week are removed at startup
 ```
 
-### Bootstrap Wizard (Insecure Mode)
+Without `--log-file`, each run logs to `<temp dir>/talos9s-<pid>.log`; logs
+older than a week are removed at startup.
 
-For bootstrapping new clusters on bare metal or VMs in maintenance mode, talos9s provides an interactive wizard:
-
-https://github.com/user-attachments/assets/0955b5a9-e35d-4fc6-a53d-db16e4558fc9
+New cluster on machines in maintenance mode? The bootstrap wizard generates
+the configs, applies them and bootstraps etcd:
 
 ```bash
-# Connect to a node in maintenance mode
 talos9s --insecure --endpoint <node-ip>
 ```
 
-The wizard guides you through:
-1. **Generate Config** - Creates talosconfig, controlplane.yaml, and worker.yaml
-2. **Apply Config** - Applies configuration to the node, triggering installation
-3. **Bootstrap** - Initializes etcd and starts the Kubernetes cluster
+## Features
 
-Once complete, you can manage the cluster using standard talos9s commands.
+### Cluster overview
 
-### Keyboard Navigation
+- All contexts at once, each with its control plane and workers, node health
+  and etcd quorum.
+- Per cluster: a node table (versions, memory, disk, ZFS, load, uptime,
+  services, clock offset, gateway), the KubeSpan peer matrix and LINSTOR
+  nodes and pools.
+- Per node: resources, addresses, routes, DNS, Tailscale, KubeSpan peers,
+  clock, and every Talos service with its state.
 
-| Key | Action |
-|-----|--------|
-| `?` | Help |
-| `q` / `Ctrl+C` | Quit |
-| `Esc` | Back / Close |
-| `j/k` or `↑/↓` | Navigate |
-| `Enter` | Select / Expand |
-| `Tab` | Next panel |
-| `r` | Refresh |
-| `a` | Toggle auto-refresh |
-| `/` | Search (in logs) |
-| `n/N` | Next/prev search match |
+### Logs
 
-### View Shortcuts
+- Service logs, searchable and colored by level; several services interleaved
+  (Stern-style).
+- On a cluster, control plane or workers row: the same services from every
+  node merged by time with a node column, including the kernel log.
 
-| Key | View | Description |
-|-----|------|-------------|
-| `c` | Security | PKI and encryption audit |
-| `s` | Storage | Disk list with system disk indicators |
-| `l` | Logs | Single service logs |
-| `L` | Multi-Logs | Interleaved multi-service logs |
-| `p` | Processes | Process tree view |
-| `n` | Network | Interface stats, connections |
-| `e` | etcd | Cluster health, members |
-| `w` | Workloads | K8s deployment health |
-| `y` | Lifecycle | Version status, alerts |
-| `d` | Diagnostics | System health checks |
-| `C` | Containers | System and Kubernetes containers of a node |
-| `m` | Config | Machine config of a node, secrets masked |
-| `x` | Extensions | System extensions installed on a node |
-| `o` | Operations | Single node operations |
-| `O` | Rolling | Multi-node rolling operations |
+### Per node
 
-## Architecture
+| View | Shows |
+|---|---|
+| Processes | htop-like process list and tree, sorted by CPU or memory |
+| Network | Interface traffic, connections, KubeSpan peers, packet capture (filtered so it doesn't capture itself) |
+| Storage | Disks and Talos volumes |
+| Containers | Talos system services and Kubernetes containers |
+| Machine config | The config in effect, read-only, searchable, secrets masked; flags a staged change waiting for a reboot |
+| Extensions | Installed system extensions |
+| Diagnostics | Health checks with suggested fixes, CNI checks (Flannel, Cilium, Calico) and addon checks (cert-manager and more) |
 
-A three-crate workspace (~40k lines of Rust, 110 tests) split so the logic is testable without a terminal or a live cluster:
+On a cluster, control plane or workers row, network, storage and diagnostics
+show every node at once; diagnostics as a node × category grid with each
+warning listed once with its nodes.
 
-```
-crates/
-├── talos-rs/           # Talos gRPC client library   (~10k LOC, 41 tests)
-├── talos9s-core/   # Shared business logic        (~2.6k LOC, 47 tests)
-└── talos9s-tui/    # Terminal UI (ratatui)        (~27k LOC, 22 tests)
-```
+### Cluster-wide
 
-### Core Modules
+| View | Shows |
+|---|---|
+| etcd | Quorum, members, leader, alarms, advertised and listen addresses (running vs config), live member log |
+| Volumes | LINSTOR/DRBD and ZFS LocalPV volumes, with problems first (see below) |
+| Workloads | Deployments, StatefulSets and pod problems by namespace |
+| Lifecycle | Talos and Kubernetes versions across nodes, config drift |
+| Security | Certificate expiry, encryption status |
 
-| Module | Purpose |
-|--------|---------|
-| `indicators` | HealthIndicator, QuorumState, SafetyStatus |
-| `formatting` | format_bytes, format_duration, pluralize |
-| `selection` | SelectableList<T>, MultiSelectList<T> |
-| `async_state` | Loading/error/refresh state management |
-| `diagnostics` | CheckStatus, CniType, PodHealthInfo |
-| `constants` | Thresholds, CRD lists, refresh intervals |
-| `network` | Port-to-service mapping, classification |
-| `errors` | User-friendly error formatting |
+**Volumes** compares LINSTOR's view with each node's kernel and flags what
+LINSTOR alone doesn't show:
 
-### Key Technologies
+- DRBD devices or filesystems not grown after a resize;
+- out-of-sync blocks on connected links, including those that can make a
+  Primary fail its I/O after a short link loss
+  ([LINBIT/drbd#153](https://github.com/LINBIT/drbd/issues/153));
+- disconnected and StandAlone links (split-brain), suspended I/O, missing
+  replicas, resync progress with an ETA, filesystems filling up;
+- orphaned volumes: no PersistentVolume uses them, or their claim is gone.
 
-- **Rust 2024 edition** with async/await
-- **tokio** - Async runtime
-- **ratatui + crossterm** - TUI framework
-- **tonic + prost** - gRPC client
-- **kube-rs** - Kubernetes client
-- **color-eyre** - Error handling
+Where a fix is provably safe, it suggests the exact commands to copy (`c`).
+talos9s never runs them.
+
+### Operations
+
+| Operation | What it does |
+|---|---|
+| Drain | Cordon and evict pods, respecting PodDisruptionBudgets |
+| Reboot | Cordon, drain, reboot, wait for the node to be Ready, uncordon |
+| Shutdown | Cordon, drain, power off; the node stays cordoned until you uncordon it |
+| Rolling | Drain or reboot nodes one after another, with progress |
+
+Each operation checks etcd quorum and PDBs first, asks for confirmation and is
+written to the audit log.
+
+## Keys
+
+In the cluster view (most also work from the left menu, and with the mouse):
+
+| Key | On a node | On a cluster, control plane or workers row |
+|---|---|---|
+| `l` / `L` | Logs | Logs merged across the nodes |
+| `n` | Network | Network of every node |
+| `s` | Storage | Storage of every node |
+| `d` | Diagnostics | Diagnostics grid |
+| `p` | Processes | Processes |
+| `C` / `m` / `x` | Containers / machine config / extensions | |
+| `o` | Operations (drain, reboot, shutdown) | |
+| `v` / `w` | Volumes / workloads on this node | Volumes / workloads on those nodes |
+| `e` `y` `c` | etcd, lifecycle, security (cluster-wide) | same |
+| `O` | Rolling operations | Rolling operations |
+
+General: `j`/`k` or arrows move, `Enter` opens, `Space` folds, `Tab` switches
+panes, `r` refreshes, `a` toggles auto-refresh, `/` filters or searches,
+`Esc` goes back, `q` quits. Each view lists its own keys in its footer.
+
+## Safety
+
+talos9s runs with your talosconfig, which usually means full admin on every
+node, so it is careful about what it changes:
+
+- **Reads by default.** It changes a node only for drain, reboot, shutdown,
+  rolling operations and diagnostic fixes, each after a confirmation dialog,
+  and logs every step to `~/.talos9s/audit.log`.
+- **Never runs suggested commands.** Storage fixes (drbdadm, kubectl) are
+  shown and copied for you to review and run.
+- **Never shows secrets.** The machine config viewer masks keys, tokens,
+  passwords, private keys and Secret data before anything is drawn.
+- **Writes only:** the audit log, its debug log (temp dir or `--log-file`),
+  packet captures you save (`/tmp`, owner-only) and the wizard's output
+  directory. It has no configuration file.
+- **No in-cluster access needed.** Nothing runs in the cluster and no
+  Kubernetes namespace needs Talos API rights.
+
+## How it works
+
+- **State over logs.** Health comes from current state (files, Talos and
+  Kubernetes APIs), not from log lines, so an old error in a log doesn't
+  raise an alarm. When a log is used to explain a state, it counts only if it
+  matches what the API reports now.
+- **Unknown over wrong.** If a source can't be read, a check says unknown
+  instead of guessing; nothing crashes, the rest of the screen keeps working.
+- **Nodes, not the VIP.** The Talos API is addressed at each node; the
+  cluster VIP needs a healthy control plane, so it fails exactly when you
+  need diagnostics.
+- **talosctl for COSI.** Talos resources (COSI) aren't exposed on `:50000`;
+  talos9s reads them through `talosctl get`.
+- **Works without discovery.** With the Talos discovery service disabled,
+  nodes are found through the Kubernetes API.
+- **Bounded everything.** Every API call has a timeout and slow refreshes run
+  in the background, so a dead node never freezes the UI.
 
 ## Development
 
 ```bash
-# Run all tests
 cargo test --all
-
-# Run with debug output
-RUST_LOG=debug cargo run
-
-# Watch logs in another terminal
-tail -f "$(ls -t ${TMPDIR:-/tmp}/talos9s-*.log | head -1)"
-
-# Check for warnings
 cargo clippy --all --all-targets -- -D warnings
+cargo fmt --all -- --check
+RUST_LOG=debug cargo run
 ```
 
-### Local Testing with Docker
+The workspace has three crates: `talos-rs` (Talos client), `talos9s-core`
+(logic, unit-tested without a terminal or cluster) and `talos9s-tui` (the
+ratatui app). `protoc` is needed only to regenerate the Talos API client
+(`cargo build -p talos-rs --features regenerate`) after changing
+`crates/talos-rs/proto/`.
 
-See [docs/local-talos-setup.md](docs/local-talos-setup.md) for setting up a local Talos cluster.
+- Local Talos clusters for testing: [test-clusters/](test-clusters/README.md)
+- Design plans, e.g. [rolling upgrades](plans/upgrades.md): [plans/](plans/)
+- Conventions for contributors and AI assistants: [CLAUDE.md](CLAUDE.md) and
+  [.claude/rules/](.claude/rules/)
 
-## Contributing
-
-Contributions are welcome. Please keep changes aligned with the [Design Philosophy](#design-philosophy) above: check real system state, degrade gracefully, and never report failure when "unknown" is the honest answer.
+Contributions are welcome. Keep changes in line with
+[How it works](#how-it-works): check real state, degrade gracefully, and
+never report failure when "unknown" is the honest answer.
 
 ## License
 
-MIT License - see [LICENSE](./LICENSE) for details.
+MIT, see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- [talos-pilot](https://github.com/Handfish/talos-pilot) by Ken Udovic, which talos9s is forked from
+- [talos-pilot](https://github.com/Handfish/talos-pilot) by Ken Udovic, which
+  talos9s is forked from
 - [Talos Linux](https://www.talos.dev/) by Sidero Labs
-- [k9s](https://k9scli.io/) for TUI inspiration
-- [ratatui](https://ratatui.rs/) for the TUI framework
+- [k9s](https://k9scli.io/) for the inspiration
+- [ratatui](https://ratatui.rs/)

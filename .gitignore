@@ -29,3 +29,6 @@ target
 *~
 *.swp
 *.swo
+
+# Personal Claude Code instructions (cluster names, IPs)
+CLAUDE.local.md
