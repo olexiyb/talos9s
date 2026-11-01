@@ -1,6 +1,6 @@
 # Plan: code health — correctness fixes, dead code, simplification, tests
 
-Status: phases 1-3 done · Author: Olexiy Buyanskyy · 2026-11-01
+Status: phases 1-4 done · Author: Olexiy Buyanskyy · 2026-11-01
 
 ## Summary
 
@@ -146,6 +146,14 @@ worker; `talos9s_core::truncate_string` now counts chars and is used.
 ## Phase 4 — dead code (~1,800 lines)
 
 Confirm with a grep and `cargo build` after removing the `pub use`.
+
+Done (2026-11-01): ~3,700 lines, more than estimated. Also removed:
+`insecure.rs` (unreachable), the unused `Action` variants, Cilium's Hubble
+UI / eBPF helpers, the storage view's unused client, `build_rustls_config`
+and its PEM parsers, small unused `AsyncState` / `SelectableList` /
+indicator methods. Kept on purpose: `ConnectionState::short_name` and the
+refresh-interval constants (used in phase 5), `from_named_context` and
+`endpoint_url` (tests).
 
 - TUI: `components/logs.rs` ✔ (762 lines, older copy of multi_logs),
   `components/home.rs` ✔, the `AsyncResult` channel (`app.rs:240-262,

@@ -36,15 +36,6 @@ pub enum KubeconfigSource {
     Unavailable(String),
 }
 
-/// Create a Kubernetes client from Talos-provided kubeconfig
-///
-/// If `kubeconfig_client` is provided, it will be used to fetch the kubeconfig.
-/// This is useful when diagnosing worker nodes that don't have the kubeconfig endpoint.
-pub async fn create_k8s_client(talos_client: &TalosClient) -> Result<Client, K8sError> {
-    let (client, _source) = create_k8s_client_with_source(talos_client, None, None).await?;
-    Ok(client)
-}
-
 /// Create a Kubernetes client and return the source of the kubeconfig
 ///
 /// Match-and-honor: when we can pin to a control plane node (`cp_node_ip`), that
@@ -533,43 +524,6 @@ pub async fn detect_cni_from_k8s(client: &Client) -> Result<CniInfo, K8sError> {
     Ok(cni_info)
 }
 
-/// Check if all CNI pods are healthy
-pub fn are_cni_pods_healthy(info: &CniInfo) -> bool {
-    if info.pods.is_empty() {
-        return false;
-    }
-
-    info.pods
-        .iter()
-        .all(|pod| pod.phase == "Running" && pod.ready)
-}
-
-/// Get summary of CNI pod health
-pub fn cni_pod_health_summary(info: &CniInfo) -> String {
-    if info.pods.is_empty() {
-        return "No CNI pods found".to_string();
-    }
-
-    let total = info.pods.len();
-    let healthy = info
-        .pods
-        .iter()
-        .filter(|p| p.phase == "Running" && p.ready)
-        .count();
-    let total_restarts: i32 = info.pods.iter().map(|p| p.restart_count).sum();
-
-    if healthy == total && total_restarts == 0 {
-        format!("{}/{} pods healthy", healthy, total)
-    } else if healthy == total {
-        format!(
-            "{}/{} pods healthy ({} restarts)",
-            healthy, total, total_restarts
-        )
-    } else {
-        format!("{}/{} pods healthy", healthy, total)
-    }
-}
-
 /// Information about an unhealthy pod
 #[derive(Debug, Clone)]
 pub struct UnhealthyPodInfo {
@@ -1011,20 +965,6 @@ fn select_pods_to_evict(
     } else {
         Err(blocking)
     }
-}
-
-/// Drain a node (evict all pods)
-///
-/// This will:
-/// 1. Get all pods on the node
-/// 2. Filter out DaemonSet pods and mirror pods
-/// 3. Evict each pod, respecting PDBs
-pub async fn drain_node(
-    client: &Client,
-    node_name: &str,
-    options: &DrainOptions,
-) -> Result<DrainResult, K8sError> {
-    drain_node_with_progress(client, node_name, options, None).await
 }
 
 /// Drain a node with progress callback

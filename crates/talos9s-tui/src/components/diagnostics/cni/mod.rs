@@ -8,7 +8,6 @@
 mod cilium;
 mod flannel;
 
-pub use cilium::detect_ebpf_mode;
 pub use flannel::run_flannel_checks;
 
 use super::k8s;

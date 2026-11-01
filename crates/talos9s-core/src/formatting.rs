@@ -3,7 +3,7 @@
 //! Provides functions for formatting bytes, durations, percentages,
 //! and other common data types for user display.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 
 // Byte size constants
 const KB: u64 = 1024;
@@ -86,38 +86,6 @@ pub fn format_bytes_compact(bytes: u64) -> String {
     }
 }
 
-/// Format a percentage value
-///
-/// # Examples
-///
-/// ```
-/// use talos9s_core::formatting::format_percent;
-///
-/// assert_eq!(format_percent(75.5), "75.5%");
-/// assert_eq!(format_percent(100.0), "100.0%");
-/// ```
-pub fn format_percent(value: f64) -> String {
-    format!("{:.1}%", value)
-}
-
-/// Calculate and format percentage from used/total values
-///
-/// # Examples
-///
-/// ```
-/// use talos9s_core::formatting::format_usage_percent;
-///
-/// assert_eq!(format_usage_percent(50, 100), "50.0%");
-/// assert_eq!(format_usage_percent(0, 0), "0.0%");
-/// ```
-pub fn format_usage_percent(used: u64, total: u64) -> String {
-    if total == 0 {
-        "0.0%".to_string()
-    } else {
-        format_percent(used as f64 / total as f64 * 100.0)
-    }
-}
-
 /// Format a duration in a human-readable way
 ///
 /// Chooses the most appropriate unit for the duration.
@@ -182,37 +150,6 @@ pub fn format_duration_detailed(duration: Duration) -> String {
     }
 }
 
-/// Format time relative to now (e.g., "5 minutes ago")
-pub fn format_time_ago(timestamp: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let duration = now.signed_duration_since(timestamp);
-
-    if duration < Duration::zero() {
-        "in the future".to_string()
-    } else {
-        format!("{} ago", format_duration_human(duration))
-    }
-}
-
-/// Format a timestamp for display
-///
-/// Shows time only if today, otherwise shows date and time.
-pub fn format_timestamp(timestamp: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let local = timestamp.with_timezone(&chrono::Local);
-
-    if timestamp.date_naive() == now.date_naive() {
-        local.format("%H:%M:%S").to_string()
-    } else {
-        local.format("%Y-%m-%d %H:%M").to_string()
-    }
-}
-
-/// Format a timestamp as ISO 8601
-pub fn format_timestamp_iso(timestamp: DateTime<Utc>) -> String {
-    timestamp.format("%Y-%m-%dT%H:%M:%SZ").to_string()
-}
-
 /// Truncate a string to a maximum length with ellipsis
 ///
 /// # Examples
@@ -255,17 +192,6 @@ pub fn pluralize(count: usize, singular: &str, plural: &str) -> String {
     }
 }
 
-/// Format a ratio as "X/Y"
-pub fn format_ratio(numerator: usize, denominator: usize) -> String {
-    format!("{}/{}", numerator, denominator)
-}
-
-/// Format a version string, handling common prefixes
-pub fn format_version(version: &str) -> String {
-    // Remove 'v' prefix if present for consistency
-    version.strip_prefix('v').unwrap_or(version).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,20 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn test_format_percent() {
-        assert_eq!(format_percent(0.0), "0.0%");
-        assert_eq!(format_percent(50.5), "50.5%");
-        assert_eq!(format_percent(100.0), "100.0%");
-    }
-
-    #[test]
-    fn test_format_usage_percent() {
-        assert_eq!(format_usage_percent(50, 100), "50.0%");
-        assert_eq!(format_usage_percent(0, 0), "0.0%");
-        assert_eq!(format_usage_percent(75, 100), "75.0%");
-    }
-
-    #[test]
     fn test_format_duration_human() {
         assert_eq!(format_duration_human(Duration::seconds(30)), "30s");
         assert_eq!(format_duration_human(Duration::seconds(90)), "1m");
@@ -341,11 +253,5 @@ mod tests {
         assert_eq!(pluralize(0, "node", "nodes"), "0 nodes");
         assert_eq!(pluralize(1, "node", "nodes"), "1 node");
         assert_eq!(pluralize(5, "node", "nodes"), "5 nodes");
-    }
-
-    #[test]
-    fn test_format_version() {
-        assert_eq!(format_version("v1.2.3"), "1.2.3");
-        assert_eq!(format_version("1.2.3"), "1.2.3");
     }
 }

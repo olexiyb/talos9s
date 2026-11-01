@@ -701,11 +701,6 @@ impl NodeOperationsComponent {
         self.state.data_mut()
     }
 
-    /// Get a mutable reference to drain options for configuration
-    pub fn drain_options_mut(&mut self) -> &mut DrainOptions {
-        &mut self.drain_options
-    }
-
     /// Set the Talos client
     pub fn set_client(&mut self, client: TalosClient) {
         self.client = Some(client);

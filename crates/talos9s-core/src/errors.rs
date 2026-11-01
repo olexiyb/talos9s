@@ -91,84 +91,6 @@ fn format_transport_error(msg: &str) -> String {
     }
 }
 
-/// Format a timeout message with retry count
-pub fn format_timeout_error(timeout_secs: u64, retry_count: u32) -> String {
-    if retry_count > 0 {
-        format!(
-            "Request timed out after {}s (retry {})",
-            timeout_secs, retry_count
-        )
-    } else {
-        format!("Request timed out after {}s", timeout_secs)
-    }
-}
-
-/// Categorize an error for display purposes
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorCategory {
-    /// Network/connection issues
-    Network,
-    /// Authentication/authorization issues
-    Auth,
-    /// Configuration issues
-    Config,
-    /// Timeout issues
-    Timeout,
-    /// Resource not found
-    NotFound,
-    /// Other/unknown issues
-    Other,
-}
-
-impl ErrorCategory {
-    /// Get a short label for the category
-    pub fn label(&self) -> &'static str {
-        match self {
-            ErrorCategory::Network => "Network",
-            ErrorCategory::Auth => "Auth",
-            ErrorCategory::Config => "Config",
-            ErrorCategory::Timeout => "Timeout",
-            ErrorCategory::NotFound => "Not Found",
-            ErrorCategory::Other => "Error",
-        }
-    }
-}
-
-/// Categorize a TalosError
-pub fn categorize_error(error: &TalosError) -> ErrorCategory {
-    match error {
-        TalosError::Connection(msg) => {
-            let lower = msg.to_lowercase();
-            if lower.contains("timeout") {
-                ErrorCategory::Timeout
-            } else if lower.contains("certificate") || lower.contains("tls") {
-                ErrorCategory::Auth
-            } else {
-                ErrorCategory::Network
-            }
-        }
-        TalosError::Grpc(status) => {
-            let msg = status.message().to_lowercase();
-            if msg.contains("unauthenticated") || msg.contains("permission denied") {
-                ErrorCategory::Auth
-            } else if msg.contains("timeout") || msg.contains("deadline") {
-                ErrorCategory::Timeout
-            } else if msg.contains("not found") {
-                ErrorCategory::NotFound
-            } else if msg.contains("unavailable") {
-                ErrorCategory::Network
-            } else {
-                ErrorCategory::Other
-            }
-        }
-        TalosError::Transport(_) => ErrorCategory::Network,
-        TalosError::Tls(_) => ErrorCategory::Auth,
-        TalosError::ConfigNotFound(_) | TalosError::ConfigInvalid(_) => ErrorCategory::Config,
-        TalosError::ContextNotFound(_) => ErrorCategory::Config,
-        _ => ErrorCategory::Other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,35 +100,5 @@ mod tests {
         assert!(format_connection_error("connection refused").contains("refused"));
         assert!(format_connection_error("TLS handshake failed").contains("TLS"));
         assert!(format_connection_error("timeout").contains("timed out"));
-    }
-
-    #[test]
-    fn test_format_timeout_error() {
-        assert_eq!(format_timeout_error(10, 0), "Request timed out after 10s");
-        assert_eq!(
-            format_timeout_error(10, 3),
-            "Request timed out after 10s (retry 3)"
-        );
-    }
-
-    #[test]
-    fn test_categorize_connection_error() {
-        let error = TalosError::Connection("connection refused".to_string());
-        assert_eq!(categorize_error(&error), ErrorCategory::Network);
-
-        let error = TalosError::Connection("TLS error".to_string());
-        assert_eq!(categorize_error(&error), ErrorCategory::Auth);
-
-        let error = TalosError::Connection("timeout".to_string());
-        assert_eq!(categorize_error(&error), ErrorCategory::Timeout);
-    }
-
-    #[test]
-    fn test_categorize_config_error() {
-        let error = TalosError::ConfigNotFound("/path".to_string());
-        assert_eq!(categorize_error(&error), ErrorCategory::Config);
-
-        let error = TalosError::ContextNotFound("ctx".to_string());
-        assert_eq!(categorize_error(&error), ErrorCategory::Config);
     }
 }

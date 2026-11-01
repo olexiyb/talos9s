@@ -2,29 +2,14 @@
 //!
 //! Actions represent events that can modify application state.
 
-use talos9s_core::{Cluster, Node};
-
 /// Actions that can be dispatched in the application
 #[derive(Debug, Clone)]
 pub enum Action {
     // Navigation
     Quit,
     Back,
-    NavigateUp,
-    NavigateDown,
-    Select,
-
-    // Data loading
-    LoadClusters,
-    ClustersLoaded(Vec<Cluster>),
-    LoadNodes(String), // cluster name
-    NodesLoaded(Vec<Node>),
-    LoadError(String),
 
     // View transitions
-    ShowClusterList,
-    ShowNodeList(String),            // cluster name
-    ShowNodeDetails(String, String), // cluster, node
     /// Show logs of one or more nodes: (title, subtitle, nodes,
     /// active_service_ids, all_service_ids)
     ShowMultiLogs(
@@ -88,16 +73,6 @@ pub enum Action {
     Resize(u16, u16),
     Refresh,
 
-    // Effects
-    StartFadeIn,
-    StartFadeOut,
-
-    // Insecure mode actions (legacy)
-    /// Generate Talos config: (cluster_name, k8s_endpoint, output_dir)
-    InsecureGenConfig(String, String, String),
-    /// Apply config to node: (config_path)
-    InsecureApplyConfig(String),
-
     // Wizard actions
     /// Generate config in wizard
     WizardGenConfig,
@@ -109,6 +84,4 @@ pub enum Action {
     WizardRetry,
     /// Wizard complete - transition to secure mode (context_name)
     WizardComplete(Option<String>),
-    /// Tick for wizard polling
-    WizardTick,
 }

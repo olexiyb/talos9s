@@ -5,25 +5,6 @@
 //! through apid - talosctl connects directly to machined via Unix socket.
 
 use crate::error::TalosError;
-use std::process::Command;
-
-/// Execute a talosctl command and return stdout (blocking)
-fn exec_talosctl(args: &[&str]) -> Result<String, TalosError> {
-    let output = Command::new("talosctl")
-        .args(args)
-        .output()
-        .map_err(TalosError::Io)?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(TalosError::Connection(format!(
-            "talosctl failed: {}",
-            stderr.trim()
-        )));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
 
 /// Execute a talosctl command asynchronously and return stdout
 async fn exec_talosctl_async(args: &[&str]) -> Result<String, TalosError> {
@@ -167,31 +148,6 @@ pub struct DiscoveryMember {
     pub operating_system: String,
 }
 
-/// Address status from AddressStatus resource (for VIP detection)
-#[derive(Debug, Clone)]
-pub struct AddressStatus {
-    /// Address ID (interface name)
-    pub id: String,
-    /// Link name
-    pub link_name: String,
-    /// Address with CIDR
-    pub address: String,
-    /// Address family (inet, inet6)
-    pub family: String,
-    /// Address scope
-    pub scope: String,
-    /// Flags (e.g., contains "vip" for shared VIPs)
-    pub flags: Vec<String>,
-}
-
-/// Get volume status for a node
-///
-/// Executes: talosctl get volumestatus --nodes <node> -o yaml
-pub fn get_volume_status(node: &str) -> Result<Vec<VolumeStatus>, TalosError> {
-    let output = exec_talosctl(&["get", "volumestatus", "--nodes", node, "-o", "yaml"])?;
-    parse_volume_status_yaml(&output)
-}
-
 /// Volume status of a node: `talosctl --context <context> -n <node> get
 /// volumestatus`, bounded like every resource read
 pub async fn get_volume_status_for_node(
@@ -235,14 +191,6 @@ fn parse_key_types(yaml: &str) -> Vec<String> {
         .collect()
 }
 
-/// Get disk information for a node
-///
-/// Executes: talosctl get disks --nodes <node> -o yaml
-pub fn get_disks(node: &str) -> Result<Vec<DiskInfo>, TalosError> {
-    let output = exec_talosctl(&["get", "disks", "--nodes", node, "-o", "yaml"])?;
-    parse_disks_yaml(&output)
-}
-
 /// Disks of a node: `talosctl --context <context> -n <node> get disks`,
 /// bounded like every resource read
 pub async fn get_disks_for_node(
@@ -251,54 +199,6 @@ pub async fn get_disks_for_node(
     config_path: Option<&str>,
 ) -> Result<Vec<DiskInfo>, TalosError> {
     let output = get_resource_yaml(Some(context), node_ip, config_path, &["disks"]).await?;
-    parse_disks_yaml(&output)
-}
-
-/// Get disk information for a context (async, non-blocking)
-///
-/// Executes: talosctl --context <context> -n <node> get disks -o yaml
-pub async fn get_disks_for_context(
-    context: &str,
-    config_path: Option<&str>,
-) -> Result<Vec<DiskInfo>, TalosError> {
-    // Load config to get an endpoint IP to use as the node target
-    let config = match config_path {
-        Some(path) => {
-            let path_buf = std::path::PathBuf::from(path);
-            crate::TalosConfig::load_from(&path_buf)?
-        }
-        None => crate::TalosConfig::load_default()?,
-    };
-    let ctx = config
-        .contexts
-        .get(context)
-        .ok_or_else(|| TalosError::ContextNotFound(context.to_string()))?;
-
-    // Get the first endpoint and extract the IP (remove port if present)
-    let node_ip = ctx
-        .endpoints
-        .first()
-        .ok_or_else(|| TalosError::NoEndpoints(context.to_string()))?
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string();
-
-    if node_ip.is_empty() {
-        return Err(TalosError::NoEndpoints(context.to_string()));
-    }
-
-    let output = exec_talosctl_async(&[
-        "--context",
-        context,
-        "-n",
-        &node_ip,
-        "get",
-        "disks",
-        "-o",
-        "yaml",
-    ])
-    .await?;
     parse_disks_yaml(&output)
 }
 
@@ -335,62 +235,6 @@ pub async fn get_volume_status_insecure(endpoint: &str) -> Result<Vec<VolumeStat
     ])
     .await?;
     parse_volume_status_yaml(&output)
-}
-
-/// Version info returned from insecure mode
-#[derive(Debug, Clone)]
-pub struct InsecureVersionInfo {
-    /// Talos version tag (e.g., "v1.12.1")
-    pub tag: String,
-    /// Whether the node is in maintenance mode
-    pub maintenance_mode: bool,
-}
-
-/// Get version info from a node in insecure mode (no TLS client auth)
-///
-/// Executes: talosctl version --insecure -n <endpoint>
-///
-/// Note: In maintenance mode, the full version API is not available,
-/// so this may return limited info or fail gracefully.
-pub async fn get_version_insecure(endpoint: &str) -> Result<InsecureVersionInfo, TalosError> {
-    let output = exec_talosctl_async(&["version", "--insecure", "-n", endpoint]).await;
-
-    match output {
-        Ok(text) => {
-            // Parse version output - look for "Tag:" line
-            let tag = text
-                .lines()
-                .find(|l| l.trim().starts_with("Tag:"))
-                .and_then(|l| l.split(':').nth(1))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            Ok(InsecureVersionInfo {
-                tag,
-                maintenance_mode: false,
-            })
-        }
-        Err(e) => {
-            // Check if it's a "not implemented in maintenance mode" error
-            let err_str = e.to_string();
-            if err_str.contains("maintenance mode") || err_str.contains("not implemented") {
-                Ok(InsecureVersionInfo {
-                    tag: "unknown".to_string(),
-                    maintenance_mode: true,
-                })
-            } else {
-                Err(e)
-            }
-        }
-    }
-}
-
-/// Check if a node is reachable in insecure mode
-///
-/// Returns true if we can connect to the maintenance API
-pub async fn check_insecure_connection(endpoint: &str) -> bool {
-    // Try to get disks - this works in maintenance mode
-    get_disks_insecure(endpoint).await.is_ok()
 }
 
 /// Result of generating Talos configuration
@@ -490,79 +334,6 @@ pub async fn apply_config_insecure(
             message: format!("Failed to apply config: {}", e),
         }),
     }
-}
-
-/// Patch a node's machine config using context authentication, rebooting to apply
-///
-/// Executes: talosctl --context <context> [--talosconfig <path>] -n <node> patch machineconfig --mode=reboot -p <patch>
-///
-/// The patch is passed inline rather than via `@file`, so there is no temp file
-/// another local user could swap out before talosctl reads it.
-pub async fn patch_machineconfig_for_node(
-    context: &str,
-    node_ip: &str,
-    config_path: Option<&str>,
-    patch: &str,
-) -> Result<String, TalosError> {
-    let mut args = vec!["--context", context];
-
-    // Add talosconfig path if provided
-    let config_path_string;
-    if let Some(path) = config_path {
-        config_path_string = path.to_string();
-        args.push("--talosconfig");
-        args.push(&config_path_string);
-    }
-
-    args.extend_from_slice(&[
-        "-n",
-        node_ip,
-        "patch",
-        "machineconfig",
-        "--mode=reboot",
-        "-p",
-        patch,
-    ]);
-
-    exec_talosctl_async(&args).await
-}
-
-/// Reboot a node in insecure mode
-///
-/// Executes: talosctl reboot --insecure -n <endpoint>
-pub async fn reboot_insecure(endpoint: &str) -> Result<String, TalosError> {
-    exec_talosctl_async(&["reboot", "--insecure", "-n", endpoint]).await
-}
-
-/// Shutdown a node in insecure mode
-///
-/// Executes: talosctl shutdown --insecure -n <endpoint>
-pub async fn shutdown_insecure(endpoint: &str) -> Result<String, TalosError> {
-    exec_talosctl_async(&["shutdown", "--insecure", "-n", endpoint]).await
-}
-
-/// Get machine config info for a node
-///
-/// Executes: talosctl get machineconfig --nodes <node> -o yaml
-pub fn get_machine_config(node: &str) -> Result<MachineConfigInfo, TalosError> {
-    let output = exec_talosctl(&["get", "machineconfig", "--nodes", node, "-o", "yaml"])?;
-    parse_machine_config_yaml(&output)
-}
-
-/// Get KubeSpan peer status for a node
-///
-/// Executes: talosctl get kubespanpeerstatus --nodes <node> -o yaml
-pub fn get_kubespan_peers(node: &str) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
-    let output = exec_talosctl(&["get", "kubespanpeerstatus", "--nodes", node, "-o", "yaml"])?;
-    parse_kubespan_peers_yaml(&output)
-}
-
-/// Get discovery members for a node
-///
-/// Executes: talosctl get members --nodes <node> -o yaml
-pub fn get_discovery_members(node: &str) -> Result<Vec<DiscoveryMember>, TalosError> {
-    let output = exec_talosctl(&["get", "members", "--nodes", node, "-o", "yaml"])?;
-    parse_discovery_members_yaml(&output)
 }
 
 /// Upper bound for one `talosctl get members` run. A request that apid has to
@@ -1119,29 +890,6 @@ fn parse_connectivity_ready(yaml_str: &str) -> Option<bool> {
     yaml_specs(yaml_str).find_map(|spec| spec.get("connectivityReady").and_then(|v| v.as_bool()))
 }
 
-/// Get address status for a node (for VIP detection)
-///
-/// Executes: talosctl get addressstatus --nodes <node> -o yaml
-pub fn get_address_status(node: &str) -> Result<Vec<AddressStatus>, TalosError> {
-    let output = exec_talosctl(&["get", "addressstatus", "--nodes", node, "-o", "yaml"])?;
-    parse_address_status_yaml(&output)
-}
-
-/// Check if KubeSpan is enabled for a node
-///
-/// Executes: talosctl get kubespanconfig --nodes <node> -o yaml
-/// Returns true only if the command succeeds AND shows enabled: true
-///
-/// Note: We check kubespanconfig instead of kubespanidentity because
-/// kubespanconfig exists on all nodes where KubeSpan is configured,
-/// while kubespanidentity may be empty on single-node clusters.
-pub fn is_kubespan_enabled(node: &str) -> bool {
-    match exec_talosctl(&["get", "kubespanconfig", "--nodes", node, "-o", "yaml"]) {
-        Ok(output) => kubespan_enabled_in(&output),
-        Err(_) => false,
-    }
-}
-
 /// Whether `talosctl get kubespanconfig -o yaml` output shows `enabled: true`
 /// `spec.enabled` and `spec.advertiseKubernetesNetworks` of KubeSpanConfig;
 /// both false when the resource is absent (KubeSpan not configured)
@@ -1664,81 +1412,6 @@ fn parse_discovery_members_yaml(yaml_str: &str) -> Result<Vec<DiscoveryMember>, 
     Ok(members)
 }
 
-/// Parse address status YAML output from talosctl
-fn parse_address_status_yaml(yaml_str: &str) -> Result<Vec<AddressStatus>, TalosError> {
-    let mut addresses = Vec::new();
-
-    for doc_str in yaml_str.split("\n---") {
-        let doc_str = doc_str.trim();
-        if doc_str.is_empty() {
-            continue;
-        }
-
-        let doc: serde_json::Value = match serde_saphyr::from_str(doc_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let id = doc
-            .get("metadata")
-            .and_then(|m| m.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if id.is_empty() {
-            continue;
-        }
-
-        let spec = doc.get("spec");
-
-        let link_name = spec
-            .and_then(|s| s.get("linkName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let address = spec
-            .and_then(|s| s.get("address"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let family = spec
-            .and_then(|s| s.get("family"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("inet")
-            .to_string();
-
-        let scope = spec
-            .and_then(|s| s.get("scope"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("global")
-            .to_string();
-
-        let flags = spec
-            .and_then(|s| s.get("flags"))
-            .and_then(|v| v.as_array())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        addresses.push(AddressStatus {
-            id,
-            link_name,
-            address,
-            family,
-            scope,
-            flags,
-        });
-    }
-
-    Ok(addresses)
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2228,33 +1901,6 @@ spec:
         // Should have parsed the valid document
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].id, "valid");
-    }
-
-    #[test]
-    fn test_shuffle_fallback_ips_does_not_panic() {
-        // Test that shuffle works correctly on various inputs
-        let empty: Vec<String> = vec![];
-        let mut shuffled: Vec<&String> = empty.iter().collect();
-        fastrand::shuffle(&mut shuffled);
-        assert!(shuffled.is_empty());
-
-        let single = ["192.168.1.1".to_string()];
-        let mut shuffled: Vec<&String> = single.iter().collect();
-        fastrand::shuffle(&mut shuffled);
-        assert_eq!(shuffled.len(), 1);
-
-        let multiple = vec![
-            "192.168.1.1".to_string(),
-            "192.168.1.2".to_string(),
-            "192.168.1.3".to_string(),
-        ];
-        let mut shuffled: Vec<&String> = multiple.iter().collect();
-        fastrand::shuffle(&mut shuffled);
-        assert_eq!(shuffled.len(), 3);
-        // All original elements should still be present
-        for ip in &multiple {
-            assert!(shuffled.contains(&ip));
-        }
     }
 
     #[test]

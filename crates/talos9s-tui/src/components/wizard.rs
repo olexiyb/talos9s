@@ -106,13 +106,6 @@ impl NodeType {
             NodeType::Worker => NodeType::Controlplane,
         }
     }
-
-    pub fn config_filename(&self) -> &'static str {
-        match self {
-            NodeType::Controlplane => "controlplane.yaml",
-            NodeType::Worker => "worker.yaml",
-        }
-    }
 }
 
 /// Data accumulated through the wizard flow

@@ -15,9 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 use std::time::Duration;
-use talos_rs::{
-    DiskInfo, TalosClient, VolumeStatus, get_disks_for_node, get_volume_status_for_node,
-};
+use talos_rs::{DiskInfo, VolumeStatus, get_disks_for_node, get_volume_status_for_node};
 use talos9s_core::{AsyncState, HealthIndicator, format_bytes};
 
 /// Auto-refresh interval in seconds
@@ -106,10 +104,6 @@ pub struct StorageComponent {
     /// Auto-refresh enabled
     auto_refresh: bool,
 
-    /// Client for API calls (unused but kept for consistency)
-    #[allow(dead_code)]
-    client: Option<TalosClient>,
-
     /// Node address for talosctl commands
     node_address: Option<String>,
 
@@ -163,7 +157,6 @@ impl StorageComponent {
             volume_table_state,
             rows: Default::default(),
             auto_refresh: true,
-            client: None,
             node_address,
             context,
             config_path,
@@ -177,11 +170,6 @@ impl StorageComponent {
 
     pub fn set_view_mode(&mut self, mode: StorageViewMode) {
         self.view_mode = mode;
-    }
-
-    /// Set the client for API calls
-    pub fn set_client(&mut self, client: TalosClient) {
-        self.client = Some(client);
     }
 
     /// Set error message

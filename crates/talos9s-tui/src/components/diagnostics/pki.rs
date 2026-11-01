@@ -224,32 +224,6 @@ pub struct PkiStatus {
 }
 
 impl PkiStatus {
-    /// Get the most urgent certificate (closest to expiry or already expired)
-    pub fn most_urgent(&self) -> Option<&CertificateInfo> {
-        let all_certs: Vec<&CertificateInfo> =
-            self.cas.iter().chain(self.client_certs.iter()).collect();
-
-        all_certs.into_iter().min_by_key(|c| c.days_remaining)
-    }
-
-    /// Check if any certificate is in warning or worse status
-    pub fn has_warnings(&self) -> bool {
-        self.cas.iter().chain(self.client_certs.iter()).any(|c| {
-            matches!(
-                c.status,
-                CertStatus::Warning | CertStatus::Critical | CertStatus::Expired
-            )
-        })
-    }
-
-    /// Check if any certificate has expired
-    pub fn has_expired(&self) -> bool {
-        self.cas
-            .iter()
-            .chain(self.client_certs.iter())
-            .any(|c| c.status == CertStatus::Expired)
-    }
-
     /// Get summary counts
     pub fn summary(&self) -> (usize, usize, usize, usize) {
         let all_certs: Vec<&CertificateInfo> =
@@ -345,26 +319,6 @@ pub struct EncryptionStatus {
 }
 
 impl EncryptionStatus {
-    /// Get encryption for STATE partition
-    pub fn state_encryption(&self) -> Option<&VolumeEncryption> {
-        self.volumes.iter().find(|v| v.name == "STATE")
-    }
-
-    /// Get encryption for EPHEMERAL partition
-    pub fn ephemeral_encryption(&self) -> Option<&VolumeEncryption> {
-        self.volumes.iter().find(|v| v.name == "EPHEMERAL")
-    }
-
-    /// Check if any volume is encrypted with strong encryption
-    pub fn has_strong_encryption(&self) -> bool {
-        self.volumes.iter().any(|v| {
-            matches!(
-                v.provider,
-                EncryptionProvider::Tpm | EncryptionProvider::Kms
-            )
-        })
-    }
-
     /// Get summary string
     pub fn summary(&self) -> String {
         if self.volumes.is_empty() {

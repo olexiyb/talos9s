@@ -95,46 +95,6 @@ pub fn port_to_service_u32(port: u32) -> Option<&'static str> {
     port_to_service(port as u16)
 }
 
-/// Get full service info for a port
-pub fn get_service_info(port: u16) -> Option<&'static ServicePort> {
-    KNOWN_PORTS.iter().find(|sp| sp.port == port)
-}
-
-/// Check if a port is a Talos-specific service
-pub fn is_talos_port(port: u16) -> bool {
-    get_service_info(port).is_some_and(|sp| sp.is_talos)
-}
-
-/// Check if a port is a control plane service
-pub fn is_controlplane_port(port: u16) -> bool {
-    get_service_info(port).is_some_and(|sp| sp.is_controlplane)
-}
-
-/// Connection direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectionDirection {
-    /// Incoming connection (we're listening)
-    Inbound,
-    /// Outgoing connection (we initiated)
-    Outbound,
-    /// Unknown direction
-    Unknown,
-}
-
-/// Classify a connection by its ports
-pub fn classify_connection(local_port: u16, remote_port: u16) -> ConnectionDirection {
-    let local_known = port_to_service(local_port).is_some();
-    let remote_known = port_to_service(remote_port).is_some();
-
-    if local_known && !remote_known {
-        ConnectionDirection::Inbound
-    } else if !local_known && remote_known {
-        ConnectionDirection::Outbound
-    } else {
-        ConnectionDirection::Unknown
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,48 +111,5 @@ mod tests {
     fn test_port_to_service_u32() {
         assert_eq!(port_to_service_u32(6443), Some("kube-apiserver"));
         assert_eq!(port_to_service_u32(70000), None); // Out of u16 range
-    }
-
-    #[test]
-    fn test_is_talos_port() {
-        assert!(is_talos_port(50000)); // apid
-        assert!(is_talos_port(50001)); // trustd
-        assert!(!is_talos_port(6443)); // kube-apiserver is not Talos-specific
-    }
-
-    #[test]
-    fn test_is_controlplane_port() {
-        assert!(is_controlplane_port(6443)); // kube-apiserver
-        assert!(is_controlplane_port(2379)); // etcd-client
-        assert!(!is_controlplane_port(10250)); // kubelet runs on all nodes
-    }
-
-    #[test]
-    fn test_get_service_info() {
-        let info = get_service_info(6443).unwrap();
-        assert_eq!(info.name, "kube-apiserver");
-        assert!(info.is_controlplane);
-        assert!(!info.is_talos);
-    }
-
-    #[test]
-    fn test_classify_connection() {
-        // Local is kube-apiserver, remote is ephemeral -> inbound
-        assert_eq!(
-            classify_connection(6443, 54321),
-            ConnectionDirection::Inbound
-        );
-
-        // Local is ephemeral, remote is kube-apiserver -> outbound
-        assert_eq!(
-            classify_connection(54321, 6443),
-            ConnectionDirection::Outbound
-        );
-
-        // Both unknown -> unknown
-        assert_eq!(
-            classify_connection(54321, 54322),
-            ConnectionDirection::Unknown
-        );
     }
 }

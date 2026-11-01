@@ -688,11 +688,6 @@ impl MultiLogsComponent {
         self.stream_rx = None;
     }
 
-    /// Check if streaming is active
-    pub fn is_streaming(&self) -> bool {
-        self.streaming
-    }
-
     /// Process incoming streamed log entries (call on tick)
     fn process_stream_entries(&mut self) {
         // First, drain the channel into a local vec to avoid borrow issues
@@ -852,50 +847,6 @@ impl MultiLogsComponent {
             .find(|s| s.id == service_id)
             .map(|s| s.color)
             .unwrap_or(Color::White)
-    }
-
-    /// Set log content from multiple services
-    pub fn set_logs(&mut self, logs: Vec<(String, String)>) {
-        // Parse entries (need service colors first)
-        let mut new_entries = Vec::new();
-        for (service_id, content) in logs {
-            let color = self.get_service_color(&service_id);
-
-            for line in content.lines() {
-                if line.trim().is_empty() {
-                    continue;
-                }
-
-                let entry = Self::parse_line(line, &service_id, color);
-                new_entries.push(entry);
-            }
-        }
-
-        // Sort by timestamp
-        new_entries.sort_by_key(|e| e.timestamp_sort);
-
-        // Enforce max entries (ring buffer behavior)
-        if new_entries.len() > MAX_LOG_ENTRIES {
-            new_entries.drain(0..new_entries.len() - MAX_LOG_ENTRIES);
-        }
-
-        // Update data
-        if let Some(data) = self.data_mut() {
-            data.entries = new_entries;
-        }
-
-        // Update counts
-        self.update_counts();
-
-        // Build visible indices
-        self.rebuild_visible_indices();
-
-        self.state.mark_loaded();
-
-        // Scroll to bottom if following
-        if self.following {
-            self.scroll_to_bottom();
-        }
     }
 
     /// Parse a log line into a MultiLogEntry
@@ -3183,10 +3134,15 @@ mod tests {
             vec!["kubelet".into()],
             vec!["kubelet".into()],
         );
-        logs.set_logs(vec![(
-            "kubelet".to_string(),
-            r#"{"level":"info","ts":"2026-10-19T08:20:01.000Z","msg":"synced"}"#.to_string(),
-        )]);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        logs.stream_rx = Some(rx);
+        tx.send(StreamEvent::Line {
+            node: 0,
+            service: "kubelet".to_string(),
+            line: r#"{"level":"info","ts":"2026-10-19T08:20:01.000Z","msg":"synced"}"#.to_string(),
+        })
+        .unwrap();
+        logs.process_stream_entries();
         let screen = render(&mut logs);
         assert!(screen.contains("Multi-Service Logs: 10.0.0.1"), "{screen}");
         assert!(screen.contains("synced"), "{screen}");

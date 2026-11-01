@@ -109,29 +109,14 @@ impl AuditLogger {
         }
     }
 
-    /// Check if audit logging is enabled
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
     /// Get the path to the audit log
     pub fn log_path(&self) -> &PathBuf {
         &self.log_path
     }
 
-    /// Update the cluster context
-    pub fn set_cluster(&mut self, cluster: &str) {
-        self.cluster = cluster.to_string();
-    }
-
     /// Log an operation start
     pub fn log_start(&self, operation: &str, node: &str, details: &str) {
         self.log(operation, node, AuditResult::Started, details);
-    }
-
-    /// Log an operation step
-    pub fn log_progress(&self, operation: &str, node: &str, details: &str) {
-        self.log(operation, node, AuditResult::InProgress, details);
     }
 
     /// Log an operation success
@@ -142,11 +127,6 @@ impl AuditLogger {
     /// Log an operation failure
     pub fn log_failure(&self, operation: &str, node: &str, details: &str) {
         self.log(operation, node, AuditResult::Failure, details);
-    }
-
-    /// Log an operation cancellation
-    pub fn log_cancelled(&self, operation: &str, node: &str, details: &str) {
-        self.log(operation, node, AuditResult::Cancelled, details);
     }
 
     /// Log an audit entry
@@ -194,26 +174,6 @@ impl AuditLogger {
 
         file.write_all(line.as_bytes())?;
         Ok(())
-    }
-
-    /// Read recent audit entries (last N lines)
-    pub fn read_recent(&self, count: usize) -> Vec<String> {
-        if !self.enabled {
-            return Vec::new();
-        }
-
-        match fs::read_to_string(&self.log_path) {
-            Ok(content) => content
-                .lines()
-                .rev()
-                .take(count)
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect(),
-            Err(_) => Vec::new(),
-        }
     }
 }
 

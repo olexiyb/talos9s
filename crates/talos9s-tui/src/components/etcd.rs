@@ -489,11 +489,6 @@ impl EtcdComponent {
         self.client = Some(client);
     }
 
-    /// Whether a client was set (the cluster may still be reconnecting)
-    pub fn has_client(&self) -> bool {
-        self.client.is_some()
-    }
-
     /// Name the talosctl context in copied commands
     pub fn set_context(&mut self, context: Option<String>) {
         self.context = context;

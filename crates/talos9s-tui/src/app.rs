@@ -27,7 +27,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// A view refresh running on a clone of the view's component
@@ -241,10 +240,6 @@ pub struct App {
     tail_lines: i32,
     /// Tick rate for animations (ms)
     tick_rate: Duration,
-    /// Channel for async action results
-    action_rx: mpsc::UnboundedReceiver<AsyncResult>,
-    #[allow(dead_code)] // Will be used for background log streaming
-    action_tx: mpsc::UnboundedSender<AsyncResult>,
     /// Custom config file path (from --config flag)
     config_path: Option<String>,
     /// In-flight background refresh of the current view (see `start_refresh_job`)
@@ -255,16 +250,6 @@ pub struct App {
     insecure: bool,
     /// Endpoint for insecure mode
     insecure_endpoint: Option<String>,
-}
-
-/// Results from async operations
-#[derive(Debug)]
-#[allow(dead_code)]
-enum AsyncResult {
-    Connected,
-    Refreshed,
-    LogsLoaded(String),
-    Error(String),
 }
 
 impl Default for App {
@@ -290,7 +275,6 @@ impl App {
         };
         crate::audit::init_audit_logger(&audit_scope);
 
-        let (action_tx, action_rx) = mpsc::unbounded_channel();
         Self {
             should_quit: false,
             view: View::Cluster,
@@ -336,8 +320,6 @@ impl App {
             group: None,
             tail_lines,
             tick_rate: Duration::from_millis(100),
-            action_rx,
-            action_tx,
             config_path,
             refresh_job: None,
             rolling_k8s_fetch: None,
@@ -1001,26 +983,6 @@ impl App {
             self.poll_refresh_job();
             self.poll_view_setup();
             self.follow_selection().await?;
-
-            while let Ok(result) = self.action_rx.try_recv() {
-                match result {
-                    AsyncResult::Connected => {
-                        tracing::info!("Connected to Talos cluster");
-                    }
-                    AsyncResult::Refreshed => {
-                        tracing::info!("Data refreshed");
-                    }
-                    AsyncResult::LogsLoaded(_content) => {
-                        // Legacy - multi_logs uses set_logs directly
-                    }
-                    AsyncResult::Error(e) => {
-                        tracing::error!("Async error: {}", e);
-                        if let Some(multi_logs) = &mut self.multi_logs {
-                            multi_logs.set_error(e);
-                        }
-                    }
-                }
-            }
 
             // Check if we should quit
             if self.should_quit {
@@ -2178,9 +2140,6 @@ impl App {
                 self.multi_logs = Some(multi_logs);
                 self.show_in_pane(NavMenuItem::Logs, View::MultiLogs);
             }
-            Action::ShowNodeDetails(_, _) => {
-                // Legacy - no longer used, we use ShowMultiLogs now
-            }
             Action::ShowDiagnostics(hostname, address, role, cp_endpoint) => {
                 // A node opened from a group view: the tree follows
                 let from_group = (self.view == View::Group).then(|| {
@@ -2461,11 +2420,8 @@ impl App {
                     StorageComponent::new(hostname, address.clone(), context, config_path);
                 storage.set_view_mode(mode);
 
-                // Set the client and refresh data
-                if let Some(client) = self.cluster.client() {
-                    // Create a client configured for this specific node
-                    let node_client = client.with_node(&address);
-                    storage.set_client(node_client);
+                // Storage reads through talosctl, with the context
+                if self.cluster.client().is_some() {
                     self.refresh_job = Some(RefreshJob::Storage(spawn_refresh!(storage)));
                 }
 

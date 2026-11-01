@@ -95,11 +95,6 @@ impl<T> AsyncState<T> {
         self.loading
     }
 
-    /// Check if there's an error
-    pub fn has_error(&self) -> bool {
-        self.error.is_some()
-    }
-
     /// Get the error message if any
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -184,11 +179,6 @@ impl<T> AsyncState<T> {
         self.last_refresh = Some(Instant::now());
     }
 
-    /// Clear the error
-    pub fn clear_error(&mut self) {
-        self.error = None;
-    }
-
     /// Clear all state
     pub fn clear(&mut self) {
         self.data = None;
@@ -233,14 +223,6 @@ impl<T> AsyncState<T> {
         self.last_refresh.map(|t| t.elapsed())
     }
 
-    /// Check if data is stale (older than given duration)
-    pub fn is_stale(&self, max_age: Duration) -> bool {
-        match self.last_refresh {
-            None => true,
-            Some(last) => last.elapsed() > max_age,
-        }
-    }
-
     /// Map the data to a different type
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> AsyncState<U> {
         AsyncState {
@@ -255,47 +237,6 @@ impl<T> AsyncState<T> {
 
     /// Check if we have data (regardless of loading/error state)
     pub fn has_data(&self) -> bool {
-        self.data.is_some()
-    }
-}
-
-/// Extension trait for working with AsyncState in TUI components
-pub trait AsyncStateExt<T> {
-    /// Get display status text
-    fn status_text(&self) -> &'static str;
-
-    /// Check if we should show loading indicator
-    fn show_loading(&self) -> bool;
-
-    /// Check if we should show error
-    fn show_error(&self) -> bool;
-
-    /// Check if we should show data
-    fn show_data(&self) -> bool;
-}
-
-impl<T> AsyncStateExt<T> for AsyncState<T> {
-    fn status_text(&self) -> &'static str {
-        if self.loading && self.data.is_none() {
-            "Loading..."
-        } else if self.loading {
-            "Refreshing..."
-        } else if self.error.is_some() {
-            "Error"
-        } else {
-            "Ready"
-        }
-    }
-
-    fn show_loading(&self) -> bool {
-        self.loading && self.data.is_none()
-    }
-
-    fn show_error(&self) -> bool {
-        self.error.is_some() && self.data.is_none()
-    }
-
-    fn show_data(&self) -> bool {
         self.data.is_some()
     }
 }
@@ -320,7 +261,7 @@ mod tests {
     fn test_new_state() {
         let state: AsyncState<String> = AsyncState::new();
         assert!(state.is_loading());
-        assert!(!state.has_error());
+        assert!(state.error().is_none());
         assert!(state.data().is_none());
     }
 
@@ -330,7 +271,7 @@ mod tests {
         state.set_data(42);
 
         assert!(!state.is_loading());
-        assert!(!state.has_error());
+        assert!(state.error().is_none());
         assert_eq!(state.data(), Some(&42));
         assert!(state.last_refresh().is_some());
         assert_eq!(state.retry_count(), 0);
@@ -342,7 +283,7 @@ mod tests {
         state.set_error("Connection failed");
 
         assert!(!state.is_loading());
-        assert!(state.has_error());
+        assert!(state.error().is_some());
         assert_eq!(state.error(), Some("Connection failed"));
         assert_eq!(state.retry_count(), 1);
 
@@ -377,22 +318,7 @@ mod tests {
 
         // Data should still be available
         assert_eq!(state.data(), Some(&42));
-        assert!(state.has_error());
-    }
-
-    #[test]
-    fn test_status_text() {
-        let mut state: AsyncState<i32> = AsyncState::new();
-        assert_eq!(state.status_text(), "Loading...");
-
-        state.set_data(42);
-        assert_eq!(state.status_text(), "Ready");
-
-        state.start_loading();
-        assert_eq!(state.status_text(), "Refreshing...");
-
-        state.set_error("Failed");
-        assert_eq!(state.status_text(), "Error");
+        assert!(state.error().is_some());
     }
 
     #[test]

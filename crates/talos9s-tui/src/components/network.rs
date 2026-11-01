@@ -3357,11 +3357,6 @@ impl NetworkStatsComponent {
         }
     }
 
-    /// Check if there's a pending restart
-    pub fn has_pending_restart(&self) -> bool {
-        self.pending_restart_service.is_some()
-    }
-
     /// Check if file viewer needs content fetched
     pub fn file_viewer_needs_fetch(&self) -> bool {
         self.file_viewer

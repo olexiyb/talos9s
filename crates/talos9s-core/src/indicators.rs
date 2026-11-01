@@ -58,11 +58,6 @@ impl HealthIndicator {
         matches!(self, HealthIndicator::Healthy)
     }
 
-    /// Check if this represents an error state
-    pub fn is_error(&self) -> bool {
-        matches!(self, HealthIndicator::Error)
-    }
-
     /// Check if this represents a warning or worse
     pub fn needs_attention(&self) -> bool {
         matches!(
@@ -83,11 +78,6 @@ impl HealthIndicator {
             HealthIndicator::Warning => 4,
             HealthIndicator::Error => 5,
         }
-    }
-
-    /// Compare severity with another indicator
-    pub fn more_severe_than(&self, other: &HealthIndicator) -> bool {
-        self.severity() > other.severity()
     }
 
     /// Return the more severe of two indicators
@@ -161,11 +151,6 @@ impl ConnectionState {
             ConnectionState::Unknown => "Unknown",
         }
     }
-
-    /// Check if connected
-    pub fn is_connected(&self) -> bool {
-        matches!(self, ConnectionState::Connected)
-    }
 }
 
 impl From<ConnectionState> for HealthIndicator {
@@ -225,16 +210,6 @@ impl QuorumState {
             QuorumState::Unknown => ("UNKNOWN", "gray"),
         }
     }
-
-    /// Get member count as "healthy/total" string
-    pub fn member_count_display(&self) -> String {
-        match self {
-            QuorumState::Healthy => "?/?".to_string(), // Caller should use actual counts
-            QuorumState::Degraded { healthy, total } => format!("{}/{}", healthy, total),
-            QuorumState::NoQuorum { healthy, total } => format!("{}/{}", healthy, total),
-            QuorumState::Unknown => "?/?".to_string(),
-        }
-    }
 }
 
 impl HasHealth for QuorumState {
@@ -263,16 +238,6 @@ pub enum SafetyStatus {
 }
 
 impl SafetyStatus {
-    /// Check if safe to proceed
-    pub fn is_safe(&self) -> bool {
-        matches!(self, SafetyStatus::Safe)
-    }
-
-    /// Check if unknown (still loading)
-    pub fn is_unknown(&self) -> bool {
-        matches!(self, SafetyStatus::Unknown)
-    }
-
     /// Get the reason if unsafe or warning
     pub fn reason(&self) -> Option<&str> {
         match self {
@@ -340,9 +305,11 @@ mod tests {
 
     #[test]
     fn test_health_indicator_severity() {
-        assert!(HealthIndicator::Error.more_severe_than(&HealthIndicator::Warning));
-        assert!(HealthIndicator::Warning.more_severe_than(&HealthIndicator::Healthy));
-        assert!(!HealthIndicator::Healthy.more_severe_than(&HealthIndicator::Warning));
+        assert!(HealthIndicator::Error.severity() > HealthIndicator::Warning.severity());
+        assert_eq!(
+            HealthIndicator::Healthy.worst(HealthIndicator::Warning),
+            HealthIndicator::Warning
+        );
     }
 
     #[test]
@@ -411,11 +378,11 @@ mod tests {
     #[test]
     fn test_safety_status() {
         let safe = SafetyStatus::Safe;
-        assert!(safe.is_safe());
+        assert!(matches!(safe, SafetyStatus::Safe));
         assert!(safe.reason().is_none());
 
         let unsafe_op = SafetyStatus::Unsafe("Would lose quorum".to_string());
-        assert!(!unsafe_op.is_safe());
+        assert!(!matches!(unsafe_op, SafetyStatus::Safe));
         assert_eq!(unsafe_op.reason(), Some("Would lose quorum"));
     }
 }

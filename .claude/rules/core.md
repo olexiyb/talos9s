@@ -13,13 +13,13 @@ helpers).
 |--------|-------|
 | `indicators` | `HealthIndicator`, `HasHealth`, `QuorumState`, `SafetyStatus` |
 | `async_state` | `AsyncState<T>`: loading, data, error, retry, auto-refresh timing |
-| `formatting` | `format_bytes`, `format_duration`, `format_percent`, `pluralize` |
-| `selection` | `SelectableList<T>`, `MultiSelectList<T>` |
-| `errors` | `format_talos_error`, `ErrorCategory`: user-facing error text |
-| `network` | port → service names, connection classification |
+| `formatting` | `format_bytes`, `format_duration_human`, `truncate_string`, `pluralize` |
+| `selection` | `SelectableList<T>` |
+| `errors` | `format_talos_error`: user-facing error text |
+| `network` | port → service names |
 | `diagnostics` | `CheckStatus`, `CniType`, `CniInfo`, `PodHealthInfo` |
 | `constants` | thresholds, CRD lists, refresh intervals |
-| `types` | shared plain types |
+| `etcd` | `EtcdQuorum`: quorum and whether a node can go down |
 
 If logic in the TUI can be tested without a terminal or a cluster, it belongs
 here.

@@ -622,44 +622,6 @@ impl TalosClient {
         Ok(stream_lines(response.into_inner()))
     }
 
-    /// Get logs for multiple services in parallel
-    /// Returns Vec of (service_id, log_content) tuples
-    pub async fn logs_multi(
-        &self,
-        service_ids: &[&str],
-        tail_lines: i32,
-    ) -> Result<Vec<(String, String)>, TalosError> {
-        use futures::future::join_all;
-
-        let futures: Vec<_> = service_ids
-            .iter()
-            .map(|&service_id| {
-                let service_id = service_id.to_string();
-                async move {
-                    let result = self.logs(&service_id, tail_lines).await;
-                    (service_id, result)
-                }
-            })
-            .collect();
-
-        let results = join_all(futures).await;
-
-        let mut logs = Vec::new();
-        for (service_id, result) in results {
-            match result {
-                Ok(content) => {
-                    logs.push((service_id, content));
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch logs for {}: {}", service_id, e);
-                    // Continue with other services, just skip this one
-                }
-            }
-        }
-
-        Ok(logs)
-    }
-
     // ==================== Etcd APIs ====================
 
     /// Get etcd member list from control plane nodes
@@ -2083,24 +2045,6 @@ impl EtcdMemberStatus {
     pub fn is_leader(&self) -> bool {
         self.member_id == self.leader_id && self.leader_id != 0
     }
-
-    /// Get DB size in human-readable format
-    pub fn db_size_human(&self) -> String {
-        format_bytes(self.db_size as u64)
-    }
-
-    /// Get DB size in use in human-readable format
-    pub fn db_size_in_use_human(&self) -> String {
-        format_bytes(self.db_size_in_use as u64)
-    }
-
-    /// Get DB usage percentage
-    pub fn db_usage_percent(&self) -> f32 {
-        if self.db_size == 0 {
-            return 0.0;
-        }
-        (self.db_size_in_use as f32 / self.db_size as f32) * 100.0
-    }
 }
 
 /// Etcd alarm
@@ -2657,11 +2601,6 @@ impl ConnectionInfo {
         self.state == ConnectionState::Listen
     }
 
-    /// Check if this is an established connection
-    pub fn is_established(&self) -> bool {
-        self.state == ConnectionState::Established
-    }
-
     /// Format local address as "ip:port" or ":port" for listening
     pub fn local_addr(&self) -> String {
         if self.local_ip.is_empty() || self.local_ip == "0.0.0.0" || self.local_ip == "::" {
@@ -2759,24 +2698,7 @@ pub struct NodeTimeInfo {
     pub synced: bool,
 }
 
-impl NodeTimeInfo {
-    /// Get a human-readable offset string
-    pub fn offset_human(&self) -> String {
-        let offset_ms = (self.offset_seconds * 1000.0).abs();
-        if offset_ms < 1.0 {
-            format!("{:.3} ms", offset_ms)
-        } else if offset_ms < 1000.0 {
-            format!("{:.1} ms", offset_ms)
-        } else {
-            format!("{:.2} s", self.offset_seconds.abs())
-        }
-    }
-
-    /// Get sync status as a string
-    pub fn sync_status(&self) -> &'static str {
-        if self.synced { "synced" } else { "not synced" }
-    }
-}
+impl NodeTimeInfo {}
 
 /// Split a streamed byte response into lines, sent as they complete. The
 /// channel closes when the stream ends or fails; dropping the receiver

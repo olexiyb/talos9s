@@ -104,8 +104,6 @@ pub struct RollingOperationsComponent {
     drain_options: DrainOptions,
     /// Delay between nodes (seconds)
     delay_between_nodes_secs: u64,
-    /// Stop on failure
-    stop_on_failure: bool,
     /// Background task handle
     operation_task: Option<JoinHandle<RollingOperationResult>>,
     /// Shared progress state
@@ -130,7 +128,6 @@ impl RollingOperationsComponent {
             state: RollingState::Selecting,
             drain_options: DrainOptions::default(),
             delay_between_nodes_secs: 30,
-            stop_on_failure: true,
             operation_task: None,
             operation_progress: Arc::new(Mutex::new(RollingProgress::default())),
             k8s_client: None,
@@ -225,7 +222,6 @@ impl RollingOperationsComponent {
         let progress = self.operation_progress.clone();
         let options = self.drain_options.clone();
         let delay = self.delay_between_nodes_secs;
-        let stop_on_failure = self.stop_on_failure;
         let k8s_client = self.k8s_client.clone();
         let talos_client = self.talos_client.clone();
 
@@ -236,7 +232,6 @@ impl RollingOperationsComponent {
                 operation,
                 options,
                 delay,
-                stop_on_failure,
                 k8s_client,
                 talos_client,
             )
@@ -329,14 +324,23 @@ async fn wait_for_etcd_safe(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The result of a rolling operation that stopped at `hostname`: every
+/// failure stops it, so no later node is touched
+fn stopped(completed: usize, hostname: &str, message: String) -> RollingOperationResult {
+    RollingOperationResult {
+        success: false,
+        completed_nodes: completed,
+        failed_node: Some(hostname.to_string()),
+        message,
+    }
+}
+
 async fn run_rolling_operation(
     progress: Arc<Mutex<RollingProgress>>,
     nodes: Vec<RollingNodeInfo>,
     operation: RollingOperationType,
     options: DrainOptions,
     delay_secs: u64,
-    stop_on_failure: bool,
     k8s_client: Option<Client>,
     talos_client: Option<TalosClient>,
 ) -> RollingOperationResult {
@@ -396,15 +400,7 @@ async fn run_rolling_operation(
         if let Err(e) = cordon_node(&k8s, &node.hostname).await {
             let msg = format!("Failed to cordon {}: {}", node.hostname, e);
             audit_failure(op_name, &node.hostname, &msg);
-            if stop_on_failure {
-                return RollingOperationResult {
-                    success: false,
-                    completed_nodes: completed,
-                    failed_node: Some(node.hostname.clone()),
-                    message: msg,
-                };
-            }
-            continue;
+            return stopped(completed, &node.hostname, msg);
         }
 
         // Step 2: Drain
@@ -431,29 +427,13 @@ async fn run_rolling_operation(
                     node.hostname, result.failed_pods
                 );
                 audit_failure(op_name, &node.hostname, &msg);
-                if stop_on_failure {
-                    return RollingOperationResult {
-                        success: false,
-                        completed_nodes: completed,
-                        failed_node: Some(node.hostname.clone()),
-                        message: msg,
-                    };
-                }
-                continue;
+                return stopped(completed, &node.hostname, msg);
             }
             Err(e) => {
                 let _ = uncordon_node(&k8s, &node.hostname).await;
                 let msg = format!("Drain error for {}: {}", node.hostname, e);
                 audit_failure(op_name, &node.hostname, &msg);
-                if stop_on_failure {
-                    return RollingOperationResult {
-                        success: false,
-                        completed_nodes: completed,
-                        failed_node: Some(node.hostname.clone()),
-                        message: msg,
-                    };
-                }
-                continue;
+                return stopped(completed, &node.hostname, msg);
             }
             _ => {}
         }
@@ -478,15 +458,7 @@ async fn run_rolling_operation(
                     let _ = uncordon_node(&k8s, &node.hostname).await;
                     let msg = format!("Reboot failed for {}: {}", node.hostname, e);
                     audit_failure(op_name, &node.hostname, &msg);
-                    if stop_on_failure {
-                        return RollingOperationResult {
-                            success: false,
-                            completed_nodes: completed,
-                            failed_node: Some(node.hostname.clone()),
-                            message: msg,
-                        };
-                    }
-                    continue;
+                    return stopped(completed, &node.hostname, msg);
                 }
 
                 // Wait for node to come back
@@ -525,28 +497,12 @@ async fn run_rolling_operation(
                                 node.hostname, result.error
                             );
                             audit_failure(op_name, &node.hostname, &msg);
-                            if stop_on_failure {
-                                return RollingOperationResult {
-                                    success: false,
-                                    completed_nodes: completed,
-                                    failed_node: Some(node.hostname.clone()),
-                                    message: msg,
-                                };
-                            }
-                            continue;
+                            return stopped(completed, &node.hostname, msg);
                         }
                         Err(e) => {
                             let msg = format!("Error waiting for {}: {}", node.hostname, e);
                             audit_failure(op_name, &node.hostname, &msg);
-                            if stop_on_failure {
-                                return RollingOperationResult {
-                                    success: false,
-                                    completed_nodes: completed,
-                                    failed_node: Some(node.hostname.clone()),
-                                    message: msg,
-                                };
-                            }
-                            continue;
+                            return stopped(completed, &node.hostname, msg);
                         }
                         _ => {}
                     }
@@ -560,15 +516,7 @@ async fn run_rolling_operation(
                 let _ = uncordon_node(&k8s, &node.hostname).await;
                 let msg = "No Talos client for reboot".to_string();
                 audit_failure(op_name, &node.hostname, &msg);
-                if stop_on_failure {
-                    return RollingOperationResult {
-                        success: false,
-                        completed_nodes: completed,
-                        failed_node: Some(node.hostname.clone()),
-                        message: msg,
-                    };
-                }
-                continue;
+                return stopped(completed, &node.hostname, msg);
             }
         }
 

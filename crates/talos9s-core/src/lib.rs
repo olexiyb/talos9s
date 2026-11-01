@@ -29,7 +29,6 @@ pub mod formatting;
 pub mod indicators;
 pub mod network;
 pub mod selection;
-pub mod types;
 
 // Re-export commonly used items at crate root
 pub use async_state::*;
@@ -39,7 +38,6 @@ pub use etcd::*;
 pub use formatting::*;
 pub use indicators::*;
 pub use selection::*;
-pub use types::*;
 
 // Network is not re-exported at root to avoid name conflicts
 // Use talos9s_core::network::* explicitly

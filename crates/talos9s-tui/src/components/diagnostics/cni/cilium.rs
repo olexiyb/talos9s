@@ -14,11 +14,8 @@ use crate::components::diagnostics::types::{
     CniInfo, CniPodInfo, DiagnosticCheck, DiagnosticContext,
 };
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
-use kube::{
-    Client,
-    api::{Api, ListParams},
-};
+use k8s_openapi::api::core::v1::ConfigMap;
+use kube::{Client, api::Api};
 use talos_rs::{KubeSpanSettings, get_kubespan_settings_for_node};
 
 /// Run Cilium-specific diagnostic checks
@@ -303,52 +300,6 @@ async fn check_hubble_relay(client: &Client) -> Option<DiagnosticCheck> {
             }
         }
         Err(_) => None, // Hubble not deployed - not an error
-    }
-}
-
-/// Check if Hubble UI is deployed
-#[allow(dead_code)]
-async fn check_hubble_ui(client: &Client) -> Option<DiagnosticCheck> {
-    let deployments: Api<Deployment> = Api::namespaced(client.clone(), "kube-system");
-
-    match deployments.get("hubble-ui").await {
-        Ok(deployment) => {
-            let status = deployment.status.as_ref();
-            let replicas = status.and_then(|s| s.replicas).unwrap_or(0);
-            let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
-
-            if ready > 0 && ready == replicas {
-                Some(DiagnosticCheck::pass(
-                    "hubble_ui",
-                    "Hubble UI",
-                    &format!("{}/{} ready", ready, replicas),
-                ))
-            } else {
-                Some(DiagnosticCheck::warn(
-                    "hubble_ui",
-                    "Hubble UI",
-                    &format!("{}/{} ready", ready, replicas),
-                ))
-            }
-        }
-        Err(_) => None, // Hubble UI not deployed
-    }
-}
-
-/// Detect if Cilium is running in eBPF/kube-proxy replacement mode
-///
-/// This is detected by checking if kube-proxy pods exist.
-/// If no kube-proxy pods are running, Cilium is likely in eBPF mode.
-pub async fn detect_ebpf_mode(client: &Client) -> bool {
-    let pods: Api<Pod> = Api::namespaced(client.clone(), "kube-system");
-
-    let params = ListParams::default().labels("k8s-app=kube-proxy");
-    match pods.list(&params).await {
-        Ok(list) => {
-            // If no kube-proxy pods, assume Cilium eBPF mode
-            list.items.is_empty()
-        }
-        Err(_) => false, // Can't determine, assume not eBPF mode
     }
 }
 
