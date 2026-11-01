@@ -10,9 +10,11 @@
 //! volumes view: one dataset (or zvol) on one node, no replication, with its
 //! real size and usage from the Talos Mounts API.
 
+use crate::linstor::{items, lenient};
 use k8s_openapi::serde_json::Value;
 use kube::Client;
 use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, ListParams};
+use serde::Deserialize;
 use std::collections::HashMap;
 
 /// Capacity of one ZFS pool (bytes)
@@ -97,28 +99,56 @@ pub async fn fetch_zfs_volumes(client: &Client) -> Result<Option<Vec<ZfsVolume>>
     }
 }
 
+/// Spec and status of a `ZFSVolume`; volumes without a node or pool are
+/// skipped
+#[derive(Deserialize)]
+struct ZfsVolumeJson {
+    spec: ZfsVolumeSpecJson,
+    #[serde(default, deserialize_with = "lenient")]
+    status: Option<ZfsVolumeStatusJson>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ZfsVolumeSpecJson {
+    #[serde(rename = "ownerNodeID")]
+    owner_node_id: String,
+    pool_name: String,
+    /// Bytes, as a decimal string
+    #[serde(default, deserialize_with = "lenient")]
+    capacity: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    volume_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ZfsVolumeStatusJson {
+    #[serde(default, deserialize_with = "lenient")]
+    state: Option<String>,
+}
+
 /// Parse `ZFSVolume` objects, sorted by name
 fn zfs_volumes_from(objects: Vec<DynamicObject>) -> Vec<ZfsVolume> {
     let mut volumes: Vec<ZfsVolume> = objects
         .into_iter()
         .filter_map(|obj| {
             let name = obj.metadata.name?;
-            let spec = obj.data.get("spec")?;
-            let field = |key: &str| spec.get(key).and_then(Value::as_str).map(str::to_string);
+            let data = ZfsVolumeJson::deserialize(&obj.data).ok()?;
             Some(ZfsVolume {
                 deleting: obj.metadata.deletion_timestamp.is_some(),
                 namespace: obj.metadata.namespace?,
                 pvc: None,
-                node: field("ownerNodeID")?,
-                pool: field("poolName")?,
-                capacity: field("capacity").and_then(|c| c.parse().ok()),
-                state: obj
-                    .data
-                    .pointer("/status/state")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unknown")
-                    .to_string(),
-                volume_type: field("volumeType").unwrap_or_else(|| "DATASET".to_string()),
+                node: data.spec.owner_node_id,
+                pool: data.spec.pool_name,
+                capacity: data.spec.capacity.and_then(|c| c.parse().ok()),
+                state: data
+                    .status
+                    .and_then(|s| s.state)
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                volume_type: data
+                    .spec
+                    .volume_type
+                    .unwrap_or_else(|| "DATASET".to_string()),
                 fs: None,
                 name,
             })
@@ -221,18 +251,23 @@ pub async fn fetch_zfs_pools(
 
 /// Parse the `pools` array of a ZFSNode, skipping entries without sizes
 fn pools_from(pools: &Value) -> Vec<ZfsPool> {
-    pools
-        .as_array()
-        .into_iter()
-        .flatten()
+    items::<ZfsPoolJson>(pools)
         .filter_map(|p| {
             Some(ZfsPool {
-                name: p.get("name")?.as_str()?.to_string(),
-                free: parse_quantity(p.get("free")?.as_str()?)?,
-                used: parse_quantity(p.get("used")?.as_str()?)?,
+                free: parse_quantity(&p.free)?,
+                used: parse_quantity(&p.used)?,
+                name: p.name,
             })
         })
         .collect()
+}
+
+/// One pool of a `ZFSNode`; sizes are Kubernetes quantities
+#[derive(Deserialize)]
+struct ZfsPoolJson {
+    name: String,
+    free: String,
+    used: String,
 }
 
 /// Parse a Kubernetes quantity such as `838259748Ki` or `1G` into bytes
@@ -308,6 +343,31 @@ mod tests {
         assert_eq!(volumes[0].namespace, "openebs");
         assert_eq!(volumes[0].capacity, Some(1 << 30));
         assert_eq!(volumes[0].dataset(), "datapool/localpv/pvc-1");
+    }
+
+    #[test]
+    fn odd_zfs_volumes_degrade_per_item() {
+        let obj = |spec, status| -> DynamicObject {
+            k8s_openapi::serde_json::from_value(json!({
+                "apiVersion": "zfs.openebs.io/v1", "kind": "ZFSVolume",
+                "metadata": {"name": "pvc-2", "namespace": "openebs"},
+                "spec": spec, "status": status
+            }))
+            .unwrap()
+        };
+        let volumes = zfs_volumes_from(vec![
+            obj(json!({"poolName": "datapool"}), json!({})),
+            obj(
+                json!({"ownerNodeID": "bc1", "poolName": "datapool",
+                       "capacity": "lots", "volumeType": 1}),
+                json!("?"),
+            ),
+        ]);
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].node, "bc1");
+        assert_eq!(volumes[0].capacity, None);
+        assert_eq!(volumes[0].state, "Unknown");
+        assert_eq!(volumes[0].volume_type, "DATASET");
     }
 
     #[test]

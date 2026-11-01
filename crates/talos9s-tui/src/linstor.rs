@@ -11,6 +11,9 @@ use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::serde_json::{self, Value};
 use kube::Client;
 use kube::api::{Api, ListParams};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
 
 /// Name of the LINSTOR controller Service created by the Piraeus operator
 const CONTROLLER_SERVICE: &str = "linstor-controller";
@@ -128,45 +131,115 @@ pub(crate) async fn get_json(client: &Client, path: &str) -> Result<Value, Strin
     serde_json::from_str(&body).map_err(|e| format!("unexpected LINSTOR response: {e}"))
 }
 
+// Lenient JSON parsing. LINSTOR's REST API and the OpenEBS CRDs aren't
+// versioned with us: a field that changes type or shape must degrade to
+// "unknown" for that field (or that entry), never fail a whole list.
+
+/// The items of a JSON array, each parsed on its own so an entry that
+/// doesn't match `T` is skipped, not the whole response
+pub(crate) fn items<T: DeserializeOwned>(json: &Value) -> impl Iterator<Item = T> + '_ {
+    json.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| match T::deserialize(item) {
+            Ok(parsed) => Some(parsed),
+            Err(e) => {
+                tracing::debug!("skipping unexpected entry: {}", e);
+                None
+            }
+        })
+}
+
+/// A field of the wrong type reads as missing (`#[serde(default)]` covers a
+/// missing one)
+pub(crate) fn lenient<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    Ok(T::deserialize(Value::deserialize(d)?).ok())
+}
+
+/// A field that counts by being present, even `null` or of the wrong
+/// shape (then with `T`'s defaults)
+pub(crate) fn present<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    Ok(Some(
+        T::deserialize(Value::deserialize(d)?).unwrap_or_default(),
+    ))
+}
+
+/// An array field keeping only the elements that parse; anything else is
+/// an empty list
+pub(crate) fn lenient_items<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<Vec<T>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| T::deserialize(item).ok())
+        .collect())
+}
+
+/// An object field keyed by name, values that don't parse with `T`'s
+/// defaults; anything else is an empty map
+pub(crate) fn lenient_map<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    d: D,
+) -> Result<HashMap<String, T>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(key, v)| (key.clone(), T::deserialize(v).unwrap_or_default()))
+        .collect())
+}
+
+/// One entry of `/v1/view/storage-pools`
+#[derive(Deserialize)]
+struct PoolJson {
+    node_name: String,
+    storage_pool_name: String,
+    #[serde(default, deserialize_with = "lenient")]
+    provider_kind: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    free_capacity: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    total_capacity: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    reports: Vec<ReportJson>,
+}
+
+#[derive(Deserialize)]
+struct ReportJson {
+    #[serde(default, deserialize_with = "lenient")]
+    ret_code: Option<i64>,
+}
+
 /// Storage pools with capacity per node name, from `/v1/view/storage-pools`.
 /// LINSTOR reports capacity in KiB.
-fn pools_from(json: &Value) -> std::collections::HashMap<String, Vec<StoragePool>> {
-    let mut by_node: std::collections::HashMap<String, Vec<StoragePool>> = Default::default();
-    for pool in json.as_array().into_iter().flatten() {
-        let (Some(node), Some(name)) = (
-            pool.get("node_name").and_then(Value::as_str),
-            pool.get("storage_pool_name").and_then(Value::as_str),
-        ) else {
-            continue;
-        };
-        let provider = pool
-            .get("provider_kind")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
+fn pools_from(json: &Value) -> HashMap<String, Vec<StoragePool>> {
+    let mut by_node: HashMap<String, Vec<StoragePool>> = Default::default();
+    for pool in items::<PoolJson>(json) {
+        let provider = pool.provider_kind.unwrap_or_else(|| "?".to_string());
         // Every node has a diskless pool; it holds no data
         if provider == "DISKLESS" {
             continue;
         }
-        let kib = |key: &str| pool.get(key).and_then(Value::as_u64).map(|k| k * 1024);
         // A report whose return code has the top bit set is an error or warning
         let has_problems = pool
-            .get("reports")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|r| {
-                r.get("ret_code")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|c| c < 0)
-            });
+            .reports
+            .iter()
+            .any(|r| r.ret_code.is_some_and(|c| c < 0));
         by_node
-            .entry(node.to_string())
+            .entry(pool.node_name)
             .or_default()
             .push(StoragePool {
-                name: name.to_string(),
-                provider: provider.to_string(),
-                free: kib("free_capacity"),
-                total: kib("total_capacity"),
+                name: pool.storage_pool_name,
+                provider,
+                free: pool.free_capacity.map(|k| k * 1024),
+                total: pool.total_capacity.map(|k| k * 1024),
                 has_problems,
             });
     }
@@ -200,57 +273,62 @@ fn proxy_path(service: &Service, api_path: &str) -> Option<String> {
     ))
 }
 
+/// One entry of `/v1/nodes`
+#[derive(Deserialize)]
+struct NodeJson {
+    name: String,
+    #[serde(rename = "type", default, deserialize_with = "lenient")]
+    node_type: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    connection_status: Option<String>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    flags: Vec<String>,
+    /// Interfaces without an address are left out
+    #[serde(default, deserialize_with = "lenient_items")]
+    net_interfaces: Vec<NicJson>,
+}
+
+#[derive(Deserialize)]
+struct NicJson {
+    address: String,
+    #[serde(default, deserialize_with = "lenient")]
+    satellite_port: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    satellite_encryption_type: Option<String>,
+}
+
 /// Parse the controller's `/v1/nodes` response, skipping unnamed entries,
 /// and attach each node's storage pools from `pools`
 fn nodes_from(json: &Value, pools: Option<&Value>) -> Vec<LinstorNode> {
     let mut pools = pools.map(pools_from);
-    let strings = |v: Option<&Value>| -> Vec<String> {
-        v.and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|s| s.as_str().map(str::to_string))
-            .collect()
-    };
-    let mut nodes: Vec<LinstorNode> = json
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|node| {
+    let mut nodes: Vec<LinstorNode> = items::<NodeJson>(json)
+        .map(|node| {
             let addresses = node
-                .get("net_interfaces")
-                .and_then(Value::as_array)
+                .net_interfaces
                 .into_iter()
-                .flatten()
-                .filter_map(|nic| {
-                    let address = nic.get("address")?.as_str()?;
-                    let mut text = match nic.get("satellite_port").and_then(Value::as_u64) {
-                        Some(port) => format!("{address}:{port}"),
-                        None => address.to_string(),
+                .map(|nic| {
+                    let mut text = match nic.satellite_port {
+                        Some(port) => format!("{}:{port}", nic.address),
+                        None => nic.address,
                     };
-                    if let Some(enc) = nic.get("satellite_encryption_type").and_then(Value::as_str)
-                    {
+                    if let Some(enc) = nic.satellite_encryption_type {
                         text.push_str(&format!(" ({enc})"));
                     }
-                    Some(text)
+                    text
                 })
                 .collect();
-            let name = node.get("name")?.as_str()?;
-            Some(LinstorNode {
-                name: name.to_string(),
-                node_type: node
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("?")
-                    .to_string(),
+            LinstorNode {
+                pools: pools
+                    .as_mut()
+                    .map(|p| p.remove(&node.name).unwrap_or_default()),
+                name: node.name,
+                node_type: node.node_type.unwrap_or_else(|| "?".to_string()),
                 addresses,
                 state: node
-                    .get("connection_status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("UNKNOWN")
-                    .to_string(),
-                flags: strings(node.get("flags")),
-                pools: pools.as_mut().map(|p| p.remove(name).unwrap_or_default()),
-            })
+                    .connection_status
+                    .unwrap_or_else(|| "UNKNOWN".to_string()),
+                flags: node.flags,
+            }
         })
         .collect();
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -294,6 +372,46 @@ mod tests {
         assert_eq!(nodes[1].addresses, ["10.0.0.12:3366 (PLAIN)"]);
         assert_eq!(nodes[1].flags, ["EVICTED"]);
         assert!(!nodes[1].is_online());
+    }
+
+    #[test]
+    fn odd_entries_and_fields_degrade_per_item() {
+        let json = json!([
+            "not a node",
+            {"name": 7, "type": "SATELLITE"},
+            {
+                "name": "bc1",
+                "type": 5,
+                "connection_status": null,
+                "flags": ["EVICTED", 3],
+                "net_interfaces": [
+                    {"name": "no-address"},
+                    {"address": "10.0.0.1", "satellite_port": "3366",
+                     "satellite_encryption_type": false}
+                ]
+            }
+        ]);
+        let pools = json!([
+            {"node_name": "bc1", "storage_pool_name": "datapool",
+             "free_capacity": "300", "total_capacity": 400, "reports": "none"},
+            {"node_name": "bc1"},
+            42
+        ]);
+        let nodes = nodes_from(&json, Some(&pools));
+        assert_eq!(nodes.len(), 1);
+        let bc1 = &nodes[0];
+        assert_eq!(bc1.node_type, "?");
+        assert_eq!(bc1.state, "UNKNOWN");
+        assert_eq!(bc1.flags, ["EVICTED"]);
+        assert_eq!(bc1.addresses, ["10.0.0.1"]);
+        let pools = bc1.pools.as_ref().unwrap();
+        assert_eq!(pools.len(), 1);
+        assert_eq!(pools[0].provider, "?");
+        assert_eq!((pools[0].free, pools[0].total), (None, Some(400 * 1024)));
+        assert!(!pools[0].has_problems);
+
+        // Not a list at all: nothing, not an error
+        assert!(nodes_from(&json!({"error": "x"}), None).is_empty());
     }
 
     #[test]

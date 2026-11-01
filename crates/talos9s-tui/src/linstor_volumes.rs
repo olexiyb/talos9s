@@ -19,9 +19,12 @@
 //! debugfs is marked "format will change without notice"; anything that
 //! can't be read or parsed is reported as unknown, never as a problem.
 
-use crate::linstor::{controller_base, get_json};
+use crate::linstor::{
+    controller_base, get_json, items, lenient, lenient_items, lenient_map, present,
+};
 use futures::StreamExt;
 use k8s_openapi::serde_json::Value;
+use serde::Deserialize;
 use std::collections::HashMap;
 use talos_rs::{MountUsage, TalosClient};
 
@@ -307,16 +310,8 @@ pub async fn fetch_volumes(client: &kube::Client) -> Result<Option<Vec<LinstorVo
 
 /// Set each volume's `place_count` from its resource group's select filter
 pub fn apply_place_counts(volumes: &mut [LinstorVolume], groups: &Value) {
-    let counts: HashMap<&str, u32> = groups
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|g| {
-            Some((
-                g.get("name")?.as_str()?,
-                g.pointer("/select_filter/place_count")?.as_u64()? as u32,
-            ))
-        })
+    let counts: HashMap<String, u32> = items::<GroupJson>(groups)
+        .map(|g| (g.name, g.select_filter.place_count as u32))
         .collect();
     for volume in volumes {
         volume.place_count = volume
@@ -326,103 +321,203 @@ pub fn apply_place_counts(volumes: &mut [LinstorVolume], groups: &Value) {
     }
 }
 
+/// One entry of `/v1/resource-groups`; groups without a place count are
+/// skipped
+#[derive(Deserialize)]
+struct GroupJson {
+    name: String,
+    select_filter: SelectFilterJson,
+}
+
+#[derive(Deserialize)]
+struct SelectFilterJson {
+    place_count: u64,
+}
+
+/// One entry of `/v1/resource-definitions?with_volume_definitions=true`
+#[derive(Deserialize)]
+struct DefinitionJson {
+    name: String,
+    #[serde(default, deserialize_with = "lenient_map")]
+    props: HashMap<String, Value>,
+    #[serde(default, deserialize_with = "lenient")]
+    resource_group_name: Option<String>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    flags: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    volume_definitions: Vec<VolumeDefinitionJson>,
+}
+
+#[derive(Deserialize)]
+struct VolumeDefinitionJson {
+    volume_number: u64,
+    size_kib: u64,
+}
+
+/// One entry of `/v1/view/resources`: a resource on one node
+#[derive(Deserialize)]
+struct ResourceJson {
+    name: String,
+    node_name: String,
+    #[serde(default, deserialize_with = "lenient")]
+    state: Option<ResourceStateJson>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    flags: Vec<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    layer_object: Option<LayerObjectJson>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    volumes: Vec<VolumeJson>,
+}
+
+#[derive(Deserialize)]
+struct ResourceStateJson {
+    #[serde(default, deserialize_with = "lenient")]
+    in_use: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct LayerObjectJson {
+    /// Any `drbd` entry means the resource has a DRBD layer
+    #[serde(default, deserialize_with = "present")]
+    drbd: Option<DrbdLayerJson>,
+}
+
+#[derive(Deserialize, Default)]
+struct DrbdLayerJson {
+    #[serde(default, deserialize_with = "lenient_map")]
+    connections: HashMap<String, ConnectionJson>,
+}
+
+#[derive(Deserialize, Default)]
+struct ConnectionJson {
+    #[serde(default, deserialize_with = "lenient")]
+    connected: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    message: Option<String>,
+}
+
+/// One volume of a resource; volumes without a number are skipped
+#[derive(Deserialize)]
+struct VolumeJson {
+    volume_number: u64,
+    #[serde(default, deserialize_with = "lenient")]
+    provider_kind: Option<String>,
+    #[serde(default, deserialize_with = "lenient_items")]
+    layer_data_list: Vec<LayerDataJson>,
+    #[serde(default, deserialize_with = "lenient")]
+    state: Option<VolumeStateJson>,
+}
+
+#[derive(Deserialize)]
+struct LayerDataJson {
+    #[serde(rename = "type", default, deserialize_with = "lenient")]
+    layer_type: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    data: Option<LayerDataDataJson>,
+}
+
+#[derive(Deserialize)]
+struct LayerDataDataJson {
+    #[serde(default, deserialize_with = "lenient")]
+    drbd_volume_definition: Option<DrbdVolumeDefinitionJson>,
+}
+
+#[derive(Deserialize)]
+struct DrbdVolumeDefinitionJson {
+    #[serde(default, deserialize_with = "lenient")]
+    minor_number: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct VolumeStateJson {
+    #[serde(default, deserialize_with = "lenient")]
+    disk_state: Option<String>,
+    #[serde(default, deserialize_with = "lenient_map")]
+    replication_states: HashMap<String, ReplicationJson>,
+}
+
+#[derive(Deserialize, Default)]
+struct ReplicationJson {
+    #[serde(default, deserialize_with = "lenient")]
+    replication_state: Option<String>,
+}
+
+/// A volume without replicas, with what its definition (if any) says
+fn volume_of(resource: &str, number: u64, definition: Option<&DefinitionJson>) -> LinstorVolume {
+    let mut volume = LinstorVolume {
+        resource: resource.to_string(),
+        volume_number: number as u32,
+        ..Default::default()
+    };
+    let Some(rd) = definition else {
+        return volume;
+    };
+    let prop = |key: &str| rd.props.get(key).and_then(Value::as_str);
+    volume.pvc = match (
+        prop("Aux/csi.storage.k8s.io/pvc/namespace"),
+        prop("Aux/csi.storage.k8s.io/pvc/name"),
+    ) {
+        (Some(ns), Some(name)) => Some(format!("{ns}/{name}")),
+        _ => None,
+    };
+    volume.resource_group = rd.resource_group_name.clone();
+    volume.deleting = rd.flags.iter().any(|f| f == "DELETE");
+    // The last definition of a number wins, as LINSTOR's own map would
+    volume.size_kib = rd
+        .volume_definitions
+        .iter()
+        .rev()
+        .find(|vd| vd.volume_number == number)
+        .map(|vd| vd.size_kib);
+    volume
+}
+
 /// Group LINSTOR's resource view (one entry per resource and node) into
 /// volumes, with sizes and PVC names from the resource definitions
 pub fn volumes_from(resources: &Value, definitions: &Value) -> Vec<LinstorVolume> {
-    let str_at = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).map(str::to_string);
-
-    // resource -> (pvc, resource group, deleting, volume number -> size)
-    type Definition = (Option<String>, Option<String>, bool, HashMap<u64, u64>);
-    let mut defs: HashMap<String, Definition> = HashMap::new();
-    for rd in definitions.as_array().into_iter().flatten() {
-        let Some(name) = str_at(rd, "name") else {
-            continue;
-        };
-        let props = rd.get("props");
-        let prop = |key: &str| props.and_then(|p| p.get(key)).and_then(Value::as_str);
-        let pvc = match (
-            prop("Aux/csi.storage.k8s.io/pvc/namespace"),
-            prop("Aux/csi.storage.k8s.io/pvc/name"),
-        ) {
-            (Some(ns), Some(name)) => Some(format!("{ns}/{name}")),
-            _ => None,
-        };
-        let sizes = rd
-            .get("volume_definitions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|vd| {
-                Some((
-                    vd.get("volume_number")?.as_u64()?,
-                    vd.get("size_kib")?.as_u64()?,
-                ))
-            })
-            .collect();
-        let deleting = rd
-            .get("flags")
-            .and_then(Value::as_array)
-            .is_some_and(|flags| flags.iter().any(|f| f.as_str() == Some("DELETE")));
-        defs.insert(
-            name,
-            (pvc, str_at(rd, "resource_group_name"), deleting, sizes),
-        );
-    }
+    let defs: HashMap<String, DefinitionJson> = items::<DefinitionJson>(definitions)
+        .map(|rd| (rd.name.clone(), rd))
+        .collect();
 
     let mut volumes: HashMap<(String, u64), LinstorVolume> = HashMap::new();
-    for res in resources.as_array().into_iter().flatten() {
-        let (Some(name), Some(node)) = (str_at(res, "name"), str_at(res, "node_name")) else {
-            continue;
-        };
-        let in_use = res
-            .pointer("/state/in_use")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let flags: Vec<&str> = res
-            .get("flags")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect();
-        let drbd = res.pointer("/layer_object/drbd");
+    for res in items::<ResourceJson>(resources) {
+        let (name, node) = (res.name, res.node_name);
+        let in_use = res.state.and_then(|s| s.in_use).unwrap_or(false);
+        let drbd = res.layer_object.and_then(|l| l.drbd);
         let connections: Vec<(String, bool, String)> = drbd
-            .and_then(|d| d.get("connections"))
-            .and_then(Value::as_object)
-            .into_iter()
-            .flatten()
+            .iter()
+            .flat_map(|d| &d.connections)
             .map(|(peer, c)| {
                 (
                     peer.clone(),
-                    c.get("connected").and_then(Value::as_bool).unwrap_or(false),
-                    str_at(c, "message").unwrap_or_default(),
+                    c.connected.unwrap_or(false),
+                    c.message.clone().unwrap_or_default(),
                 )
             })
             .collect();
 
-        for vol in res
-            .get("volumes")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(number) = vol.get("volume_number").and_then(Value::as_u64) else {
-                continue;
-            };
-            let diskless = flags.iter().any(|f| f.contains("DISKLESS"))
-                || vol.get("provider_kind").and_then(Value::as_str) == Some("DISKLESS");
+        for vol in res.volumes {
+            let number = vol.volume_number;
+            let diskless = res.flags.iter().any(|f| f.contains("DISKLESS"))
+                || vol.provider_kind.as_deref() == Some("DISKLESS");
             let drbd_layer_data = vol
-                .get("layer_data_list")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .find(|l| l.get("type").and_then(Value::as_str) == Some("DRBD"));
+                .layer_data_list
+                .iter()
+                .find(|l| l.layer_type.as_deref() == Some("DRBD"));
             let drbd_layer = drbd.is_some() || drbd_layer_data.is_some();
             let minor = drbd_layer_data
-                .and_then(|l| l.pointer("/data/drbd_volume_definition/minor_number"))
-                .and_then(Value::as_u64)
+                .and_then(|l| {
+                    l.data
+                        .as_ref()?
+                        .drbd_volume_definition
+                        .as_ref()?
+                        .minor_number
+                })
                 .map(|m| m as u32);
-            let replication = vol.pointer("/state/replication_states");
+            let (disk_state, replication) = match vol.state {
+                Some(s) => (s.disk_state, s.replication_states),
+                None => (None, HashMap::new()),
+            };
             let mut peers: Vec<PeerLink> = connections
                 .iter()
                 .map(|(peer, connected, message)| PeerLink {
@@ -430,43 +525,21 @@ pub fn volumes_from(resources: &Value, definitions: &Value) -> Vec<LinstorVolume
                     connected: *connected,
                     message: message.clone(),
                     replication: replication
-                        .and_then(|r| r.get(peer))
-                        .and_then(|r| str_at(r, "replication_state")),
+                        .get(peer)
+                        .and_then(|r| r.replication_state.clone()),
                 })
                 .collect();
             peers.sort_by(|a, b| a.peer.cmp(&b.peer));
 
-            let (pvc, resource_group, deleting, size_kib) = match defs.get(&name) {
-                Some((pvc, group, deleting, sizes)) => (
-                    pvc.clone(),
-                    group.clone(),
-                    *deleting,
-                    sizes.get(&number).copied(),
-                ),
-                None => (None, None, false, None),
-            };
             let volume = volumes
                 .entry((name.clone(), number))
-                .or_insert_with(|| LinstorVolume {
-                    resource: name.clone(),
-                    volume_number: number as u32,
-                    pvc,
-                    size_kib,
-                    resource_group,
-                    place_count: None,
-                    deleting,
-                    replicas: Vec::new(),
-                });
+                .or_insert_with(|| volume_of(&name, number, defs.get(&name)));
             volume.replicas.push(Replica {
                 node: node.clone(),
                 drbd_layer,
                 in_use,
                 diskless,
-                disk_state: vol
-                    .pointer("/state/disk_state")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unknown")
-                    .to_string(),
+                disk_state: disk_state.unwrap_or_else(|| "Unknown".to_string()),
                 minor,
                 peers,
                 drbd: None,
@@ -1504,6 +1577,86 @@ mod tests {
                 .iter()
                 .any(|i| i.text == "bc3: Inconsistent (syncing)")
         );
+    }
+
+    #[test]
+    fn odd_resources_degrade_per_item() {
+        let resources = json!([
+            {"name": "pvc-1"},
+            "garbage",
+            {
+                "name": "pvc-1", "node_name": "bc1",
+                "state": "?",
+                "flags": [1, "DRBD_DISKLESS"],
+                "layer_object": {"drbd": null},
+                "volumes": [
+                    {"provider_kind": "ZFS_THIN"},
+                    {"volume_number": 0,
+                     "layer_data_list": [7, {"type": "DRBD", "data": "?"}]}
+                ]
+            },
+            {
+                "name": "pvc-1", "node_name": "bc2",
+                "layer_object": {"drbd": {"connections": {"bc1": "?", "bc3": {"connected": true}}}},
+                "volumes": [{"volume_number": 0, "state": {
+                    "disk_state": 9,
+                    "replication_states": {"bc1": {"replication_state": "Established"}, "bc3": 1}
+                }}]
+            }
+        ]);
+        let definitions = json!([
+            {"name": "pvc-1", "props": "?", "flags": ["DELETE", 2],
+             "resource_group_name": 3,
+             "volume_definitions": [{"volume_number": 0}, {"volume_number": 0, "size_kib": 8}]}
+        ]);
+        let volumes = volumes_from(&resources, &definitions);
+        assert_eq!(volumes.len(), 1);
+        let v = &volumes[0];
+        assert_eq!(
+            (v.pvc.as_deref(), v.resource_group.as_deref()),
+            (None, None)
+        );
+        assert!(v.deleting);
+        assert_eq!(v.size_kib, Some(8));
+        assert_eq!(v.replicas.len(), 2);
+
+        // `drbd: null` still means a DRBD layer; a bad layer entry no minor
+        let bc1 = &v.replicas[0];
+        assert!(bc1.drbd_layer && bc1.diskless && !bc1.in_use);
+        assert_eq!((bc1.disk_state.as_str(), bc1.minor), ("Unknown", None));
+        assert!(bc1.peers.is_empty());
+
+        // A malformed connection is kept, as not connected
+        let bc2 = &v.replicas[1];
+        assert_eq!(bc2.disk_state, "Unknown");
+        assert_eq!(
+            bc2.peers,
+            [
+                PeerLink {
+                    peer: "bc1".to_string(),
+                    connected: false,
+                    message: String::new(),
+                    replication: Some("Established".to_string()),
+                },
+                PeerLink {
+                    peer: "bc3".to_string(),
+                    connected: true,
+                    message: String::new(),
+                    replication: None,
+                },
+            ]
+        );
+
+        let mut volumes = volumes;
+        volumes[0].resource_group = Some("rg".to_string());
+        let groups = json!([
+            {"name": "rg", "select_filter": {}},
+            {"name": "rg", "select_filter": {"place_count": 3}},
+        ]);
+        apply_place_counts(&mut volumes, &groups);
+        assert_eq!(volumes[0].place_count, Some(3));
+        apply_place_counts(&mut volumes, &json!([{"name": "rg"}]));
+        assert_eq!(volumes[0].place_count, None);
     }
 
     #[test]
