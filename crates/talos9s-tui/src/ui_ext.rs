@@ -212,6 +212,15 @@ impl CheckStatusExt for CheckStatus {
     }
 }
 
+/// A `width` x `height` dialog centered in `area`, never larger than it
+pub fn centered(area: ratatui::layout::Rect, width: u16, height: u16) -> ratatui::layout::Rect {
+    use ratatui::layout::Constraint;
+    area.centered(
+        Constraint::Length(width.min(area.width)),
+        Constraint::Length(height.min(area.height)),
+    )
+}
+
 /// Is `mouse` a left button press?
 pub fn is_left_click(mouse: &crossterm::event::MouseEvent) -> bool {
     matches!(
@@ -336,6 +345,15 @@ impl<T: Clone> LineHits<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dialogs_center_in_their_area_and_fit_it() {
+        use ratatui::layout::Rect;
+        // A pane that doesn't start at the screen's corner
+        let pane = Rect::new(30, 2, 100, 40);
+        assert_eq!(centered(pane, 50, 10), Rect::new(55, 17, 50, 10));
+        assert_eq!(centered(Rect::new(0, 0, 20, 5), 50, 10), Rect::new(0, 0, 20, 5));
+    }
 
     #[test]
     fn test_health_indicator_colors() {

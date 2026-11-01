@@ -612,9 +612,7 @@ impl Component for RollingOperationsComponent {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let overlay_width = 60.min(area.width.saturating_sub(4));
         let overlay_height = 20.min(area.height.saturating_sub(4));
-        let x = (area.width.saturating_sub(overlay_width)) / 2;
-        let y = (area.height.saturating_sub(overlay_height)) / 2;
-        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
         frame.render_widget(Clear, overlay_area);
 

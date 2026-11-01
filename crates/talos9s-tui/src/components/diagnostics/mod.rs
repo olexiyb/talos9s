@@ -658,15 +658,7 @@ impl DiagnosticsComponent {
 
         let dialog_width = 70.min(area.width.saturating_sub(4));
         let dialog_height = 15.min(area.height.saturating_sub(4));
-        let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
-        let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
-
-        let dialog_area = Rect::new(
-            area.x + dialog_x,
-            area.y + dialog_y,
-            dialog_width,
-            dialog_height,
-        );
+        let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);
 
         frame.render_widget(Clear, dialog_area);
 
@@ -766,15 +758,7 @@ impl DiagnosticsComponent {
         let dialog_height = (content_lines.len() as u16 + 6)
             .min(20)
             .min(area.height.saturating_sub(4));
-        let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
-        let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
-
-        let dialog_area = Rect::new(
-            area.x + dialog_x,
-            area.y + dialog_y,
-            dialog_width,
-            dialog_height,
-        );
+        let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);
 
         frame.render_widget(Clear, dialog_area);
 

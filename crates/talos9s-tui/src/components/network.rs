@@ -3375,9 +3375,7 @@ impl NetworkStatsComponent {
         // Center the dialog
         let dialog_width = 40u16;
         let dialog_height = 5u16;
-        let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
-        let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
-        let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
+        let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);
 
         // Clear the area first (removes any text underneath)
         frame.render_widget(Clear, dialog_area);
@@ -3790,9 +3788,7 @@ impl NetworkStatsComponent {
         // Create a centered overlay
         let overlay_width = (area.width * 4 / 5).min(100);
         let overlay_height = (area.height * 3 / 4).min(30);
-        let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
-        let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
-        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
         // Clear the area
         frame.render_widget(Clear, overlay_area);

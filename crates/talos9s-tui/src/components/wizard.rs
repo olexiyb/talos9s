@@ -1152,7 +1152,7 @@ impl WizardComponent {
             .unwrap_or(40)
             .min(area.width);
         let height = (lines.len() as u16 + 2).min(area.height);
-        let dialog = area.centered(Constraint::Length(width), Constraint::Length(height));
+        let dialog = crate::ui_ext::centered(area, width, height);
         frame.render_widget(ratatui::widgets::Clear, dialog);
         frame.render_widget(
             Paragraph::new(lines).block(

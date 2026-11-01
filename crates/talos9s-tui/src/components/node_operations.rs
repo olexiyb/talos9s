@@ -949,9 +949,7 @@ impl NodeOperationsComponent {
             10
         };
         let overlay_height = height.min(area.height.saturating_sub(4));
-        let x = (area.width.saturating_sub(overlay_width)) / 2;
-        let y = (area.height.saturating_sub(overlay_height)) / 2;
-        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
         frame.render_widget(Clear, overlay_area);
 
@@ -1054,9 +1052,7 @@ impl NodeOperationsComponent {
     ) {
         let overlay_width = 50.min(area.width.saturating_sub(4));
         let overlay_height = 7.min(area.height.saturating_sub(4));
-        let x = (area.width.saturating_sub(overlay_width)) / 2;
-        let y = (area.height.saturating_sub(overlay_height)) / 2;
-        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
         frame.render_widget(Clear, overlay_area);
 
@@ -1100,9 +1096,7 @@ impl NodeOperationsComponent {
     ) {
         let overlay_width = 50.min(area.width.saturating_sub(4));
         let overlay_height = 8.min(area.height.saturating_sub(4));
-        let x = (area.width.saturating_sub(overlay_width)) / 2;
-        let y = (area.height.saturating_sub(overlay_height)) / 2;
-        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
         frame.render_widget(Clear, overlay_area);
 
@@ -1147,10 +1141,7 @@ impl NodeOperationsComponent {
         // Calculate centered overlay position
         let overlay_width = 50.min(area.width.saturating_sub(4));
         let overlay_height = 19.min(area.height.saturating_sub(4));
-        let x = (area.width.saturating_sub(overlay_width)) / 2;
-        let y = (area.height.saturating_sub(overlay_height)) / 2;
-
-        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
         // Clear the background
         frame.render_widget(Clear, overlay_area);
@@ -1501,9 +1492,7 @@ impl Component for NodeOperationsComponent {
             // Show loading in overlay
             let overlay_width = 40.min(area.width.saturating_sub(4));
             let overlay_height = 5;
-            let x = (area.width.saturating_sub(overlay_width)) / 2;
-            let y = (area.height.saturating_sub(overlay_height)) / 2;
-            let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+            let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
 
             frame.render_widget(Clear, overlay_area);
 
