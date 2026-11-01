@@ -313,43 +313,18 @@ impl TalosClient {
             .messages
             .into_iter()
             .enumerate()
-            .map(|(i, msg)| VersionInfo {
-                node: self.node_from_metadata(msg.metadata.as_ref(), i),
-                version: msg
-                    .version
-                    .as_ref()
-                    .map(|v| v.tag.clone())
-                    .unwrap_or_default(),
-                sha: msg
-                    .version
-                    .as_ref()
-                    .map(|v| v.sha.clone())
-                    .unwrap_or_default(),
-                built: msg
-                    .version
-                    .as_ref()
-                    .map(|v| v.built.clone())
-                    .unwrap_or_default(),
-                go_version: msg
-                    .version
-                    .as_ref()
-                    .map(|v| v.go_version.clone())
-                    .unwrap_or_default(),
-                os: msg
-                    .version
-                    .as_ref()
-                    .map(|v| v.os.clone())
-                    .unwrap_or_default(),
-                arch: msg
-                    .version
-                    .as_ref()
-                    .map(|v| v.arch.clone())
-                    .unwrap_or_default(),
-                platform: msg
-                    .platform
-                    .as_ref()
-                    .map(|p| p.name.clone())
-                    .unwrap_or_default(),
+            .map(|(i, msg)| {
+                let version = msg.version.unwrap_or_default();
+                VersionInfo {
+                    node: self.node_from_metadata(msg.metadata.as_ref(), i),
+                    version: version.tag,
+                    sha: version.sha,
+                    built: version.built,
+                    go_version: version.go_version,
+                    os: version.os,
+                    arch: version.arch,
+                    platform: msg.platform.map(|p| p.name).unwrap_or_default(),
+                }
             })
             .collect();
 
