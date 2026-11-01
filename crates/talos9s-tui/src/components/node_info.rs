@@ -46,14 +46,6 @@ impl NodeInfoTab {
         NodeInfoTab::Extensions,
     ];
 
-    fn label(&self) -> &'static str {
-        match self {
-            NodeInfoTab::Containers => "Containers",
-            NodeInfoTab::Config => "Config",
-            NodeInfoTab::Extensions => "Extensions",
-        }
-    }
-
     fn index(&self) -> usize {
         Self::ALL.iter().position(|t| t == self).unwrap_or(0)
     }
@@ -246,9 +238,7 @@ pub struct NodeInfoComponent {
     config_hscroll: usize,
     /// Config lines shown at once, from the last draw
     config_page: usize,
-    /// Where each tab label and the open tab's list were last drawn, for
-    /// mouse clicks
-    tab_hits: Vec<(Rect, NodeInfoTab)>,
+    /// Where the open list was last drawn, for mouse clicks
     content_area: Rect,
 }
 
@@ -297,7 +287,6 @@ impl NodeInfoComponent {
             config_scroll: 0,
             config_hscroll: 0,
             config_page: 20,
-            tab_hits: Vec::new(),
             content_area: Rect::default(),
         }
     }
@@ -550,42 +539,6 @@ impl NodeInfoComponent {
         if let Some(i) = found {
             self.config_scroll = i;
         }
-    }
-
-    fn draw_tabs(&mut self, frame: &mut Frame, area: Rect) {
-        self.tab_hits.clear();
-        let mut x = area.x;
-        for tab in NodeInfoTab::ALL {
-            let width = format!(" [{}] ", tab.label()).chars().count() as u16;
-            self.tab_hits
-                .push((Rect::new(x, area.y, width.min(area.right() - x), 1), tab));
-            x = (x + width).min(area.right());
-        }
-        let mut spans: Vec<Span> = NodeInfoTab::ALL
-            .iter()
-            .map(|tab| {
-                let style = if *tab == self.tab {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-                Span::styled(format!(" [{}] ", tab.label()), style)
-            })
-            .collect();
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("Node: {}", self.hostname),
-            Style::default().fg(Color::DarkGray),
-        ));
-        if self.state.is_loading() {
-            spans.push(Span::styled(
-                "  refreshing…",
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
     fn draw_error(frame: &mut Frame, area: Rect, title: &str, error: &str) {
@@ -852,9 +805,7 @@ impl NodeInfoComponent {
             ]
         } else {
             let mut spans = vec![
-                key(" Tab"),
-                Span::raw(" switch view  "),
-                key("↑/↓"),
+                key(" ↑/↓"),
                 Span::raw(if self.tab == NodeInfoTab::Config {
                     " scroll  "
                 } else {
@@ -944,16 +895,12 @@ impl Component for NodeInfoComponent {
         self.query().editing
     }
 
-    fn uses_tab_key(&self) -> bool {
-        true
-    }
-
     fn uses_horizontal_keys(&self) -> bool {
         // Scrolled config: Left scrolls back; at column 0 it leaves the view
         self.tab == NodeInfoTab::Config && self.config_hscroll > 0
     }
 
-    /// Click a tab to open it or a row to select it; the wheel scrolls
+    /// Click a row to select it; the wheel scrolls
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         let at = |r: &Rect| {
             mouse.column >= r.x
@@ -963,10 +910,6 @@ impl Component for NodeInfoComponent {
         };
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some((_, tab)) = self.tab_hits.iter().find(|(r, _)| at(r)) {
-                    self.tab = *tab;
-                    return Ok(None);
-                }
                 // Table rows start below the border and the header
                 let area = self.content_area;
                 if self.tab == NodeInfoTab::Config || !at(&area) || mouse.row < area.y + 2 {
@@ -1023,16 +966,6 @@ impl Component for NodeInfoComponent {
                 }
                 *self.query_mut() = Query::default();
             }
-            KeyCode::Tab => {
-                self.tab = NodeInfoTab::ALL[(self.tab.index() + 1) % NodeInfoTab::ALL.len()];
-            }
-            KeyCode::BackTab => {
-                let n = NodeInfoTab::ALL.len();
-                self.tab = NodeInfoTab::ALL[(self.tab.index() + n - 1) % n];
-            }
-            KeyCode::Char('1') => self.tab = NodeInfoTab::Containers,
-            KeyCode::Char('2') => self.tab = NodeInfoTab::Config,
-            KeyCode::Char('3') => self.tab = NodeInfoTab::Extensions,
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
             KeyCode::PageUp => self.move_by(-page),
@@ -1086,8 +1019,8 @@ impl Component for NodeInfoComponent {
             );
             return Ok(());
         }
-        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-        self.draw_tabs(frame, chunks[0]);
+        // Containers, Machine config and Extensions are separate menu
+        // entries: no tab bar, and the window title names the node
         let attempted = self.data().is_some_and(|d| d.attempted[self.tab.index()]);
         if !attempted {
             let what = match self.tab {
@@ -1098,13 +1031,13 @@ impl Component for NodeInfoComponent {
             frame.render_widget(
                 Paragraph::new(format!("Loading {what} of {}...", self.hostname))
                     .style(Style::default().fg(Color::DarkGray)),
-                chunks[1],
+                area,
             );
         } else {
             match self.tab {
-                NodeInfoTab::Containers => self.draw_containers(frame, chunks[1]),
-                NodeInfoTab::Config => self.draw_config(frame, chunks[1]),
-                NodeInfoTab::Extensions => self.draw_extensions(frame, chunks[1]),
+                NodeInfoTab::Containers => self.draw_containers(frame, area),
+                NodeInfoTab::Config => self.draw_config(frame, area),
+                NodeInfoTab::Extensions => self.draw_extensions(frame, area),
             }
         }
         Ok(())
@@ -1220,36 +1153,6 @@ auth: bWU6aHVudGVyMg==
         let (lines, hidden) = masked(config);
         assert_eq!(lines.join("\n") + "\n", config);
         assert_eq!(hidden, 0);
-    }
-
-    #[test]
-    fn clicking_a_tab_opens_it() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut comp = NodeInfoComponent::new(
-            "bc1".to_string(),
-            "10.0.0.1".to_string(),
-            None,
-            None,
-            NodeInfoTab::Containers,
-        );
-        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-        terminal.draw(|f| comp.draw(f, f.area()).unwrap()).unwrap();
-        let click = |column| MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        };
-        // " [Containers] " is 14 wide, " [Config] " 10: Config at 14..24
-        comp.handle_mouse_event(click(16)).unwrap();
-        assert_eq!(comp.tab, NodeInfoTab::Config);
-        comp.handle_mouse_event(click(26)).unwrap();
-        assert_eq!(comp.tab, NodeInfoTab::Extensions);
-        // Past the tabs: nothing changes
-        comp.handle_mouse_event(click(60)).unwrap();
-        assert_eq!(comp.tab, NodeInfoTab::Extensions);
     }
 
     #[test]

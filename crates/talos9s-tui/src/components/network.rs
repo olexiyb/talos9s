@@ -260,6 +260,10 @@ pub struct NetworkData {
     pub total_errors: u64,
     /// Total dropped across all devices
     pub total_dropped: u64,
+    /// Errors and drops per second right now, across all devices: the
+    /// totals keep incidents long over, these flag what is happening now
+    pub errors_per_sec: f64,
+    pub dropped_per_sec: f64,
 
     /// Connection data from netstat
     pub connections: Vec<ConnectionInfo>,
@@ -719,6 +723,24 @@ impl NetworkStatsComponent {
         data.total_tx_rate = data.rates.values().map(|r| r.tx_bytes_per_sec).sum();
         data.total_errors = new_devices.iter().map(|d| d.total_errors()).sum();
         data.total_dropped = new_devices.iter().map(|d| d.total_dropped()).sum();
+        let current = |f: fn(&NetDevRate) -> f64| -> f64 {
+            new_devices
+                .iter()
+                .filter_map(|d| data.rates.get(&d.name))
+                .map(f)
+                .sum()
+        };
+        // Only rates from this sample: a device gone since keeps its old entry
+        data.errors_per_sec = if elapsed_secs > 0.1 {
+            current(|r| r.errors_per_sec)
+        } else {
+            0.0
+        };
+        data.dropped_per_sec = if elapsed_secs > 0.1 {
+            current(|r| r.dropped_per_sec)
+        } else {
+            0.0
+        };
 
         // Sort and store devices
         data.devices = new_devices;
@@ -1125,20 +1147,26 @@ impl NetworkStatsComponent {
 
     /// Draw the summary bar
     fn draw_summary_bar(&self, frame: &mut Frame, area: Rect) {
-        let (total_errors, total_dropped, total_rx_rate, total_tx_rate) = self
-            .data()
-            .map(|d| {
-                (
-                    d.total_errors,
-                    d.total_dropped,
-                    d.total_rx_rate,
-                    d.total_tx_rate,
-                )
-            })
-            .unwrap_or((0, 0, 0, 0));
+        let (total_errors, total_dropped, total_rx_rate, total_tx_rate, errors_ps, dropped_ps) =
+            self.data()
+                .map(|d| {
+                    (
+                        d.total_errors,
+                        d.total_dropped,
+                        d.total_rx_rate,
+                        d.total_tx_rate,
+                        d.errors_per_sec,
+                        d.dropped_per_sec,
+                    )
+                })
+                .unwrap_or_default();
 
-        let has_errors = total_errors > 0 || total_dropped > 0;
-        let warning = if has_errors { "! " } else { "" };
+        // Totals since the interfaces came up are history; flag only a rise
+        let warning = if errors_ps > 0.0 || dropped_ps > 0.0 {
+            "! "
+        } else {
+            ""
+        };
 
         let rx_rate = NetDevStats::format_rate(total_rx_rate);
         let tx_rate = NetDevStats::format_rate(total_tx_rate);
@@ -1160,26 +1188,22 @@ impl NetworkStatsComponent {
 
         // Add errors/dropped if any
         spans.push(Span::raw("   "));
-        let errors_style = if total_errors > 0 {
-            Style::default().fg(Color::Red)
-        } else {
-            Style::default().fg(Color::DarkGray)
+        let counter = |label: &str, total: u64, per_sec: f64, color: Color| {
+            if per_sec > 0.0 {
+                Span::styled(
+                    format!("{label}: {total} (+{})", per_second(per_sec)),
+                    Style::default().fg(color),
+                )
+            } else {
+                Span::styled(
+                    format!("{label}: {total}"),
+                    Style::default().fg(Color::DarkGray),
+                )
+            }
         };
-        spans.push(Span::styled(
-            format!("Errors: {}", total_errors),
-            errors_style,
-        ));
-
+        spans.push(counter("Errors", total_errors, errors_ps, Color::Red));
         spans.push(Span::raw("   "));
-        let dropped_style = if total_dropped > 0 {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        spans.push(Span::styled(
-            format!("Dropped: {}", total_dropped),
-            dropped_style,
-        ));
+        spans.push(counter("Dropped", total_dropped, dropped_ps, Color::Yellow));
 
         let summary = Paragraph::new(Line::from(spans));
         frame.render_widget(summary, area);
@@ -1291,17 +1315,20 @@ impl NetworkStatsComponent {
     fn draw_warning(&self, frame: &mut Frame, area: Rect) {
         let mut messages = Vec::new();
 
-        let (total_errors, total_dropped, conn_counts) = self
+        let (errors_ps, dropped_ps, conn_counts) = self
             .data()
-            .map(|d| (d.total_errors, d.total_dropped, d.conn_counts.clone()))
+            .map(|d| (d.errors_per_sec, d.dropped_per_sec, d.conn_counts.clone()))
             .unwrap_or_default();
 
-        // Interface warnings
-        if total_errors > 0 {
-            messages.push(format!("{} interface errors", total_errors));
+        // Interface warnings: only while the counters rise
+        if errors_ps > 0.0 {
+            messages.push(format!(
+                "interface errors rising ({})",
+                per_second(errors_ps)
+            ));
         }
-        if total_dropped > 0 {
-            messages.push(format!("{} dropped", total_dropped));
+        if dropped_ps > 0.0 {
+            messages.push(format!("dropping packets ({})", per_second(dropped_ps)));
         }
 
         // Connection warnings
@@ -1378,11 +1405,14 @@ impl NetworkStatsComponent {
                     .map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
                     .unwrap_or_else(|| "0 B/s".to_string());
 
-                let has_errors = dev.has_errors();
+                // Colored only while rising: the counts are since the
+                // interface came up and keep incidents long over
+                let errors_rising = rate.is_some_and(|r| r.errors_per_sec > 0.0);
+                let drops_rising = rate.is_some_and(|r| r.dropped_per_sec > 0.0);
                 let is_selected = idx == self.selected;
 
                 // Row style based on errors and selection
-                let row_style = if has_errors {
+                let row_style = if errors_rising || drops_rising {
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                 } else if is_selected {
                     Style::default().add_modifier(Modifier::BOLD)
@@ -1391,22 +1421,22 @@ impl NetworkStatsComponent {
                 };
 
                 // Error column styles
-                let rx_err_style = if dev.rx_errors > 0 {
+                let rx_err_style = if errors_rising && dev.rx_errors > 0 {
                     Style::default().fg(Color::Red)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                let tx_err_style = if dev.tx_errors > 0 {
+                let tx_err_style = if errors_rising && dev.tx_errors > 0 {
                     Style::default().fg(Color::Red)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                let rx_drop_style = if dev.rx_dropped > 0 {
+                let rx_drop_style = if drops_rising && dev.rx_dropped > 0 {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                let tx_drop_style = if dev.tx_dropped > 0 {
+                let tx_drop_style = if drops_rising && dev.tx_dropped > 0 {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::DarkGray)
@@ -1416,10 +1446,10 @@ impl NetworkStatsComponent {
                     Cell::from(dev.name.clone()).style(row_style),
                     Cell::from(rx_rate).style(Style::default().fg(Color::Green)),
                     Cell::from(tx_rate).style(Style::default().fg(Color::Blue)),
-                    Cell::from(dev.rx_errors.to_string()).style(rx_err_style),
-                    Cell::from(dev.tx_errors.to_string()).style(tx_err_style),
-                    Cell::from(dev.rx_dropped.to_string()).style(rx_drop_style),
-                    Cell::from(dev.tx_dropped.to_string()).style(tx_drop_style),
+                    Cell::from(short_count(dev.rx_errors)).style(rx_err_style),
+                    Cell::from(short_count(dev.tx_errors)).style(tx_err_style),
+                    Cell::from(short_count(dev.rx_dropped)).style(rx_drop_style),
+                    Cell::from(short_count(dev.tx_dropped)).style(tx_drop_style),
                 ])
             })
             .collect();
@@ -1470,7 +1500,9 @@ impl NetworkStatsComponent {
         let rx_total = NetDevStats::format_bytes(dev.rx_bytes);
         let tx_total = NetDevStats::format_bytes(dev.tx_bytes);
 
-        let has_errors = dev.has_errors();
+        let errors_rising = rate.is_some_and(|r| r.errors_per_sec > 0.0);
+        let drops_rising = rate.is_some_and(|r| r.dropped_per_sec > 0.0);
+        let has_errors = errors_rising || drops_rising;
         let border_style = if has_errors {
             Style::default().fg(Color::Red)
         } else {
@@ -1494,7 +1526,7 @@ impl NetworkStatsComponent {
                 Span::raw("    "),
                 Span::styled(
                     format!("Errors: {}", dev.rx_errors),
-                    if dev.rx_errors > 0 {
+                    if errors_rising && dev.rx_errors > 0 {
                         Style::default().fg(Color::Red)
                     } else {
                         Style::default().fg(Color::DarkGray)
@@ -1503,7 +1535,7 @@ impl NetworkStatsComponent {
                 Span::raw("    "),
                 Span::styled(
                     format!("Dropped: {}", dev.rx_dropped),
-                    if dev.rx_dropped > 0 {
+                    if drops_rising && dev.rx_dropped > 0 {
                         Style::default().fg(Color::Yellow)
                     } else {
                         Style::default().fg(Color::DarkGray)
@@ -1526,7 +1558,7 @@ impl NetworkStatsComponent {
                 Span::raw("    "),
                 Span::styled(
                     format!("Errors: {}", dev.tx_errors),
-                    if dev.tx_errors > 0 {
+                    if errors_rising && dev.tx_errors > 0 {
                         Style::default().fg(Color::Red)
                     } else {
                         Style::default().fg(Color::DarkGray)
@@ -1535,7 +1567,7 @@ impl NetworkStatsComponent {
                 Span::raw("    "),
                 Span::styled(
                     format!("Dropped: {}", dev.tx_dropped),
-                    if dev.tx_dropped > 0 {
+                    if drops_rising && dev.tx_dropped > 0 {
                         Style::default().fg(Color::Yellow)
                     } else {
                         Style::default().fg(Color::DarkGray)
@@ -1580,8 +1612,9 @@ impl NetworkStatsComponent {
             ]));
         }
 
-        // Add warning line if there are errors
+        // A rise now is worth a warning; old totals only a note
         if has_errors {
+            let per_sec = rate.map_or(0.0, |r| r.errors_per_sec + r.dropped_per_sec);
             lines.push(Line::from(vec![
                 Span::styled(
                     "! ",
@@ -1590,10 +1623,18 @@ impl NetworkStatsComponent {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "Interface has errors - check cable/driver/hardware",
+                    format!(
+                        "Errors or drops rising now ({}): check load, MTU, cable/driver",
+                        per_second(per_sec)
+                    ),
                     Style::default().fg(Color::Yellow),
                 ),
             ]));
+        } else if dev.has_errors() && rate.is_some() {
+            lines.push(Line::from(Span::styled(
+                "Errors and drops are totals since the interface came up; none since the last refresh",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
         // Clone name before moving data
@@ -2812,18 +2853,17 @@ impl NetworkStatsComponent {
     /// Draw the interfaces view (main view)
     fn draw_interfaces_view(&mut self, frame: &mut Frame, area: Rect) {
         // Build constraints dynamically based on what we need to show
-        let (total_errors, total_dropped, conn_counts_has_warnings, connections_empty) = self
+        let (counters_rising, conn_counts_has_warnings, connections_empty) = self
             .data()
             .map(|d| {
                 (
-                    d.total_errors,
-                    d.total_dropped,
+                    d.errors_per_sec > 0.0 || d.dropped_per_sec > 0.0,
                     d.conn_counts.has_warnings(),
                     d.connections.is_empty(),
                 )
             })
-            .unwrap_or((0, 0, false, true));
-        let has_warning = total_errors > 0 || total_dropped > 0 || conn_counts_has_warnings;
+            .unwrap_or((false, false, true));
+        let has_warning = counters_rising || conn_counts_has_warnings;
         let has_connections = !connections_empty;
         let is_capturing = self.is_capturing();
 
@@ -2886,6 +2926,25 @@ impl NetworkStatsComponent {
 
         // Detail section
         self.draw_detail_section(frame, chunks[idx]);
+    }
+}
+
+/// A count that fits an 8-column cell: exact below a million, then
+/// `201.5M` / `3.2G` (cutting digits off would show a wrong number)
+fn short_count(n: u64) -> String {
+    match n {
+        0..=999_999 => n.to_string(),
+        1_000_000..=999_999_999 => format!("{:.1}M", n as f64 / 1e6),
+        _ => format!("{:.1}G", n as f64 / 1e9),
+    }
+}
+
+/// A per-second count, e.g. `0.4/s` or `120/s`
+fn per_second(n: f64) -> String {
+    if n >= 10.0 {
+        format!("{n:.0}/s")
+    } else {
+        format!("{n:.1}/s")
     }
 }
 
@@ -4012,6 +4071,13 @@ impl NetworkStatsComponent {
 #[cfg(test)]
 mod click_tests {
     use super::*;
+
+    #[test]
+    fn large_counts_fit_their_cells() {
+        assert_eq!(short_count(147_301), "147301");
+        assert_eq!(short_count(201_500_207), "201.5M");
+        assert_eq!(short_count(4_200_000_000), "4.2G");
+    }
 
     /// Column hit-testing for the sortable headers
     #[test]

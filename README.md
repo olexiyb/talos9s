@@ -206,11 +206,10 @@ Moving around:
   terminals, IntelliJ's among them, never pass `Esc` to the app. In the tree,
   `Esc` returns to the Dashboard.
 - `Tab` moves to the next window: Nodes → menu → view → Nodes (`Shift+Tab`
-  the other way). In a view with its own tab bar (the node view,
-  diagnostics) `Tab` switches those tabs; use `←` or `Esc` to leave.
+  the other way).
 - Mouse: click a row to select it in any view, double-click to open it (a
-  node from a group table, an interface's connections), click a tab or a
-  menu entry to switch. In the logs panels a click toggles a service, level
+  node from a group table, an interface's connections), click a menu entry
+  to switch. In the logs panels a click toggles a service, level
   or node. In Network, clicking a sortable column header sorts by it and
   "Interfaces" in the connections breadcrumb goes back.
 - `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,

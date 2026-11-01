@@ -71,7 +71,8 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
   dialog, a submode); the app shows them on the bottom line while the view
   has the keyboard. Views draw no key line of their own. `Esc`/`q` go back
   (clearing a filter first).
-- `/` filters lists or searches text; `r` refreshes; Tab or 1-n switches tabs.
+- `/` filters lists or searches text; `r` refreshes. Views have no tab bars:
+  each mode is its own menu entry, and `Tab` always moves between windows.
 - Clicks: every view gets left clicks through `handle_mouse_event`; a click
   on a row selects it (a double-click arrives as `Enter`). Record rows with
   `ui_ext::RowHits::new(area, bordered, header_lines, state.offset(), rows)`

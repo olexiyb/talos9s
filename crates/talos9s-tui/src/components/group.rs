@@ -98,7 +98,14 @@ struct IfaceRow {
     tx_bytes: u64,
     errors: u64,
     dropped: u64,
+    /// Errors and drops per second since the previous sample: the totals
+    /// keep incidents long over, these say whether it is happening now
+    errors_rate: Option<f64>,
+    dropped_rate: Option<f64>,
 }
+
+/// Rx bytes, tx bytes, errors and drops of an interface, and when
+type IfaceSample = (u64, u64, u64, u64, Instant);
 
 #[derive(Debug, Clone, Default)]
 pub struct GroupData {
@@ -108,7 +115,8 @@ pub struct GroupData {
     volumes: Vec<(usize, VolumeStatus)>,
     ifaces: Vec<IfaceRow>,
     /// Interface counters of the last sample: (node, iface) -> (rx, tx, when)
-    samples: HashMap<(usize, String), (u64, u64, Instant)>,
+    /// Last sample per (node, interface)
+    samples: HashMap<(usize, String), IfaceSample>,
     /// Per node: why its data is missing this time
     node_errors: Vec<Option<String>>,
 }
@@ -161,6 +169,12 @@ fn is_pseudo_volume(volume: &VolumeStatus) -> bool {
 
 /// Per-second rate between two counter samples; `None` when a counter went
 /// backwards (interface reset) or no time passed
+/// Per-second increase of a counter; zero when it went down (reset)
+fn counter_rate(previous: u64, current: u64, elapsed: Duration) -> Option<f64> {
+    let secs = elapsed.as_secs_f64();
+    (secs > 0.0).then(|| current.saturating_sub(previous) as f64 / secs)
+}
+
 fn rate(previous: u64, current: u64, elapsed: Duration) -> Option<u64> {
     let secs = elapsed.as_secs_f64();
     (current >= previous && secs > 0.0).then(|| ((current - previous) as f64 / secs) as u64)
@@ -443,22 +457,28 @@ impl GroupComponent {
             data.ifaces.retain(|r| r.node != i);
             for dev in devices {
                 let key = (i, dev.name.clone());
-                let (rx_rate, tx_rate) = match data.samples.get(&key) {
-                    Some(&(rx, tx, at)) => (
+                let (errors, dropped) = (dev.total_errors(), dev.total_dropped());
+                let (rx_rate, tx_rate, errors_rate, dropped_rate) = match data.samples.get(&key) {
+                    Some(&(rx, tx, err, drop, at)) => (
                         rate(rx, dev.rx_bytes, now - at),
                         rate(tx, dev.tx_bytes, now - at),
+                        counter_rate(err, errors, now - at),
+                        counter_rate(drop, dropped, now - at),
                     ),
-                    None => (None, None),
+                    None => (None, None, None, None),
                 };
-                data.samples.insert(key, (dev.rx_bytes, dev.tx_bytes, now));
+                data.samples
+                    .insert(key, (dev.rx_bytes, dev.tx_bytes, errors, dropped, now));
                 data.ifaces.push(IfaceRow {
                     node: i,
                     rx_rate,
                     tx_rate,
                     rx_bytes: dev.rx_bytes,
                     tx_bytes: dev.tx_bytes,
-                    errors: dev.total_errors(),
-                    dropped: dev.total_dropped(),
+                    errors,
+                    dropped,
+                    errors_rate,
+                    dropped_rate,
                     name: dev.name,
                 });
             }
@@ -775,12 +795,19 @@ impl GroupComponent {
                             .unwrap_or_else(|| "-".to_string()),
                     )
                 };
-                let counter_cell = |n: u64| {
-                    Cell::from(n.to_string()).style(Style::default().fg(if n > 0 {
-                        Color::Yellow
-                    } else {
-                        Color::Reset
-                    }))
+                // Totals since the interface came up stay plain; yellow with
+                // the rate only while they rise
+                let counter_cell = |n: u64, per_sec: Option<f64>| match per_sec {
+                    Some(r) if r > 0.0 => Cell::from(format!(
+                        "{n} +{}/s",
+                        if r >= 10.0 {
+                            format!("{r:.0}")
+                        } else {
+                            format!("{r:.1}")
+                        }
+                    ))
+                    .style(Style::default().fg(Color::Yellow)),
+                    _ => Cell::from(n.to_string()),
                 };
                 let rows = self
                     .shown_ifaces(data)
@@ -793,8 +820,8 @@ impl GroupComponent {
                             rate_cell(r.tx_rate).style(Style::default().fg(Color::Blue)),
                             Cell::from(NetDevStats::format_bytes(r.rx_bytes)),
                             Cell::from(NetDevStats::format_bytes(r.tx_bytes)),
-                            counter_cell(r.errors),
-                            counter_cell(r.dropped),
+                            counter_cell(r.errors, r.errors_rate),
+                            counter_cell(r.dropped, r.dropped_rate),
                         ])
                     })
                     .collect();
@@ -805,8 +832,8 @@ impl GroupComponent {
                     Constraint::Length(11),
                     Constraint::Length(10),
                     Constraint::Length(10),
-                    Constraint::Length(8),
-                    Constraint::Length(9),
+                    Constraint::Length(16),
+                    Constraint::Length(18),
                 ];
                 (header, rows, widths)
             }
@@ -1030,6 +1057,8 @@ mod tests {
             tx_bytes: 0,
             errors: 0,
             dropped: 0,
+            errors_rate: None,
+            dropped_rate: None,
         }
     }
 

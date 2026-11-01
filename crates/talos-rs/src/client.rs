@@ -2353,7 +2353,7 @@ pub struct NodeNetworkStats {
 }
 
 /// Statistics for a single network device
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NetDevStats {
     /// Device name (e.g., "eth0", "cni0")
     pub name: String,
@@ -2449,6 +2449,15 @@ impl NetDevStats {
     }
 }
 
+/// Increase of a counter per second; none when it went down (reset)
+fn per_sec(prev: u64, curr: u64, elapsed_secs: f64) -> f64 {
+    if elapsed_secs > 0.0 && curr > prev {
+        (curr - prev) as f64 / elapsed_secs
+    } else {
+        0.0
+    }
+}
+
 /// Calculated rate for a network device (from delta between samples)
 #[derive(Debug, Clone, Default)]
 pub struct NetDevRate {
@@ -2466,6 +2475,11 @@ pub struct NetDevRate {
     pub rx_dropped: u64,
     /// Current TX dropped (cumulative)
     pub tx_dropped: u64,
+    /// Errors and drops per second since the previous sample. The
+    /// cumulative counters keep old incidents forever; these say whether
+    /// it is happening now.
+    pub errors_per_sec: f64,
+    pub dropped_per_sec: f64,
 }
 
 impl NetDevRate {
@@ -2490,7 +2504,15 @@ impl NetDevRate {
             tx_errors: curr.tx_errors,
             rx_dropped: curr.rx_dropped,
             tx_dropped: curr.tx_dropped,
+            // A counter that went down was reset (interface recreated): no rise
+            errors_per_sec: per_sec(prev.total_errors(), curr.total_errors(), elapsed_secs),
+            dropped_per_sec: per_sec(prev.total_dropped(), curr.total_dropped(), elapsed_secs),
         }
+    }
+
+    /// Errors or drops increased since the previous sample
+    pub fn rising(&self) -> bool {
+        self.errors_per_sec > 0.0 || self.dropped_per_sec > 0.0
     }
 
     /// Check if device has any errors or dropped packets
@@ -3412,5 +3434,28 @@ mod tests {
         assert!(nodes_values.contains(&"node1"));
         assert!(nodes_values.contains(&"node2"));
         assert!(!nodes_values.iter().any(|v| v.contains(':')));
+    }
+
+    /// Old drops don't count as a problem; new ones do, and a counter that
+    /// went down (interface recreated, node rebooted) is no rise
+    #[test]
+    fn rates_flag_only_rising_errors_and_drops() {
+        let dev = |errors: u64, dropped: u64| NetDevStats {
+            name: "tailscale0".into(),
+            tx_errors: errors,
+            tx_dropped: dropped,
+            ..Default::default()
+        };
+        let quiet = NetDevRate::from_delta(&dev(37, 298_822_442), &dev(37, 298_822_442), 5.0);
+        assert!(!quiet.rising());
+        assert_eq!(quiet.tx_dropped, 298_822_442);
+
+        let dropping = NetDevRate::from_delta(&dev(37, 1000), &dev(37, 1050), 5.0);
+        assert!(dropping.rising());
+        assert_eq!(dropping.dropped_per_sec, 10.0);
+        assert_eq!(dropping.errors_per_sec, 0.0);
+
+        let reset = NetDevRate::from_delta(&dev(37, 1000), &dev(0, 3), 5.0);
+        assert!(!reset.rising());
     }
 }
