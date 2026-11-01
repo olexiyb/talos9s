@@ -878,9 +878,7 @@ impl VolumesComponent {
                 key("[/]"),
                 Span::raw(" filter  "),
                 key("[r]"),
-                Span::raw(" refresh  "),
-                key("[Esc]"),
-                Span::raw(" back"),
+                Span::raw(" refresh"),
             ];
             if !self.remedies().is_empty() {
                 spans.extend([Span::raw("  "), key("[c]"), Span::raw(" copy fix")]);

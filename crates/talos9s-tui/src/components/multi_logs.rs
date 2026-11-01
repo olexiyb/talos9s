@@ -2609,7 +2609,7 @@ impl Component for MultiLogsComponent {
                 Span::raw("[n]").fg(Color::Yellow),
                 Span::raw(" none").dim(),
                 Span::raw("  "),
-                Span::raw("[Esc]").fg(Color::Yellow),
+                Span::raw("[Esc/q]").fg(Color::Yellow),
                 Span::raw(" close").dim(),
             ]
         } else if self.in_visual_mode() {
@@ -2658,8 +2658,8 @@ impl Component for MultiLogsComponent {
                 Span::raw("[y]").fg(Color::Yellow),
                 Span::raw(" yank").dim(),
                 Span::raw(" "),
-                Span::raw("[Esc]").fg(Color::Yellow),
-                Span::raw(" back").dim(),
+                Span::raw("[Esc/q]").fg(Color::Yellow),
+                Span::raw(" leave select").dim(),
             ];
             if self.multi_node() {
                 spans.splice(

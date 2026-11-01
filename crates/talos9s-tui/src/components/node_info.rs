@@ -875,12 +875,7 @@ impl NodeInfoComponent {
             } else {
                 spans.push(Span::raw(" filter  "));
             }
-            spans.extend([
-                key("r"),
-                Span::raw(" refresh  "),
-                key("Esc"),
-                Span::raw(" back"),
-            ]);
+            spans.extend([key("r"), Span::raw(" refresh")]);
             spans
         };
         frame.render_widget(

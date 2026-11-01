@@ -2753,15 +2753,16 @@ impl ClusterComponent {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
         let spans = if view_focused {
+            // q is listed with Esc: some terminals (IDEA's) never deliver Esc
             let mut spans = match &self.back_hint {
                 Some(hint) => vec![
-                    key(" [Esc]"),
+                    key(" [Esc/q]"),
                     Span::styled(format!(" back to {hint}"), Style::default().dim()),
                     Span::raw("  "),
                     key("[←]"),
                     label(" tree"),
                 ],
-                None => vec![key(" [Esc/←]"), label(" tree")],
+                None => vec![key(" [Esc/q/←]"), label(" tree")],
             };
             spans.extend([
                 Span::raw("  "),
@@ -2771,7 +2772,7 @@ impl ClusterComponent {
                 key("[ [ ] ]"),
                 label(" pane width"),
                 Span::raw("  "),
-                key("[q]"),
+                key("[Ctrl+C]"),
                 label(" quit"),
             ]);
             spans

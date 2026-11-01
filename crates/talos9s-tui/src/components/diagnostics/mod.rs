@@ -1230,9 +1230,7 @@ impl Component for DiagnosticsComponent {
             Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
             Span::raw(" Details/Fix  "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Refresh  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Back"),
+            Span::raw(" Refresh"),
         ]));
         frame.render_widget(footer, chunks[2]);
 

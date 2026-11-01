@@ -637,9 +637,7 @@ impl Component for StorageComponent {
             Span::styled("↑/↓", Style::default().fg(Color::Cyan)),
             Span::raw(" navigate  "),
             Span::styled("r", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh  "),
-            Span::styled("Esc", Style::default().fg(Color::Cyan)),
-            Span::raw(" back"),
+            Span::raw(" refresh"),
         ]);
         let help_paragraph = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(help_paragraph, chunks[2]);

@@ -1220,8 +1220,6 @@ impl WorkloadHealthComponent {
                 Span::raw(" select  "),
                 Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" expand  "),
-                Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" back  "),
             ]
         };
 

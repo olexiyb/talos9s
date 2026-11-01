@@ -1636,9 +1636,7 @@ impl NetworkStatsComponent {
             Span::styled(bpf_label, Style::default().fg(bpf_color)),
             Span::raw("  "),
             Span::styled("[a]", Style::default().fg(Color::Cyan)),
-            Span::raw(format!(" {}  ", auto_label)),
-            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
-            Span::raw(" back"),
+            Span::raw(format!(" {}", auto_label)),
         ];
 
         let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
@@ -1930,8 +1928,8 @@ impl NetworkStatsComponent {
                 Span::raw(" yank  "),
                 Span::styled("[Esc/V]", Style::default().fg(Color::Cyan)),
                 Span::raw(" cancel  "),
-                Span::styled("[q/Tab]", Style::default().fg(Color::Cyan)),
-                Span::raw(" back"),
+                Span::styled("[Esc/q]", Style::default().fg(Color::Cyan)),
+                Span::raw(" interfaces"),
             ]
         } else {
             // Normal mode footer
@@ -1948,8 +1946,8 @@ impl NetworkStatsComponent {
                 Span::raw(format!(" {}  ", listen_label)),
                 Span::styled("[a]", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" {}  ", all_label)),
-                Span::styled("[q/Tab]", Style::default().fg(Color::Cyan)),
-                Span::raw(" back"),
+                Span::styled("[Esc/q]", Style::default().fg(Color::Cyan)),
+                Span::raw(" interfaces"),
             ]
         };
 
@@ -2200,9 +2198,7 @@ impl NetworkStatsComponent {
             Span::styled("j/k", Style::default().fg(Color::Cyan)),
             Span::raw(" navigate "),
             Span::styled("r", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh "),
-            Span::styled("q", Style::default().fg(Color::Cyan)),
-            Span::raw(" back"),
+            Span::raw(" refresh"),
         ]);
         frame.render_widget(Paragraph::new(footer), chunks[2]);
     }

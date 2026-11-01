@@ -1176,9 +1176,6 @@ impl EtcdComponent {
             Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
             auto_status,
-            Span::raw("  "),
-            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" back"),
         ]);
 
         let para = Paragraph::new(line);

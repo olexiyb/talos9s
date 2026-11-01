@@ -609,7 +609,7 @@ impl GroupComponent {
             GroupKind::Diagnostics => String::new(),
         };
         Line::styled(
-            format!("[j/k] select  [Enter] open node  [r] refresh{toggle}  [Esc] back"),
+            format!("[j/k] select  [Enter] open node  [r] refresh{toggle}"),
             Style::default().fg(Color::DarkGray),
         )
     }

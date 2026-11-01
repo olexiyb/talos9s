@@ -197,14 +197,16 @@ mouse do the same):
 Moving around:
 
 - `j`/`k` or arrows move the selection; the view follows after a moment.
-- `→` or `Enter` (or a click) puts the keyboard in the view; `←` or `Esc`
-  gives it back to the side of the tree you came from (after closing the
-  view's own filter or search). In the tree, `Esc` returns to the Dashboard.
+- `→` or `Enter` (or a click) puts the keyboard in the view; `←`, `Esc` or
+  `q` gives it back to the side of the tree you came from (after closing the
+  view's own menu, filter or search). `q` doubles for `Esc` because some
+  terminals, IntelliJ's among them, never pass `Esc` to the app. In the tree,
+  `Esc` returns to the Dashboard.
 - `Tab` moves to the next window: Nodes → menu → view → Nodes (`Shift+Tab`
   the other way). In a view with its own tab bar (containers, storage,
   network, diagnostics) `Tab` switches those tabs; use `←` or `Esc` to leave.
 - `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,
-  `q` or `Ctrl+C` quits from anywhere (a dialog's `q` only closes it).
+  `q` in the tree quits, `Ctrl+C` quits from anywhere.
 - `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
 - Inside a view, `/` filters or searches and its footer lists its keys.
 

@@ -699,9 +699,6 @@ impl Component for SecurityComponent {
             Span::raw("  "),
             Span::styled("[r]", Style::default().fg(Color::Yellow)),
             Span::raw(" Refresh").dim(),
-            Span::raw("  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Back").dim(),
         ]))
         .block(
             Block::default()

@@ -1077,9 +1077,7 @@ impl LifecycleComponent {
             Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
             Span::raw(" navigate  "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
-            Span::raw(" back"),
+            Span::raw(" refresh"),
         ];
 
         let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));

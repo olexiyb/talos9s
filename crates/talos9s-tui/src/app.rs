@@ -868,13 +868,9 @@ impl App {
             });
             return Ok(None);
         }
-        let action = self.dispatch_view_key(key)?;
-        // q quits from anywhere, as in the tree: a view answering it with
-        // Back had no other use for it (a dialog closing on q answers None)
-        if key.code == KeyCode::Char('q') && matches!(action, Some(Action::Back)) {
-            return Ok(Some(Action::Quit));
-        }
-        Ok(action)
+        // q in a view means back, like Esc: some terminals (IDEA's) never
+        // deliver Esc. q in the tree quits.
+        self.dispatch_view_key(key)
     }
 
     fn view_uses_tab_key(&self) -> bool {
@@ -2419,18 +2415,21 @@ mod tests {
         assert_eq!(app.cluster.focused_pane(), FocusedPane::Menu);
     }
 
-    /// q quits from a view too; Esc only hands the keyboard back
-    #[test]
-    fn q_quits_from_a_view() {
+    /// q in a view goes back like Esc (Esc never arrives in some
+    /// terminals); q in the tree quits
+    #[tokio::test]
+    async fn q_is_back_in_a_view_and_quit_in_the_tree() {
         let mut app = app_with_view(View::Hint);
         app.view_has_focus = true;
         assert!(matches!(
             app.dispatch_key(key(KeyCode::Char('q'))).unwrap(),
-            Some(Action::Quit)
-        ));
-        assert!(matches!(
-            app.dispatch_key(key(KeyCode::Esc)).unwrap(),
             Some(Action::Back)
+        ));
+        app.handle_action(Action::Back).await.unwrap();
+        assert!(!app.view_has_focus);
+        assert!(matches!(
+            app.dispatch_key(key(KeyCode::Char('q'))).unwrap(),
+            Some(Action::Quit)
         ));
     }
 
