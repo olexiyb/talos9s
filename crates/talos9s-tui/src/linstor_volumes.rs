@@ -27,6 +27,10 @@ use k8s_openapi::serde_json::Value;
 use serde::Deserialize;
 use std::collections::HashMap;
 use talos_rs::{MountUsage, TalosClient};
+use talos9s_core::constants::{
+    FS_OVERHEAD_FIXED_KIB, FS_OVERHEAD_PERCENT, USAGE_ERROR_PCT, USAGE_WARNING_PCT,
+};
+use talos9s_core::{HasHealth, HealthIndicator};
 
 /// Volumes of the cluster's LINSTOR resources, with each replica's DRBD
 /// state as LINSTOR reports it
@@ -225,10 +229,21 @@ fn parse_sync_progress(content: &str) -> Option<SyncProgress> {
     progress
 }
 
+/// How serious an [`Issue`] is. Its own type rather than `HealthIndicator`
+/// because the order matters: issues sort worst first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Error,
     Warning,
+}
+
+impl HasHealth for Severity {
+    fn health(&self) -> HealthIndicator {
+        match self {
+            Severity::Error => HealthIndicator::Error,
+            Severity::Warning => HealthIndicator::Warning,
+        }
+    }
 }
 
 /// A problem found on a volume
@@ -919,9 +934,17 @@ pub fn apply_mounts(volumes: &mut [LinstorVolume], mounts: &HashMap<String, Vec<
     }
 }
 
-/// Filesystem fill levels that are a warning / an error (percent)
-const USAGE_WARNING_PCT: f64 = 85.0;
-const USAGE_ERROR_PCT: f64 = 95.0;
+/// How serious a filesystem fill level (percent) is, `None` when fine.
+/// The volumes table colors its Used column by this too.
+pub fn usage_severity(pct: f64) -> Option<Severity> {
+    if pct >= USAGE_ERROR_PCT {
+        Some(Severity::Error)
+    } else if pct >= USAGE_WARNING_PCT {
+        Some(Severity::Warning)
+    } else {
+        None
+    }
+}
 
 /// An issue for a filesystem filling up on `node`
 pub fn usage_issue(node: &str, used_kib: u64, size_kib: u64) -> Option<Issue> {
@@ -929,13 +952,7 @@ pub fn usage_issue(node: &str, used_kib: u64, size_kib: u64) -> Option<Issue> {
         return None;
     }
     let pct = used_kib as f64 / size_kib as f64 * 100.0;
-    let severity = if pct >= USAGE_ERROR_PCT {
-        Severity::Error
-    } else if pct >= USAGE_WARNING_PCT {
-        Severity::Warning
-    } else {
-        return None;
-    };
+    let severity = usage_severity(pct)?;
     Some(Issue {
         severity,
         text: format!(
@@ -992,13 +1009,6 @@ fn parse_ap_in_flight(content: &str) -> Option<u64> {
         rest.split_whitespace().next()?.parse().ok()
     })
 }
-
-/// Filesystem overhead allowed before a filesystem counts as not grown to
-/// its device: fixed (journal/log, superblocks) plus proportional (inode
-/// tables, allocation groups). Healthy volumes measured on three clusters
-/// lose up to 187 MiB of 1 GiB and 64 MiB of 300 MiB.
-const FS_OVERHEAD_FIXED_KIB: u64 = 160 * 1024;
-const FS_OVERHEAD_PERCENT: u64 = 8;
 
 /// In-flight writes beyond this are a wrapped-around (underflowed) counter
 const AP_IN_FLIGHT_IMPLAUSIBLE_KIB: u64 = 1 << 40;

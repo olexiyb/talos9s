@@ -20,9 +20,10 @@ use crate::components::diagnostics::k8s::KubeconfigSource;
 use crate::linstor_volumes::{
     Issue, LinstorVolume, Remedy, Replica, SatellitePod, Severity, apply_mounts, fetch_mounts,
     fetch_satellites, fetch_volumes, format_kib, linstor_mount_nodes, observe_drbd, remediation,
-    volume_issues,
+    usage_severity, volume_issues,
 };
 use crate::orphans::{Orphan, PvIndex, fetch_pv_index};
+use crate::ui_ext::HealthIndicatorExt;
 use crate::zfs::{ZfsVolume, apply_zfs_mounts, fetch_zfs_volumes, zfs_volume_issues};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -37,7 +38,7 @@ use ratatui::{
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use talos_rs::TalosClient;
-use talos9s_core::AsyncState;
+use talos9s_core::{AsyncState, HasHealth, HealthIndicator};
 
 /// Auto-refresh interval: a full scan reads a few hundred kernel files
 const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -596,23 +597,24 @@ impl VolumesComponent {
             Span::raw(" volumes "),
             Span::styled(format!("({linstor} LINSTOR, {zfs} ZFS)  "), dim),
         ];
+        let tally = |health: HealthIndicator, text: String| {
+            let (symbol, color) = health.symbol_and_color();
+            Span::styled(format!("{symbol} {text}"), Style::default().fg(color))
+        };
         if errors > 0 {
-            spans.push(Span::styled(
-                format!("✗ {errors} with errors  "),
-                Style::default().fg(Color::Red),
+            spans.push(tally(
+                HealthIndicator::Error,
+                format!("{errors} with errors  "),
             ));
         }
         if warnings > 0 {
-            spans.push(Span::styled(
-                format!("◐ {warnings} with warnings  "),
-                Style::default().fg(Color::Yellow),
+            spans.push(tally(
+                HealthIndicator::Warning,
+                format!("{warnings} with warnings  "),
             ));
         }
         if errors == 0 && warnings == 0 {
-            spans.push(Span::styled(
-                "● no issues  ",
-                Style::default().fg(Color::Green),
-            ));
+            spans.push(tally(HealthIndicator::Healthy, "no issues  ".to_string()));
         }
         // Without the kernel's view, size and out-of-sync checks were skipped
         if data.replicas > 0 {
@@ -662,11 +664,7 @@ impl VolumesComponent {
             .iter()
             .zip(nodes_cells)
             .map(|(r, nodes)| {
-                let (symbol, color) = match r.worst() {
-                    Some(Severity::Error) => ("✗", Color::Red),
-                    Some(Severity::Warning) => ("◐", Color::Yellow),
-                    None => ("●", Color::Green),
-                };
+                let (symbol, color) = health_of(r.worst()).symbol_and_color();
                 let size = r.size_kib().map(format_kib).unwrap_or("?".to_string());
                 let issue = match r.issues.as_slice() {
                     [] => Span::raw(""),
@@ -769,13 +767,9 @@ impl VolumesComponent {
         ])];
         // Issues and fixes first, so they stay visible when the pane is cut off
         for issue in &row.issues {
-            let color = match issue.severity {
-                Severity::Error => Color::Red,
-                Severity::Warning => Color::Yellow,
-            };
             lines.push(Line::from(Span::styled(
                 format!("  {}", issue.text),
-                Style::default().fg(color),
+                Style::default().fg(issue.severity.health().color()),
             )));
         }
         let remedies = self.remedies();
@@ -987,18 +981,17 @@ fn disk_color(r: &Replica) -> Color {
     }
 }
 
+/// The indicator for a volume's worst issue: healthy without one
+fn health_of(worst: Option<Severity>) -> HealthIndicator {
+    worst.map_or(HealthIndicator::Healthy, |s| s.health())
+}
+
 /// Fill level as `51%`, colored like the usage issues; `-` when unknown
 fn used_span(usage: Option<(u64, u64)>) -> Span<'static> {
     match usage {
         Some((used, size)) if size > 0 => {
             let pct = used as f64 / size as f64 * 100.0;
-            let color = if pct >= 95.0 {
-                Color::Red
-            } else if pct >= 85.0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
+            let color = health_of(usage_severity(pct)).color();
             Span::styled(format!("{pct:.0}%"), Style::default().fg(color))
         }
         _ => Span::styled("-", Style::default().dim()),

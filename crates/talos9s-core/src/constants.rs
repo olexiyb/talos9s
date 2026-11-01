@@ -114,6 +114,27 @@ pub mod refresh_intervals {
     pub const VERY_SLOW: u64 = 30;
 }
 
+// =============================================================================
+// Storage
+// =============================================================================
+
+/// Filesystem fill level that is a warning (percent)
+pub const USAGE_WARNING_PCT: f64 = 85.0;
+
+/// Filesystem fill level that is an error (percent)
+pub const USAGE_ERROR_PCT: f64 = 95.0;
+
+/// A ZFS dataset whose quota is below this share of its capacity (percent)
+/// wasn't resized; ZFS rounds quotas up, never this far down
+pub const ZFS_QUOTA_BELOW_CAPACITY_PCT: u64 = 90;
+
+/// Filesystem overhead allowed before a filesystem counts as not grown to
+/// its device: fixed (journal/log, superblocks) plus proportional (inode
+/// tables, allocation groups). Healthy volumes measured on three clusters
+/// lose up to 187 MiB of 1 GiB and 64 MiB of 300 MiB.
+pub const FS_OVERHEAD_FIXED_KIB: u64 = 160 * 1024;
+pub const FS_OVERHEAD_PERCENT: u64 = 8;
+
 #[cfg(test)]
 mod tests {
     use super::*;

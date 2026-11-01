@@ -16,6 +16,7 @@ use kube::Client;
 use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, ListParams};
 use serde::Deserialize;
 use std::collections::HashMap;
+use talos9s_core::constants::ZFS_QUOTA_BELOW_CAPACITY_PCT;
 
 /// Capacity of one ZFS pool (bytes)
 #[derive(Debug, Clone, PartialEq)]
@@ -174,9 +175,6 @@ pub fn apply_zfs_mounts(
     }
 }
 
-/// A dataset whose quota is this far below its capacity wasn't resized
-const QUOTA_BELOW_CAPACITY_PCT: u64 = 90;
-
 /// Problems of a ZFS LocalPV volume, worst first
 pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issue> {
     use crate::linstor_volumes::{Issue, Severity, format_kib, usage_issue};
@@ -202,7 +200,7 @@ pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issu
             issues.push(issue);
         }
         if let Some(capacity) = volume.capacity
-            && size < capacity / 100 * QUOTA_BELOW_CAPACITY_PCT
+            && size < capacity / 100 * ZFS_QUOTA_BELOW_CAPACITY_PCT
         {
             issues.push(Issue {
                 severity: Severity::Warning,
