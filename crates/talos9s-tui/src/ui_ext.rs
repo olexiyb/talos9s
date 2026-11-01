@@ -8,6 +8,66 @@ use talos9s_core::{
     CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus,
 };
 
+/// Draw `content` at its full height into an off-screen buffer and show the
+/// part of it that fits `area`, `scroll` lines down: a scrollable area for
+/// any widgets. Returns how far it can scroll (0 when everything fits).
+pub fn render_scrolled(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    content_height: u16,
+    scroll: u16,
+    content: impl FnOnce(&mut ratatui::buffer::Buffer, ratatui::layout::Rect),
+) -> u16 {
+    use ratatui::layout::{Position, Rect};
+    let full = Rect::new(area.x, area.y, area.width, content_height.max(area.height));
+    let mut buf = ratatui::buffer::Buffer::empty(full);
+    content(&mut buf, full);
+    let max_scroll = full.height - area.height;
+    let scroll = scroll.min(max_scroll);
+    let target = frame.buffer_mut();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let src = buf.cell(Position::new(area.x + x, area.y + y + scroll));
+            let dst = target.cell_mut(Position::new(area.x + x, area.y + y));
+            if let (Some(src), Some(dst)) = (src, dst) {
+                *dst = src.clone();
+            }
+        }
+    }
+    // Over the border column right of the area, so no content width is lost
+    draw_scrollbar(
+        frame,
+        Rect::new(area.x + area.width, area.y, 1, area.height),
+        full.height,
+        scroll,
+    );
+    max_scroll
+}
+
+/// A vertical scrollbar in `column` (a 1-wide area, usually the window's
+/// right border) for content `content_height` tall scrolled `scroll` lines
+/// down; nothing when the content fits
+pub fn draw_scrollbar(
+    frame: &mut ratatui::Frame,
+    column: ratatui::layout::Rect,
+    content_height: u16,
+    scroll: u16,
+) {
+    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    if content_height <= column.height || column.height == 0 {
+        return;
+    }
+    let mut state =
+        ScrollbarState::new((content_height - column.height) as usize).position(scroll as usize);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None),
+        column,
+        &mut state,
+    );
+}
+
 /// A spinner frame for "in progress" markers, advancing with wall time so
 /// every spinner on screen turns together and nothing has to track ticks
 pub fn spinner() -> &'static str {

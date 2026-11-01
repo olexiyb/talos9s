@@ -13,10 +13,11 @@ use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget},
 };
 use std::collections::HashMap;
 use talos_rs::{
@@ -942,6 +943,8 @@ pub struct ClusterComponent {
     tree_pane: FocusedPane,
     /// Where Esc in the view goes back to, when not just the tree
     back_hint: Option<String>,
+    /// First tree row shown, when the tree is taller than its pane
+    tree_scroll: usize,
     /// Scroll of the node pane (lines), the node it belongs to, and how far
     /// it can go (0 when everything fits; set per draw)
     details_scroll: usize,
@@ -1189,21 +1192,19 @@ async fn fetch_kubelet_versions(
 
 /// LINSTOR node list (`linstor node list`) of a Piraeus cluster, or why the
 /// controller couldn't be queried
-fn draw_linstor_table(frame: &mut Frame, area: Rect, linstor: Result<Vec<&LinstorNode>, &str>) {
+fn draw_linstor_table(buf: &mut Buffer, area: Rect, linstor: Result<Vec<&LinstorNode>, &str>) {
     let dim = Style::default().dim();
     let rows = match linstor {
         Ok(rows) => rows,
         Err(e) => {
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled("LINSTOR  ", Style::default().fg(Color::Gray).bold()),
-                    Span::styled(
-                        format!("controller API unreachable: {e}"),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                ])),
-                area,
-            );
+            Paragraph::new(Line::from(vec![
+                Span::styled("LINSTOR  ", Style::default().fg(Color::Gray).bold()),
+                Span::styled(
+                    format!("controller API unreachable: {e}"),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]))
+            .render(area, buf);
             return;
         }
     };
@@ -1267,12 +1268,10 @@ fn draw_linstor_table(frame: &mut Frame, area: Rect, linstor: Result<Vec<&Linsto
     ];
     let header = Row::new(vec![title.as_str(), "Type", "State", "Pools", "Addresses"])
         .style(Style::default().fg(Color::Gray).bold());
-    frame.render_widget(
-        Table::new(table_rows, widths)
-            .header(header)
-            .column_spacing(2),
-        area,
-    );
+    Table::new(table_rows, widths)
+        .header(header)
+        .column_spacing(2)
+        .render(area, buf);
 }
 
 /// A node's LINSTOR storage pools, e.g. `datapool 287/840G 34%`: usage
@@ -1410,6 +1409,7 @@ impl ClusterComponent {
             view_focused: false,
             tree_pane: FocusedPane::Nodes,
             back_hint: None,
+            tree_scroll: 0,
             details_scroll: 0,
             details_scroll_node: String::new(),
             details_max_scroll: 0,
@@ -1526,7 +1526,7 @@ impl ClusterComponent {
             ))),
             caption,
         );
-        self.draw_kubespan_matrix(frame, matrix, self.active_cluster, nodes);
+        self.draw_kubespan_matrix(frame.buffer_mut(), matrix, self.active_cluster, nodes);
     }
 
     /// Containers, machine config or extensions of the selected node
@@ -3557,7 +3557,7 @@ impl ClusterComponent {
         (list.max(menu) + 3) as u16
     }
 
-    fn draw_nodes_pane(&self, frame: &mut Frame, area: Rect) {
+    fn draw_nodes_pane(&mut self, frame: &mut Frame, area: Rect) {
         // Focus indication - cyan border when focused
         let focused = self.focused_pane == FocusedPane::Nodes && !self.view_focused;
         let border_color = if focused {
@@ -3591,10 +3591,35 @@ impl ClusterComponent {
             frame.render_widget(msg, pane_layout[0]);
         } else {
             let (lines, row_items) = self.node_list_lines(Some(pane_layout[0].width));
-            frame.render_widget(Paragraph::new(lines), pane_layout[0]);
+            // A tree taller than the pane scrolls, keeping the selected row
+            // in view; the rows the mouse can hit are the visible ones
+            let list = pane_layout[0];
+            let height = list.height as usize;
+            let total = lines.len();
+            // (`lines` borrow the tree, so the scroll is stored after drawing)
+            let mut scroll = self.tree_scroll;
+            if let Some(selected) = row_items
+                .iter()
+                .position(|item| item.as_ref() == Some(&self.selected_item))
+            {
+                if selected < scroll {
+                    scroll = selected;
+                } else if selected >= scroll + height {
+                    scroll = selected + 1 - height;
+                }
+            }
+            scroll = scroll.min(total.saturating_sub(height));
+            frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list);
+            crate::ui_ext::draw_scrollbar(
+                frame,
+                Rect::new(area.x + area.width - 1, list.y, 1, list.height),
+                total as u16,
+                scroll as u16,
+            );
+            self.tree_scroll = scroll;
             let mut hits = self.hits.borrow_mut();
-            hits.node_list = pane_layout[0];
-            hits.node_rows = row_items;
+            hits.node_list = list;
+            hits.node_rows = row_items.into_iter().skip(scroll).take(height).collect();
         }
         self.hits.borrow_mut().menu = pane_layout[1];
 
@@ -3683,7 +3708,7 @@ impl ClusterComponent {
     /// Table of every node under the selected cluster / control plane /
     /// workers header: memory, load, cores, uptime, gateway, connectivity
     /// and service health side by side.
-    fn draw_group_table(&self, frame: &mut Frame, area: Rect, border_color: Color) {
+    fn draw_group_table(&mut self, frame: &mut Frame, area: Rect, border_color: Color) {
         let Some((cluster_idx, nodes)) = self.selected_nodes() else {
             return;
         };
@@ -3701,12 +3726,30 @@ impl ClusterComponent {
             .background_refresh
             .get(cluster_idx)
             .is_some_and(|h| h.is_some());
+        // The legend sits on the bottom border, so it stays while the
+        // content scrolls
+        let dim = Style::default().dim();
+        let legend = Line::from(vec![
+            Span::styled(" ●", Style::default().fg(Color::Green)),
+            Span::styled(" healthy  ", dim),
+            Span::styled("●", Style::default().fg(Color::DarkGray)),
+            Span::styled(" no check  ", dim),
+            Span::styled("✓", Style::default().fg(Color::Green)),
+            Span::styled(" finished  ", dim),
+            Span::styled("○", Style::default().fg(Color::Red)),
+            Span::styled(" unhealthy  ", dim),
+            Span::styled("✗", Style::default().fg(Color::Red)),
+            Span::styled(" not running  ", dim),
+            Span::styled("·", dim),
+            Span::styled(" absent ", dim),
+        ]);
         let block = Block::default()
             .title(crate::ui_ext::title_with_refresh(
                 &format!("{} · {} nodes", group, nodes.len()),
                 refreshing,
                 Color::White,
             ))
+            .title_bottom(legend)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
@@ -3995,6 +4038,13 @@ impl ClusterComponent {
         let header = Row::new(header).style(Style::default().fg(Color::Gray).bold());
         let table = Table::new(rows, widths).header(header).column_spacing(2);
 
+        // The sections are drawn at full height and scrolled as a whole when
+        // the pane is shorter than they are (wheel)
+        let key = format!("summary:{group}");
+        if self.details_scroll_node != key {
+            self.details_scroll_node = key;
+            self.details_scroll = 0;
+        }
         let linstor = self.linstor_rows_for(cluster_idx, &nodes);
         let linstor_height = match &linstor {
             Some(Ok(rows)) => rows.len() as u16 + 2, // header + rows + spacer
@@ -4011,45 +4061,43 @@ impl ClusterComponent {
         } else {
             0
         };
-        let [
-            table_area,
-            linstor_area,
-            kubespan_area,
-            services_area,
-            hint_area,
-        ] = Layout::vertical([
-            Constraint::Length(nodes.len() as u16 + 2), // header + rows + spacer
-            Constraint::Length(linstor_height),
-            Constraint::Length(kubespan_height),
-            Constraint::Min(2),
-            Constraint::Length(1),
-        ])
-        .areas(inner);
-        frame.render_widget(table, table_area);
-        if let Some(linstor) = linstor {
-            draw_linstor_table(frame, linstor_area, linstor);
-        }
-        if kubespan_height > 0 {
-            self.draw_kubespan_matrix(frame, kubespan_area, cluster_idx, &nodes);
-        }
-        self.draw_services_matrix(frame, services_area, cluster_idx, &nodes);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" ●", Style::default().fg(Color::Green)),
-                Span::styled(" healthy  ", dim),
-                Span::styled("●", Style::default().fg(Color::DarkGray)),
-                Span::styled(" no check  ", dim),
-                Span::styled("✓", Style::default().fg(Color::Green)),
-                Span::styled(" finished  ", dim),
-                Span::styled("○", Style::default().fg(Color::Red)),
-                Span::styled(" unhealthy  ", dim),
-                Span::styled("✗", Style::default().fg(Color::Red)),
-                Span::styled(" not running  ", dim),
-                Span::styled("·", dim),
-                Span::styled(" absent", dim),
-            ])),
-            hint_area,
+        // One row per service seen on any node, plus the header
+        let services_height = {
+            let mut ids: Vec<&str> = nodes
+                .iter()
+                .filter_map(|n| self.get_node_services_for(cluster_idx, n))
+                .flat_map(|services| services.iter().map(|s| s.id.as_str()))
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids.len() as u16 + 1
+        };
+        let heights = [
+            nodes.len() as u16 + 2, // header + rows + spacer
+            linstor_height,
+            kubespan_height,
+            services_height,
+        ];
+        let max_scroll = crate::ui_ext::render_scrolled(
+            frame,
+            inner,
+            heights.iter().sum(),
+            self.details_scroll as u16,
+            |buf, full| {
+                let [table_area, linstor_area, kubespan_area, services_area] =
+                    Layout::vertical(heights.map(Constraint::Length)).areas(full);
+                table.render(table_area, buf);
+                if let Some(linstor) = linstor {
+                    draw_linstor_table(buf, linstor_area, linstor);
+                }
+                if kubespan_height > 0 {
+                    self.draw_kubespan_matrix(buf, kubespan_area, cluster_idx, &nodes);
+                }
+                self.draw_services_matrix(buf, services_area, cluster_idx, &nodes);
+            },
         );
+        self.details_max_scroll = max_scroll as usize;
+        self.details_scroll = self.details_scroll.min(self.details_max_scroll);
     }
 
     /// LINSTOR nodes to show for the selection: all of them for a cluster
@@ -4081,7 +4129,7 @@ impl ClusterComponent {
     /// DRBD replication and etcd runs over these links.
     fn draw_kubespan_matrix(
         &self,
-        frame: &mut Frame,
+        buf: &mut Buffer,
         area: Rect,
         cluster_idx: usize,
         nodes: &[String],
@@ -4151,10 +4199,10 @@ impl ClusterComponent {
         ))];
         header.extend(nodes.iter().map(|n| Cell::from(n.clone())));
         let header = Row::new(header).style(Style::default().fg(Color::Gray).bold());
-        frame.render_widget(
-            Table::new(rows, widths).header(header).column_spacing(2),
-            area,
-        );
+        Table::new(rows, widths)
+            .header(header)
+            .column_spacing(2)
+            .render(area, buf);
     }
 
     /// Service × node matrix: one row per service seen on any node in the
@@ -4162,7 +4210,7 @@ impl ClusterComponent {
     /// first so they are visible even when the list is cut off.
     fn draw_services_matrix(
         &self,
-        frame: &mut Frame,
+        buf: &mut Buffer,
         area: Rect,
         cluster_idx: usize,
         nodes: &[String],
@@ -4241,11 +4289,10 @@ impl ClusterComponent {
         }
         header.extend(nodes.iter().map(|n| Cell::from(n.clone())));
         let header = Row::new(header).style(Style::default().fg(Color::Gray).bold());
-
-        frame.render_widget(
-            Table::new(rows, widths).header(header).column_spacing(2),
-            area,
-        );
+        Table::new(rows, widths)
+            .header(header)
+            .column_spacing(2)
+            .render(area, buf);
     }
 
     pub fn draw_details_pane(&mut self, frame: &mut Frame, area: Rect) {
@@ -4817,6 +4864,12 @@ impl ClusterComponent {
         frame.render_widget(
             Paragraph::new(lines).scroll((self.details_scroll as u16, 0)),
             inner,
+        );
+        crate::ui_ext::draw_scrollbar(
+            frame,
+            Rect::new(inner.x + inner.width, inner.y, 1, inner.height),
+            total as u16,
+            self.details_scroll as u16,
         );
 
         // Where the service rows are on screen (clipped to the pane), for clicks
