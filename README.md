@@ -39,7 +39,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/olexiyb/talos9s/re
 
 Or download an archive from [Releases](https://github.com/olexiyb/talos9s/releases).
 
-From source (needs only a Rust toolchain):
+From source (needs Rust 1.95 or newer; `rustup update` gets it):
 
 ```bash
 cargo install --git https://github.com/olexiyb/talos9s --locked talos9s
