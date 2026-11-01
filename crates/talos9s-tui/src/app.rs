@@ -2,7 +2,7 @@
 
 use crate::action::Action;
 use crate::components::BackgroundRefresh;
-use crate::components::cluster::{FocusedPane, NavMenuItem, PaneWidth};
+use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth};
 use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
 use crate::components::{
@@ -1025,10 +1025,22 @@ impl App {
         };
         let click = matches!(mouse.kind, MouseEventKind::Down(_));
         if !overlay && (self.view == View::Cluster || at(self.tree_area)) {
-            if click {
-                self.view_has_focus = false;
+            // Clicking a node or group row keeps the keyboard where it was
+            // (the view follows the selection); a menu entry opens its view
+            // with the keyboard in it, like Enter; empty space in the pane
+            // hands the keyboard to the tree
+            if click && self.view != View::Cluster {
+                match self.cluster.click_target(mouse.column, mouse.row) {
+                    ClickTarget::Menu => self.focus_after_show = true,
+                    ClickTarget::Row => {}
+                    ClickTarget::None => self.view_has_focus = false,
+                }
             }
-            return self.cluster.handle_mouse_event(mouse);
+            let action = self.cluster.handle_mouse_event(mouse);
+            if !matches!(action, Ok(Some(_))) {
+                self.focus_after_show = false;
+            }
+            return action;
         }
         if !overlay && !at(self.view_area) {
             return Ok(None);

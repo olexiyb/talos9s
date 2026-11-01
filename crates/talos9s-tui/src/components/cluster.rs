@@ -64,6 +64,17 @@ pub enum FocusedPane {
 /// Narrowest the nodes pane gets, so a short list keeps its look
 const NODES_PANE_MIN_WIDTH: u16 = 30;
 
+/// What a click in the nodes pane lands on
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickTarget {
+    /// A node, group or cluster row
+    Row,
+    /// A menu entry
+    Menu,
+    /// Empty space, the title, or an error line
+    None,
+}
+
 /// Width of the nodes pane on the left of the workspace
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneWidth {
@@ -2582,6 +2593,23 @@ impl ClusterComponent {
             .insert((self.cluster_key(), node), summary);
     }
 
+    /// What a click at (column, row) in the nodes pane lands on
+    pub fn click_target(&self, column: u16, row: u16) -> ClickTarget {
+        let hits = self.hits.borrow();
+        if contains(hits.node_list, column, row) {
+            let idx = (row - hits.node_list.y) as usize;
+            if hits.node_rows.get(idx).is_some_and(|item| item.is_some()) {
+                return ClickTarget::Row;
+            }
+        } else if contains(hits.menu, column, row) {
+            let idx = (row - hits.menu.y) as usize;
+            if (1..=NavMenuItem::ALL.len()).contains(&idx) {
+                return ClickTarget::Menu;
+            }
+        }
+        ClickTarget::None
+    }
+
     pub fn focused_pane(&self) -> FocusedPane {
         self.focused_pane
     }
@@ -4857,6 +4885,36 @@ mod tests {
         assert_eq!(load_color(5.5, Some(2)), Color::Red);
         assert_eq!(memory_color(75.0), Color::Green);
         assert_eq!(memory_color(85.0), Color::Yellow);
+    }
+
+    /// Clicks in the nodes pane: a tree row, a menu entry, or empty space
+    #[test]
+    fn click_targets_in_the_nodes_pane() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut comp = two_node_cluster();
+        if let Some(c) = comp.clusters.get_mut(0) {
+            c.expanded = true;
+        }
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        let mut tree = Rect::default();
+        terminal
+            .draw(|f| tree = comp.draw_frame(f, f.area(), None, false, false).0)
+            .unwrap();
+        let (list, menu) = {
+            let hits = comp.hits.borrow();
+            (hits.node_list, hits.menu)
+        };
+        // First row of the list is the cluster header
+        assert_eq!(comp.click_target(list.x + 2, list.y), ClickTarget::Row);
+        // Menu row 0 is the separator, row 1 the first entry
+        assert_eq!(comp.click_target(menu.x + 2, menu.y), ClickTarget::None);
+        assert_eq!(comp.click_target(menu.x + 2, menu.y + 1), ClickTarget::Menu);
+        // Empty space under the tree, and the pane's border
+        assert_eq!(
+            comp.click_target(list.x + 2, list.y + list.height - 1),
+            ClickTarget::None
+        );
+        assert_eq!(comp.click_target(tree.x, tree.y), ClickTarget::None);
     }
 
     /// Full when the view keeps 100 columns, compact otherwise; hidden is 0
