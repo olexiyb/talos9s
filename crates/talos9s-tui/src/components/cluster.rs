@@ -4,6 +4,7 @@ use crate::action::Action;
 use crate::components::diagnostics::{DiagnosticsSummary, k8s};
 use crate::components::{
     Component, GroupKind, GroupNode, KERNEL_SERVICE, LogNode, NodeInfoTab, ProcessNode,
+    StorageViewMode,
 };
 use crate::linstor::{LinstorNode, LinstorStatus, StoragePool, fetch_linstor};
 use crate::reachability::prefer_reachable_addresses;
@@ -105,7 +106,8 @@ pub enum NavMenuItem {
     Etcd,
     Network,
     KubeSpan,
-    Storage,
+    Disks,
+    Partitions,
     Processes,
     Diagnostics,
     Certs,
@@ -118,13 +120,14 @@ pub enum NavMenuItem {
 }
 
 impl NavMenuItem {
-    pub const ALL: [NavMenuItem; 15] = [
+    pub const ALL: [NavMenuItem; 16] = [
         NavMenuItem::Dashboard,
         NavMenuItem::Logs,
         NavMenuItem::Etcd,
         NavMenuItem::Network,
         NavMenuItem::KubeSpan,
-        NavMenuItem::Storage,
+        NavMenuItem::Disks,
+        NavMenuItem::Partitions,
         NavMenuItem::Processes,
         NavMenuItem::Diagnostics,
         NavMenuItem::Certs,
@@ -143,7 +146,8 @@ impl NavMenuItem {
             NavMenuItem::Etcd => "etcd",
             NavMenuItem::Network => "Network",
             NavMenuItem::KubeSpan => "KubeSpan",
-            NavMenuItem::Storage => "Storage",
+            NavMenuItem::Disks => "Disks",
+            NavMenuItem::Partitions => "Partitions",
             NavMenuItem::Processes => "Processes",
             NavMenuItem::Diagnostics => "Diagnostics",
             NavMenuItem::Certs => "Certificates",
@@ -163,7 +167,8 @@ impl NavMenuItem {
             NavMenuItem::Etcd => "e",
             NavMenuItem::Network => "n",
             NavMenuItem::KubeSpan => "K",
-            NavMenuItem::Storage => "s",
+            NavMenuItem::Disks => "s",
+            NavMenuItem::Partitions => "t",
             NavMenuItem::Processes => "p",
             NavMenuItem::Diagnostics => "d",
             NavMenuItem::Certs => "c",
@@ -1536,12 +1541,16 @@ impl ClusterComponent {
     }
 
     /// Storage view of the selected node, or of every node under a header
-    fn storage_action(&self) -> Option<Action> {
+    fn storage_action(&self, mode: StorageViewMode) -> Option<Action> {
         if let Some((name, ip)) = self.selected_node_address() {
-            return Some(Action::ShowStorage(name, ip));
+            return Some(Action::ShowStorage(name, ip, mode));
         }
         let (title, nodes, cp) = self.group_selection()?;
-        Some(Action::ShowGroup(GroupKind::Storage, title, nodes, cp))
+        let kind = match mode {
+            StorageViewMode::Disks => GroupKind::Storage,
+            StorageViewMode::Partitions => GroupKind::Partitions,
+        };
+        Some(Action::ShowGroup(kind, title, nodes, cp))
     }
 
     /// Diagnostics of the selected node, or of every node under a header
@@ -2558,7 +2567,8 @@ impl ClusterComponent {
             NavMenuItem::Etcd => Some(Action::ShowEtcd),
             NavMenuItem::Network => self.network_action(),
             NavMenuItem::KubeSpan => self.kubespan_action(),
-            NavMenuItem::Storage => self.storage_action(),
+            NavMenuItem::Disks => self.storage_action(StorageViewMode::Disks),
+            NavMenuItem::Partitions => self.storage_action(StorageViewMode::Partitions),
             NavMenuItem::Processes => self.processes_action(),
             NavMenuItem::Diagnostics => self.diagnostics_action(),
             NavMenuItem::Certs => Some(Action::ShowSecurity),
@@ -5082,6 +5092,10 @@ mod tests {
         assert!(matches!(
             comp.action_for(NavMenuItem::KubeSpan),
             Some(Action::ShowKubeSpan(ref n, _)) if n == "worker1"
+        ));
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Partitions),
+            Some(Action::ShowStorage(ref n, _, StorageViewMode::Partitions)) if n == "worker1"
         ));
         assert!(!comp.select_node("missing"));
     }

@@ -130,7 +130,8 @@ view to the full width.
 | Processes | htop-like process list and tree, sorted by CPU or memory |
 | Network | Interface traffic and connections, packet capture (filtered so it doesn't capture itself) |
 | KubeSpan | The node's WireGuard peers; on a cluster or group row, the peer matrix |
-| Storage | Disks and Talos volumes |
+| Disks | The node's disks |
+| Partitions | Talos volumes: the partitions with their filesystem, encryption and mount point |
 | Containers | Talos system services and Kubernetes containers |
 | Machine config | The config in effect, read-only, searchable, secrets masked; flags a staged change waiting for a reboot |
 | Extensions | Installed system extensions |
@@ -187,7 +188,7 @@ mouse do the same):
 | `l` / `L` | Logs | Logs merged across the nodes |
 | `n` | Network | Network of every node |
 | `K` | KubeSpan peers | KubeSpan peer matrix |
-| `s` | Storage | Storage of every node |
+| `s` / `t` | Disks / partitions | Disks / partitions of every node |
 | `d` | Diagnostics | Diagnostics grid |
 | `p` | Processes | Processes |
 | `C` / `m` / `x` | Containers / machine config / extensions | |

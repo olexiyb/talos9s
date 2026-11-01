@@ -57,7 +57,8 @@ pub enum Action {
     /// for the whole cluster)
     ShowVolumes(String, Option<Vec<String>>),
     /// Show storage/disks view for a node: (hostname, address)
-    ShowStorage(String, String),
+    /// Disks or partitions of a node: (hostname, address, tab)
+    ShowStorage(String, String, crate::components::StorageViewMode),
     /// Diagnostics, storage or network of every node under a header:
     /// (kind, title, nodes, a control plane address for workers' kubeconfig)
     ShowGroup(

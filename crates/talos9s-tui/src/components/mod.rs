@@ -37,7 +37,7 @@ pub use node_operations::NodeOperationsComponent;
 pub use processes::{ProcessNode, ProcessesComponent};
 pub use rolling_operations::RollingOperationsComponent;
 pub use security::SecurityComponent;
-pub use storage::StorageComponent;
+pub use storage::{StorageComponent, StorageViewMode};
 pub use volumes::VolumesComponent;
 pub use wizard::WizardComponent;
 pub use workloads::WorkloadHealthComponent;

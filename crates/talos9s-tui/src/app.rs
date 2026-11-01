@@ -11,7 +11,7 @@ use crate::components::{
     NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent, SecurityComponent,
     StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
-use crate::components::{GroupKind, NodeInfoTab};
+use crate::components::{GroupKind, NodeInfoTab, StorageViewMode};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{
@@ -1451,6 +1451,10 @@ impl App {
                 NodeInfoTab::Config => NavMenuItem::Config,
                 NodeInfoTab::Extensions => NavMenuItem::Extensions,
             },
+            _ if self.view == View::Storage => match self.storage.as_ref().map(|s| s.view_mode()) {
+                Some(StorageViewMode::Partitions) => NavMenuItem::Partitions,
+                _ => NavMenuItem::Disks,
+            },
             _ => self.pane,
         };
         let key = format!("{:?}|{}", item, self.scope_key(item));
@@ -2104,7 +2108,8 @@ impl App {
                 self.leave_view();
                 let item = match kind {
                     GroupKind::Network => NavMenuItem::Network,
-                    GroupKind::Storage => NavMenuItem::Storage,
+                    GroupKind::Storage => NavMenuItem::Disks,
+                    GroupKind::Partitions => NavMenuItem::Partitions,
                     GroupKind::Diagnostics => NavMenuItem::Diagnostics,
                 };
                 tracing::info!(
@@ -2129,7 +2134,7 @@ impl App {
                 self.group = Some(group);
                 self.show_in_pane(item, View::Group);
             }
-            Action::ShowStorage(hostname, address) => {
+            Action::ShowStorage(hostname, address, mode) => {
                 let from_group = (self.view == View::Group).then(|| {
                     let group = (self.cluster.selection(), self.cluster.target_title(false));
                     self.cluster.select_node(&hostname);
@@ -2150,6 +2155,7 @@ impl App {
                 // Create storage component with context for authentication
                 let mut storage =
                     StorageComponent::new(hostname, address.clone(), context, config_path);
+                storage.set_view_mode(mode);
 
                 // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
@@ -2160,7 +2166,11 @@ impl App {
                 }
 
                 self.storage = Some(storage);
-                self.show_in_pane(NavMenuItem::Storage, View::Storage);
+                let item = match mode {
+                    StorageViewMode::Disks => NavMenuItem::Disks,
+                    StorageViewMode::Partitions => NavMenuItem::Partitions,
+                };
+                self.show_in_pane(item, View::Storage);
                 if let Some((selection, title)) = from_group {
                     self.cluster.set_back_hint(Some(title.clone()));
                     self.drill_return = Some((selection, title));

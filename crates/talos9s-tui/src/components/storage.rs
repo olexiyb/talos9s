@@ -27,21 +27,22 @@ const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
 pub enum StorageViewMode {
     #[default]
     Disks,
-    Volumes,
+    /// Talos volumes: partitions with a filesystem and a mount point
+    Partitions,
 }
 
 impl StorageViewMode {
     pub fn next(&self) -> Self {
         match self {
-            StorageViewMode::Disks => StorageViewMode::Volumes,
-            StorageViewMode::Volumes => StorageViewMode::Disks,
+            StorageViewMode::Disks => StorageViewMode::Partitions,
+            StorageViewMode::Partitions => StorageViewMode::Disks,
         }
     }
 
     pub fn label(&self) -> &'static str {
         match self {
             StorageViewMode::Disks => "Disks",
-            StorageViewMode::Volumes => "Volumes",
+            StorageViewMode::Partitions => "Partitions",
         }
     }
 }
@@ -140,6 +141,15 @@ impl StorageComponent {
         }
     }
 
+    /// The tab shown: disks or partitions
+    pub fn view_mode(&self) -> StorageViewMode {
+        self.view_mode
+    }
+
+    pub fn set_view_mode(&mut self, mode: StorageViewMode) {
+        self.view_mode = mode;
+    }
+
     /// Set the client for API calls
     pub fn set_client(&mut self, client: TalosClient) {
         self.client = Some(client);
@@ -221,7 +231,7 @@ impl StorageComponent {
                     self.disk_table_state.select(Some(new_i));
                 }
             }
-            StorageViewMode::Volumes => {
+            StorageViewMode::Partitions => {
                 if let Some(data) = self.data()
                     && !data.volumes.is_empty()
                 {
@@ -249,7 +259,7 @@ impl StorageComponent {
                     self.disk_table_state.select(Some(new_i));
                 }
             }
-            StorageViewMode::Volumes => {
+            StorageViewMode::Partitions => {
                 if let Some(data) = self.data()
                     && !data.volumes.is_empty()
                 {
@@ -463,7 +473,7 @@ impl StorageComponent {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Volumes ")
+                    .title(" Partitions ")
                     .title_style(Style::default().fg(Color::Cyan)),
             )
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -524,7 +534,7 @@ impl StorageComponent {
 
     /// Draw tab bar
     fn draw_tabs(&self, frame: &mut Frame, area: Rect) {
-        let tabs = [StorageViewMode::Disks, StorageViewMode::Volumes];
+        let tabs = [StorageViewMode::Disks, StorageViewMode::Partitions];
 
         let tab_spans: Vec<Span> = tabs
             .iter()
@@ -638,20 +648,8 @@ impl Component for StorageComponent {
         // Draw content based on view mode
         match self.view_mode {
             StorageViewMode::Disks => self.draw_disks_view(frame, chunks[1]),
-            StorageViewMode::Volumes => self.draw_volumes_view(frame, chunks[1]),
+            StorageViewMode::Partitions => self.draw_volumes_view(frame, chunks[1]),
         }
-
-        // Draw help line
-        let help = Line::from(vec![
-            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
-            Span::raw(" switch view  "),
-            Span::styled("↑/↓", Style::default().fg(Color::Cyan)),
-            Span::raw(" navigate  "),
-            Span::styled("r", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh"),
-        ]);
-        let help_paragraph = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(help_paragraph, chunks[2]);
 
         Ok(())
     }

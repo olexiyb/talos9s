@@ -17,6 +17,7 @@ use crate::components::Component;
 use crate::components::diagnostics::{
     CheckStatus, DiagnosticCheck, DiagnosticsComponent, DiagnosticsSummary,
 };
+use crate::components::storage::StorageViewMode;
 use crate::ui_ext::CheckStatusExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -46,7 +47,10 @@ const FIRST_SAMPLE_GAP: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupKind {
     Diagnostics,
+    /// Disks of every node
     Storage,
+    /// Talos volumes (partitions) of every node
+    Partitions,
     Network,
 }
 
@@ -54,14 +58,17 @@ impl GroupKind {
     fn label(self) -> &'static str {
         match self {
             GroupKind::Diagnostics => "Diagnostics",
-            GroupKind::Storage => "Storage",
+            GroupKind::Storage => "Disks",
+            GroupKind::Partitions => "Partitions",
             GroupKind::Network => "Network",
         }
     }
 
     fn refresh_interval(self) -> Duration {
         match self {
-            GroupKind::Diagnostics | GroupKind::Storage => Duration::from_secs(60),
+            GroupKind::Diagnostics | GroupKind::Storage | GroupKind::Partitions => {
+                Duration::from_secs(60)
+            }
             GroupKind::Network => Duration::from_secs(5),
         }
     }
@@ -121,8 +128,6 @@ pub struct GroupComponent {
     cp_endpoint: Option<String>,
     state: AsyncState<GroupData>,
     table_state: TableState,
-    /// Storage: volumes instead of disks
-    show_volumes: bool,
     /// Storage and network: the rows hidden by default too
     show_all: bool,
 }
@@ -258,7 +263,6 @@ impl GroupComponent {
             state,
             table_state,
             table_area: Rect::default(),
-            show_volumes: false,
             show_all: false,
         }
     }
@@ -282,7 +286,7 @@ impl GroupComponent {
         data.node_errors = vec![None; self.nodes.len()];
         match self.kind {
             GroupKind::Diagnostics => self.load_diagnostics(&client, &mut data).await,
-            GroupKind::Storage => self.load_storage(&mut data).await,
+            GroupKind::Storage | GroupKind::Partitions => self.load_storage(&mut data).await,
             GroupKind::Network => {
                 let first = data.samples.is_empty();
                 self.load_network(&client, &mut data).await;
@@ -511,9 +515,7 @@ impl GroupComponent {
         };
         match self.kind {
             GroupKind::Diagnostics => (0..self.nodes.len()).collect(),
-            GroupKind::Storage if self.show_volumes => {
-                self.shown_volumes(data).iter().map(|(n, _)| *n).collect()
-            }
+            GroupKind::Partitions => self.shown_volumes(data).iter().map(|(n, _)| *n).collect(),
             GroupKind::Storage => self.shown_disks(data).iter().map(|(n, _)| *n).collect(),
             GroupKind::Network => self.shown_ifaces(data).iter().map(|r| r.node).collect(),
         }
@@ -541,7 +543,10 @@ impl GroupComponent {
                     .flatten();
                 Action::ShowDiagnostics(name, address, node.role.clone(), cp)
             }
-            GroupKind::Storage => Action::ShowStorage(name, address),
+            GroupKind::Storage => Action::ShowStorage(name, address, StorageViewMode::Disks),
+            GroupKind::Partitions => {
+                Action::ShowStorage(name, address, StorageViewMode::Partitions)
+            }
             GroupKind::Network => Action::ShowNetwork(name, address),
         })
     }
@@ -606,9 +611,7 @@ impl GroupComponent {
             "  [a] show all"
         };
         let toggle = match self.kind {
-            GroupKind::Storage if self.show_volumes => format!("  [v] disks{all}"),
-            GroupKind::Storage => format!("  [v] volumes{all}"),
-            GroupKind::Network => all.to_string(),
+            GroupKind::Storage | GroupKind::Partitions | GroupKind::Network => all.to_string(),
             GroupKind::Diagnostics => String::new(),
         };
         Line::styled(
@@ -662,7 +665,7 @@ impl GroupComponent {
                 widths.extend(categories.iter().map(|_| Constraint::Length(23)));
                 (Row::new(header), rows, widths)
             }
-            GroupKind::Storage if self.show_volumes => {
+            GroupKind::Partitions => {
                 let header = Row::new(vec![
                     bold("NODE"),
                     bold("VOLUME"),
@@ -915,11 +918,6 @@ impl Component for GroupComponent {
             }
             KeyCode::Enter => self.open_selected(),
             KeyCode::Char('r') => Some(Action::Refresh),
-            KeyCode::Char('v') if self.kind == GroupKind::Storage => {
-                self.show_volumes = !self.show_volumes;
-                self.table_state.select(Some(0));
-                None
-            }
             KeyCode::Char('a') if self.kind != GroupKind::Diagnostics => {
                 self.show_all = !self.show_all;
                 self.table_state.select(Some(0));
