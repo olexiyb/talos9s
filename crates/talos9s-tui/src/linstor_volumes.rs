@@ -134,6 +134,20 @@ pub struct PeerObserved {
     pub split_brain: bool,
 }
 
+impl PeerObserved {
+    /// KiB out of sync with the peer, `None` when nothing is (or unknown)
+    pub fn out_of_sync_kib(&self) -> Option<u64> {
+        self.oos_kib.filter(|&oos| oos > 0)
+    }
+}
+
+impl Replica {
+    /// What the node's kernel reports about the link to `peer`
+    pub fn observed(&self, peer: &str) -> Option<&PeerObserved> {
+        self.drbd.as_ref()?.peers.get(peer)
+    }
+}
+
 /// A resync (or online verify) in progress, from the `sync'ed:` /
 /// `finish:` lines DRBD adds to debugfs `proc_drbd` while one runs
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -715,14 +729,42 @@ pub async fn observe_drbd(
 /// Upper bound for reading a node's kernel log
 const DMESG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// LINSTOR's replication state of the replica's link to `peer`, e.g.
+/// `Established`, `SyncSource`; `None` when LINSTOR reports none
+fn linstor_replication<'a>(replica: &'a Replica, peer: &str) -> Option<&'a str> {
+    replica
+        .peers
+        .iter()
+        .find(|p| p.peer == peer)
+        .and_then(|p| p.replication.as_deref())
+}
+
+/// The link to `peer` is Established as far as issues go: the kernel says
+/// so and LINSTOR doesn't say otherwise.
+///
+/// The kernel is the authority (LINSTOR lags it), so LINSTOR reporting no
+/// replication state doesn't make out-of-sync bits on a kernel-Established
+/// link any less stale. LINSTOR reporting a resync does: the bits are then
+/// shown as resyncing, a warning, rather than an error that might be wrong.
+fn established_per_kernel(replica: &Replica, peer: &str, seen: &PeerObserved) -> bool {
+    seen.cs.as_deref() == Some("Established")
+        && linstor_replication(replica, peer).is_none_or(|s| s == "Established")
+}
+
+/// The link to `peer` is Established by both the kernel and LINSTOR.
+///
+/// Stricter than [`established_per_kernel`] on purpose: this gates the
+/// `drbdadm` commands suggested for stale bits, which are offered only for
+/// provably safe cases, so a missing LINSTOR state counts as not proven.
+fn established_confirmed(replica: &Replica, peer: &str, seen: &PeerObserved) -> bool {
+    seen.cs.as_deref() == Some("Established")
+        && linstor_replication(replica, peer) == Some("Established")
+}
+
 /// The replica's link to `peer` is StandAlone (DRBD stopped trying to
 /// connect), per LINSTOR or the kernel
 fn standalone(replica: &Replica, peer: &str) -> bool {
-    let kernel = replica
-        .drbd
-        .as_ref()
-        .and_then(|d| d.peers.get(peer))
-        .and_then(|p| p.cs.as_deref());
+    let kernel = replica.observed(peer).and_then(|p| p.cs.as_deref());
     kernel == Some("StandAlone")
         || replica
             .peers
@@ -847,11 +889,7 @@ fn broken_links(volume: &LinstorVolume) -> Vec<BrokenLink<'_>> {
             } else {
                 p.message.as_str()
             };
-            let split_brain = r
-                .drbd
-                .as_ref()
-                .and_then(|d| d.peers.get(&p.peer))
-                .is_some_and(|seen| seen.split_brain);
+            let split_brain = r.observed(&p.peer).is_some_and(|seen| seen.split_brain);
             let index = match links.iter().position(|l| l.a == a && l.b == b) {
                 Some(i) => i,
                 None => {
@@ -1131,14 +1169,8 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
         let mut peers: Vec<_> = observed.peers.iter().collect();
         peers.sort_by(|a, b| a.0.cmp(b.0));
         for (peer, seen) in peers {
-            if let Some(oos) = seen.oos_kib
-                && oos > 0
-            {
-                let established = seen.cs.as_deref() == Some("Established")
-                    && !r.peers.iter().any(|p| {
-                        &p.peer == peer
-                            && p.replication.as_deref().is_some_and(|s| s != "Established")
-                    });
+            if let Some(oos) = seen.out_of_sync_kib() {
+                let established = established_per_kernel(r, peer, seen);
                 let peer_is_primary = volume.replicas.iter().any(|p| &p.node == peer && p.in_use);
                 if !established {
                     let progress = seen
@@ -1266,13 +1298,7 @@ fn standalone_remedies(
     let target = |peer: &str| drbdadm_target(volume, peer);
     let replica = |node: &str| volume.replicas.iter().find(|r| r.node == node);
     let primary = volume.replicas.iter().find(|r| r.in_use);
-    let oos = |from: &Replica, to: &str| {
-        from.drbd
-            .as_ref()
-            .and_then(|d| d.peers.get(to))
-            .and_then(|p| p.oos_kib)
-            .unwrap_or(0)
-    };
+    let oos = |from: &Replica, to: &str| from.observed(to).and_then(|p| p.oos_kib).unwrap_or(0);
     // `node` holds exactly the Primary's data
     let in_sync_with = |primary: &Replica, node: &str| {
         let Some(r) = replica(node) else {
@@ -1374,11 +1400,7 @@ fn stale_bit_remedies(
             continue;
         };
         for (peer, seen) in &observed.peers {
-            let established = seen.cs.as_deref() == Some("Established")
-                && r.peers
-                    .iter()
-                    .any(|p| &p.peer == peer && p.replication.as_deref() == Some("Established"));
-            if established && seen.oos_kib.is_some_and(|oos| oos > 0) {
+            if established_confirmed(r, peer, seen) && seen.out_of_sync_kib().is_some() {
                 stale.push((r.node.as_str(), peer.as_str()));
             }
         }
@@ -1435,7 +1457,11 @@ fn stale_bit_remedies(
     remedies
 }
 
-/// KiB as a human size in binary units, e.g. `11.0 GiB`, `924 KiB`
+/// KiB as a human size in binary units, e.g. `11.0 GiB`, `924 KiB`.
+///
+/// Not `talos9s_core::format_bytes`: that labels binary sizes `KB`/`GB`,
+/// while DRBD, LINSTOR and the remedies here speak KiB/GiB, and storage
+/// sizes are compared against those tools' output.
 pub fn format_kib(kib: u64) -> String {
     const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
     let mut value = kib as f64;
@@ -2116,6 +2142,25 @@ kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate 
                 p.replication = Some("SyncSource".to_string());
             }
         }
+        assert!(remediation(&volume, &HashMap::new(), "kubectl").is_empty());
+    }
+
+    /// The kernel says Established but LINSTOR reports no replication state:
+    /// the stale bits are still an error, but no commands are suggested
+    #[test]
+    fn stale_bits_without_linstor_state_are_reported_but_not_fixed() {
+        let mut volume = vmsingle_with_stale_bits();
+        for r in &mut volume.replicas {
+            for p in &mut r.peers {
+                p.replication = None;
+            }
+        }
+        let issues = volume_issues(&volume);
+        assert!(
+            issues
+                .iter()
+                .any(|i| { i.severity == Severity::Error && i.text.contains("LINBIT/drbd#153") })
+        );
         assert!(remediation(&volume, &HashMap::new(), "kubectl").is_empty());
     }
 
