@@ -1,6 +1,6 @@
 //! What talos9s remembers between runs, in `~/.talos9s/state.yaml`: where
-//! you were (cluster, group or node, the menu entry, the pane width, folded
-//! groups) and view settings (log levels, sort orders, toggles).
+//! you were (cluster, group or node, the menu entry, the window with the
+//! keyboard, the pane width, folded groups) and view settings (log levels, sort orders, toggles).
 //!
 //! Written only by talos9s, on every change, through a temporary file and a
 //! rename so a kill never leaves it half-written. Text filters, selections
@@ -20,6 +20,9 @@ pub struct UiState {
     pub selection: Option<Selection>,
     /// Menu entry shown on the right (`NavMenuItem` name)
     pub view: Option<String>,
+    /// Which window has the keyboard: `view`, or the tree's `Nodes`, `Menu`
+    /// or the dashboard's `Services` list (`FocusedPane` name)
+    pub focus: Option<String>,
     /// Width of the left pane (`PaneWidth` name); none for automatic
     pub pane_width: Option<String>,
     /// Unfolded state of each cluster and its groups

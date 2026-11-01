@@ -66,6 +66,15 @@ pub struct ProcessNode {
     pub address: String,
 }
 
+/// Memory, core count and load of a node the dashboard already has, so the
+/// view asks the node only for its processes and CPU counters
+#[derive(Debug, Clone)]
+pub struct NodeBasics {
+    pub meminfo: MemInfo,
+    pub cpu_count: usize,
+    pub load: (f64, f64, f64),
+}
+
 /// A process and the node it runs on. PIDs are only unique per node, so
 /// processes are identified by `(node index, pid)`.
 type ProcKey = (usize, i32);
@@ -167,6 +176,11 @@ pub(crate) struct ProcessesData {
 }
 
 impl ProcessesData {
+    /// Only one sample so far: CPU % needs two, the next refresh comes soon
+    fn cpu_pending(&self) -> bool {
+        self.cpu_percentages.is_empty() && !self.processes.is_empty()
+    }
+
     fn total_memory(&self) -> u64 {
         self.nodes.iter().map(|n| n.total_memory).sum()
     }
@@ -229,14 +243,39 @@ struct NodeFetch {
 }
 
 /// Fetch processes and system stats of one node, each call bounded
-async fn fetch_node(client: TalosClient) -> NodeFetch {
+async fn fetch_node(client: TalosClient, basics: Option<NodeBasics>) -> NodeFetch {
     let t = NODE_FETCH_TIMEOUT;
+    // What the dashboard already has isn't asked again
+    let ask = basics.is_none();
     let (procs, mem, stat, cpu, load) = tokio::join!(
         tokio::time::timeout(t, client.processes()),
-        tokio::time::timeout(t, client.memory()),
+        async {
+            if ask {
+                Some(tokio::time::timeout(t, client.memory()).await)
+            } else {
+                None
+            }
+        },
         tokio::time::timeout(t, client.system_stat()),
-        tokio::time::timeout(t, client.cpu_info()),
-        tokio::time::timeout(t, client.load_avg()),
+        async {
+            if ask {
+                Some(tokio::time::timeout(t, client.cpu_info()).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if ask {
+                Some(tokio::time::timeout(t, client.load_avg()).await)
+            } else {
+                None
+            }
+        },
+    );
+    let (mem, cpu, load) = (
+        mem.and_then(Result::ok),
+        cpu.and_then(Result::ok),
+        load.and_then(Result::ok),
     );
     NodeFetch {
         processes: match procs {
@@ -249,7 +288,6 @@ async fn fetch_node(client: TalosClient) -> NodeFetch {
             Err(_) => Err(format!("Request timed out after {}s", t.as_secs())),
         },
         meminfo: mem
-            .ok()
             .and_then(|r| r.ok())
             .and_then(|m| m.into_iter().next())
             .and_then(|m| m.meminfo),
@@ -259,12 +297,10 @@ async fn fetch_node(client: TalosClient) -> NodeFetch {
             .and_then(|s| s.into_iter().next())
             .map(|s| s.cpu_total),
         cpu_count: cpu
-            .ok()
             .and_then(|r| r.ok())
             .and_then(|c| c.into_iter().next())
             .map(|c| c.cpu_count),
         load_avg: load
-            .ok()
             .and_then(|r| r.ok())
             .and_then(|l| l.into_iter().next())
             .map(|l| (l.load1, l.load5, l.load15)),
@@ -278,6 +314,8 @@ pub struct ProcessesComponent {
     title: String,
     /// Nodes whose processes are listed
     nodes: Vec<ProcessNode>,
+    /// What the dashboard knows of each node (parallel to `nodes`)
+    basics: Vec<Option<NodeBasics>>,
 
     /// Async state wrapping all process data
     state: AsyncState<ProcessesData>,
@@ -319,6 +357,12 @@ impl Default for ProcessesComponent {
 }
 
 impl ProcessesComponent {
+    /// Memory, cores and load the dashboard has for each node (by hostname),
+    /// taken instead of asking the node; set before each refresh
+    pub fn set_node_basics(&mut self, basics: impl Fn(&str) -> Option<NodeBasics>) {
+        self.basics = self.nodes.iter().map(|n| basics(&n.hostname)).collect();
+    }
+
     /// Sort order, remembered between visits and runs
     pub fn sort_by(&self) -> SortBy {
         self.sort_by
@@ -337,6 +381,7 @@ impl ProcessesComponent {
 
         Self {
             title,
+            basics: Vec::new(),
             nodes,
             state,
             selected: 0,
@@ -422,13 +467,12 @@ impl ProcessesComponent {
         // fails this time keeps showing its last known processes.
         let mut data = self.state.take_data().unwrap_or_default();
         data.nodes.resize_with(self.nodes.len(), NodeStats::default);
-        let first_sample = data.nodes.iter().all(|n| n.last_cpu_sample.is_none());
 
         let started = Instant::now();
-        let fetches = self
-            .nodes
-            .iter()
-            .map(|n| fetch_node(client.with_node(&n.address)));
+        let fetches = self.nodes.iter().enumerate().map(|(i, n)| {
+            let basics = self.basics.get(i).cloned().flatten();
+            fetch_node(client.with_node(&n.address), basics)
+        });
         let results = futures::future::join_all(fetches).await;
         tracing::debug!(
             "processes: fetched {} node(s) in {:?}, {} failed",
@@ -441,7 +485,12 @@ impl ProcessesComponent {
         let mut cpu_percentages = HashMap::new();
         let now = Instant::now();
 
-        for (idx, fetch) in results.into_iter().enumerate() {
+        for (idx, mut fetch) in results.into_iter().enumerate() {
+            if let Some(basics) = self.basics.get(idx).cloned().flatten() {
+                fetch.meminfo.get_or_insert(basics.meminfo);
+                fetch.cpu_count.get_or_insert(basics.cpu_count);
+                fetch.load_avg.get_or_insert(basics.load);
+            }
             let stats = &mut data.nodes[idx];
             if let Some(meminfo) = fetch.meminfo {
                 stats.total_memory = meminfo.mem_total;
@@ -534,15 +583,6 @@ impl ProcessesComponent {
             self.state.set_error(errors.join("; "));
             return Ok(());
         }
-        // Without a previous sample every process reads 0% and the CPU
-        // order is arbitrary: sample again before the first screen
-        let sampled = self
-            .data()
-            .is_some_and(|d| d.nodes.iter().any(|n| n.last_cpu_sample.is_some()));
-        if first_sample && sampled {
-            tokio::time::sleep(FIRST_SAMPLE_GAP).await;
-            return Box::pin(self.refresh()).await;
-        }
         Ok(())
     }
 
@@ -563,6 +603,14 @@ impl ProcessesComponent {
     /// Sort processes based on current sort order (operates on data)
     fn sort_processes_in_data(&self, data: &mut ProcessesData) {
         match self.sort_by {
+            // Until CPU % is known, CPU time puts the busy processes first
+            SortBy::CpuPercent if data.cpu_pending() => {
+                data.processes.sort_by(|a, b| {
+                    b.cpu_time
+                        .partial_cmp(&a.cpu_time)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
             SortBy::CpuPercent => {
                 let cpu_pcts = &data.cpu_percentages;
                 let pct = |p: &NodeProcess| cpu_pcts.get(&p.key()).copied().unwrap_or(0.0);
@@ -1176,7 +1224,11 @@ impl ProcessesComponent {
                     Some(ProcessRow {
                         pid: proc.pid,
                         node: self.node_name(proc.node).to_string(),
-                        cpu: format!("{:>5.1}%  {}", cpu_pct, proc.cpu_time_human()),
+                        cpu: if data.cpu_pending() {
+                            format!("{:>6}  {}", "…", proc.cpu_time_human())
+                        } else {
+                            format!("{:>5.1}%  {}", cpu_pct, proc.cpu_time_human())
+                        },
                         mem: proc.resident_memory_human(),
                         state: proc.state.short().to_string(),
                         command,
@@ -1480,6 +1532,17 @@ impl Component for ProcessesComponent {
             // Check for auto-refresh using AsyncState
             let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
             if self.state.should_auto_refresh(self.auto_refresh, interval) {
+                return Ok(Some(Action::Refresh));
+            }
+            // The first screen shows at once with CPU % pending; the second
+            // sample follows shortly, whatever auto-refresh says
+            if self.data().is_some_and(|d| d.cpu_pending())
+                && !self.state.is_loading()
+                && self
+                    .state
+                    .elapsed_since_refresh()
+                    .is_some_and(|t| t >= FIRST_SAMPLE_GAP)
+            {
                 return Ok(Some(Action::Refresh));
             }
         }

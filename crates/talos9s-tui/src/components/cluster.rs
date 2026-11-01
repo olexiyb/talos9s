@@ -3158,6 +3158,20 @@ impl ClusterComponent {
             .collect()
     }
 
+    /// Memory, core count and load the dashboard has for a node of the
+    /// active cluster, all three or nothing
+    pub fn node_basics(&self, node: &str) -> Option<crate::components::processes::NodeBasics> {
+        let idx = self.active_cluster;
+        let meminfo = self.get_node_memory_for(idx, node)?.clone();
+        let cpu_count = self.get_node_cpu_info_for(idx, node)?.cpu_count;
+        let load = self.get_node_load_avg_for(idx, node)?;
+        Some(crate::components::processes::NodeBasics {
+            meminfo,
+            cpu_count,
+            load: (load.load1, load.load5, load.load15),
+        })
+    }
+
     pub fn auto_refresh(&self) -> bool {
         self.auto_refresh
     }

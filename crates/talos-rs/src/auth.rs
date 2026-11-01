@@ -8,7 +8,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 /// Per-endpoint connection timeout.
 ///
@@ -72,6 +72,20 @@ fn convert_ed25519_key_to_pkcs8(pem: &[u8]) -> Vec<u8> {
 /// skipped in favor of a reachable one instead of hanging the client. Returns
 /// an error only when every configured endpoint is unreachable.
 pub async fn create_channel(ctx: &Context) -> Result<Channel, TalosError> {
+    Ok(create_channel_with_endpoint(ctx).await?.0)
+}
+
+/// A second connection to an endpoint that answered `create_channel`,
+/// connected on its first request
+pub fn lazy_channel(endpoint: &Endpoint) -> Channel {
+    endpoint.connect_with_connector_lazy(tcp_connector())
+}
+
+/// Like `create_channel`, also returning the endpoint that answered, so more
+/// connections can be opened to it (`lazy_channel`)
+pub async fn create_channel_with_endpoint(
+    ctx: &Context,
+) -> Result<(Channel, Endpoint), TalosError> {
     let endpoint_urls = ctx.endpoint_urls();
     if endpoint_urls.is_empty() {
         return Err(TalosError::ConfigInvalid(
@@ -127,7 +141,7 @@ pub async fn create_channel(ctx: &Context) -> Result<Channel, TalosError> {
         .map(|(url, endpoint)| {
             Box::pin(async move {
                 match endpoint.connect_with_connector(tcp_connector()).await {
-                    Ok(channel) => Ok((url, channel)),
+                    Ok(channel) => Ok((url, channel, endpoint)),
                     Err(e) => {
                         tracing::warn!("Endpoint {} not reachable: {}", url, e);
                         Err(e)
@@ -138,9 +152,9 @@ pub async fn create_channel(ctx: &Context) -> Result<Channel, TalosError> {
         .collect();
 
     match futures::future::select_ok(attempts).await {
-        Ok(((url, channel), _losers)) => {
+        Ok(((url, channel, endpoint), _losers)) => {
             tracing::debug!("Connected via endpoint {}", url);
-            Ok(channel)
+            Ok((channel, endpoint))
         }
         Err(e) => Err(e.into()),
     }

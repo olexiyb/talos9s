@@ -2,7 +2,7 @@
 //!
 //! Provides a convenient interface for interacting with Talos clusters.
 
-use crate::auth::create_channel;
+use crate::auth::{create_channel_with_endpoint, lazy_channel};
 use crate::config::{Context, TalosConfig};
 use crate::error::TalosError;
 use crate::proto::machine::machine_service_client::MachineServiceClient;
@@ -25,10 +25,36 @@ pub enum LinkType {
     RAW,
 }
 
+/// One connection per node, all to the endpoint the client dialed. Requests
+/// for different nodes on a single HTTP/2 connection queue behind each
+/// other (8 nodes at once took seconds where separate connections take
+/// tenths), so each node gets its own; apid on the endpoint relays as
+/// before.
+struct NodeChannels {
+    endpoint: tonic::transport::Endpoint,
+    channels: std::sync::Mutex<std::collections::HashMap<String, Channel>>,
+}
+
+impl NodeChannels {
+    fn channel(&self, node: &str) -> Channel {
+        let mut channels = self
+            .channels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        channels
+            .entry(node.to_string())
+            .or_insert_with(|| lazy_channel(&self.endpoint))
+            .clone()
+    }
+}
+
 /// High-level client for Talos API
 #[derive(Clone)]
 pub struct TalosClient {
     channel: Channel,
+    /// Per-node connections (`with_node`); none for a client not dialed
+    /// from a context
+    node_channels: Option<std::sync::Arc<NodeChannels>>,
     /// Target nodes for API requests
     nodes: Vec<String>,
     /// Endpoints from configuration (used to filter out vIPs from node targeting)
@@ -38,12 +64,16 @@ pub struct TalosClient {
 impl TalosClient {
     /// Create a new client from a talosconfig context
     pub async fn from_context(ctx: &Context) -> Result<Self, TalosError> {
-        let channel = create_channel(ctx).await?;
+        let (channel, endpoint) = create_channel_with_endpoint(ctx).await?;
         let nodes = ctx.target_nodes().to_vec();
         let endpoints = ctx.endpoints.clone();
 
         Ok(Self {
             channel,
+            node_channels: Some(std::sync::Arc::new(NodeChannels {
+                endpoint,
+                channels: Default::default(),
+            })),
             nodes,
             endpoints,
         })
@@ -83,8 +113,16 @@ impl TalosClient {
     }
 
     pub fn with_node(&self, node: &str) -> Self {
+        // Needs a runtime to connect; without one (sync tests) share the main
+        // connection
+        let own = self
+            .node_channels
+            .as_ref()
+            .filter(|_| tokio::runtime::Handle::try_current().is_ok())
+            .map(|pool| pool.channel(node));
         Self {
-            channel: self.channel.clone(),
+            channel: own.unwrap_or_else(|| self.channel.clone()),
+            node_channels: self.node_channels.clone(),
             nodes: vec![node.to_string()],
             endpoints: self.endpoints.clone(),
         }
@@ -2923,6 +2961,7 @@ mod tests {
 
         TalosClient {
             channel,
+            node_channels: None,
             nodes,
             endpoints,
         }

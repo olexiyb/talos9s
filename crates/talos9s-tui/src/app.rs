@@ -771,6 +771,11 @@ impl App {
                 .saved_selection()
                 .or_else(|| self.saved_state.selection.clone()),
             view: Some(name_of(self.pane)),
+            focus: Some(if self.view_has_focus && self.view != View::Cluster {
+                "view".to_string()
+            } else {
+                name_of(self.cluster.focused_pane())
+            }),
             pane_width: self.pane_width.map(name_of),
             tree,
             auto_refresh: Some(self.cluster.auto_refresh()),
@@ -820,11 +825,23 @@ impl App {
         // Back where the last run left off; a view of a node waits (with a
         // loading note) until the cluster lists its nodes
         self.state_path = crate::state::default_path();
-        if let Some(item) = self.restore_state()
-            && item != NavMenuItem::Dashboard
-            && let Some(action) = self.cluster.action_for(item)
-        {
-            self.handle_action(action).await?;
+        if let Some(item) = self.restore_state() {
+            let focus = self.saved_state.focus.clone();
+            // The keyboard goes back where it was: the view once it shows,
+            // or the tree's side
+            match crate::state::by_name(
+                &[FocusedPane::Nodes, FocusedPane::Menu, FocusedPane::Services],
+                focus.as_deref(),
+            ) {
+                Some(pane) => self.cluster.set_focused_pane(pane),
+                None => self.focus_after_show = focus.as_deref() == Some("view"),
+            }
+            if item != NavMenuItem::Dashboard
+                && let Some(action) = self.cluster.action_for(item)
+            {
+                self.handle_action(action).await?;
+            }
+            self.focus_after_show = false;
         }
 
         loop {
@@ -1930,8 +1947,10 @@ impl App {
                         // Several nodes, each call bounded at 10s: refresh off
                         // the event loop so a slow node can't freeze the UI
                         if self.refresh_job.is_none()
-                            && let Some(processes) = &self.processes
+                            && let Some(processes) = &mut self.processes
                         {
+                            let cluster = &self.cluster;
+                            processes.set_node_basics(|n| cluster.node_basics(n));
                             self.refresh_job =
                                 Some(RefreshJob::Processes(spawn_refresh!(processes)));
                         }
@@ -2148,6 +2167,7 @@ impl App {
 
                 let mut processes = ProcessesComponent::new(title, nodes);
                 processes.set_sort_by(self.processes_sort);
+                processes.set_node_basics(|n| self.cluster.node_basics(n));
                 match self.cluster.client() {
                     Some(client) => {
                         processes.set_client(client.clone());
