@@ -3,6 +3,7 @@
 //! Parses X.509 certificates to check expiry dates and provide warnings.
 
 use chrono::{DateTime, Utc};
+use talos9s_core::constants::{CERT_CRITICAL_DAYS, CERT_WARN_DAYS};
 use x509_parser::prelude::*;
 
 /// Status of a certificate based on expiry
@@ -75,8 +76,8 @@ impl CertificateInfo {
             return CertStatus::Expired;
         }
         match not_after.signed_duration_since(now).num_days() {
-            d if d <= 7 => CertStatus::Critical,
-            d if d <= 30 => CertStatus::Warning,
+            d if d <= CERT_CRITICAL_DAYS => CertStatus::Critical,
+            d if d <= CERT_WARN_DAYS => CertStatus::Warning,
             _ => CertStatus::Valid,
         }
     }

@@ -147,8 +147,7 @@ fn conn_warnings(cc: &ConnectionCounts) -> bool {
         || cc.syn_sent >= SYN_SENT_WARN
 }
 
-/// Auto-refresh interval in seconds (faster than processes for responsive rates)
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 2;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::FAST;
 
 /// KubeSpan peers are fetched via talosctl, so refresh them less often
 const KUBESPAN_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);

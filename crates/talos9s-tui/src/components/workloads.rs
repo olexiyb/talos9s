@@ -203,7 +203,7 @@ fn pod_is_ready(pod: &Pod) -> bool {
 /// Auto-refresh interval in seconds
 // Pod problems change slowly, and a refresh downloads every pod of the
 // cluster
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]

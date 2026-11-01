@@ -27,8 +27,7 @@ use talos_rs::{
 };
 use talos9s_core::{AsyncState, EtcdQuorum, HasHealth, HealthIndicator, SelectableList};
 
-/// Auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// How long one Talos, Kubernetes or `talosctl` call may take; a dead node
 /// must not hold up the refresh

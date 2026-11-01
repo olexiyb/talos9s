@@ -10,6 +10,35 @@ pub const HIGH_RESTART_THRESHOLD: i32 = 5;
 /// count never goes down, so old restarts would flag a pod forever
 pub const RECENT_RESTART_SECS: i64 = 3600;
 
+/// Days left on a certificate that are worth a look / urgent
+pub const CERT_WARN_DAYS: i64 = 30;
+pub const CERT_CRITICAL_DAYS: i64 = 7;
+
+/// Clock offsets that are worth a look / a problem (seconds): etcd leases
+/// and certificate checks start failing well before a few seconds
+pub const CLOCK_WARN_SECS: f64 = 0.1;
+pub const CLOCK_ERROR_SECS: f64 = 1.0;
+
+/// etcd member checks
+pub mod etcd {
+    /// A defrag is worth it when at least this share of the DB file is free...
+    pub const DEFRAG_MIN_FREE_PCT: i64 = 50;
+    /// ...and that is at least this much space
+    pub const DEFRAG_MIN_FREE_BYTES: i64 = 200 << 20;
+    /// Committed but not applied entries worth a look; etcd itself rejects
+    /// new requests ("too many requests") past 5000
+    pub const APPLY_LAG_WARN: u64 = 1_000;
+    pub const APPLY_LAG_ERROR: u64 = 5_000;
+    /// Raft entries a member may trail the leader by. Statuses are read a
+    /// few milliseconds apart, so a busy cluster shows small gaps even when
+    /// healthy.
+    pub const BEHIND_LEADER_WARN: u64 = 10_000;
+    /// etcd's default `quota-backend-bytes`; past it etcd raises NOSPACE and
+    /// stops accepting writes
+    pub const DEFAULT_QUOTA_BYTES: i64 = 2 << 30;
+    pub const QUOTA_WARN_PCT: i64 = 80;
+}
+
 /// TCP connections in one state that are worth a look on a node. Busy
 /// healthy nodes hold hundreds of TIME_WAIT and the odd SYN_SENT; these
 /// flag port exhaustion (ephemeral range ~28k), sockets an app never closes,

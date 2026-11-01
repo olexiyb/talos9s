@@ -26,9 +26,7 @@ use talos_rs::{
 };
 use talos9s_core::AsyncState;
 
-/// Auto-refresh interval in seconds (containers only; the config and
-/// extensions reload on `r`)
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
 /// Upper bound for one Containers call
 const CONTAINERS_TIMEOUT: Duration = Duration::from_secs(10);
 

@@ -168,24 +168,12 @@ fn address_check(member: &EtcdMember) -> Option<String> {
     })
 }
 
-/// Default auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 5;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::NORMAL;
 
-/// A defrag is worth it when at least this share of the DB file is free...
-const DEFRAG_MIN_FREE_PCT: i64 = 50;
-/// ...and that is at least this much space
-const DEFRAG_MIN_FREE_BYTES: i64 = 200 << 20;
-/// Committed but not applied entries worth a look; etcd itself rejects new
-/// requests ("too many requests") past 5000
-const APPLY_LAG_WARN: u64 = 1_000;
-const APPLY_LAG_ERROR: u64 = 5_000;
-/// Raft entries a member may trail the leader by. Statuses are read a few
-/// milliseconds apart, so a busy cluster shows small gaps even when healthy.
-const BEHIND_LEADER_WARN: u64 = 10_000;
-/// etcd's default `quota-backend-bytes`; past it etcd raises NOSPACE and
-/// stops accepting writes
-const DEFAULT_QUOTA_BYTES: i64 = 2 << 30;
-const QUOTA_WARN_PCT: i64 = 80;
+use talos9s_core::constants::etcd::{
+    APPLY_LAG_ERROR, APPLY_LAG_WARN, BEHIND_LEADER_WARN, DEFAULT_QUOTA_BYTES,
+    DEFRAG_MIN_FREE_BYTES, DEFRAG_MIN_FREE_PCT, QUOTA_WARN_PCT,
+};
 
 /// Something to look at on a member
 #[derive(Debug, Clone, PartialEq)]

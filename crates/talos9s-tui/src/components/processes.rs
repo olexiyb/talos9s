@@ -23,8 +23,7 @@ use std::time::{Duration, Instant};
 use talos_rs::{CpuStat, MemInfo, ProcessInfo, ProcessState, TalosClient};
 use talos9s_core::{AsyncState, format_bytes_compact};
 
-/// Auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 5;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::NORMAL;
 
 /// Upper bound for each per-node API call in a refresh
 const NODE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -980,13 +979,9 @@ impl ProcessesComponent {
         let filled = ((percent / 10.0).round() as usize).min(10);
         let empty = 10 - filled;
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-        let color = if percent > 85.0 {
-            Color::Red
-        } else if percent > 60.0 {
-            Color::Yellow
-        } else {
-            Color::Green
-        };
+        // The dashboard's thresholds, so a node looks the same in both
+        use crate::ui_ext::HealthIndicatorExt;
+        let color = talos9s_core::memory_health(f64::from(percent)).color();
         (bar, color)
     }
 
@@ -1096,8 +1091,8 @@ impl ProcessesComponent {
             ));
         }
 
-        // Node memory usage > 85% (from meminfo), else a single process using
-        // > 85% of its node's memory
+        // Node memory past the shared warning threshold (from meminfo), else
+        // a single process using that much of its node's memory
         let prefix = |idx: usize| {
             if self.multi_node() {
                 format!("{}: ", self.node_name(idx))
@@ -1107,11 +1102,15 @@ impl ProcessesComponent {
         };
         for (idx, stats) in data.nodes.iter().enumerate() {
             let usage = stats.memory_usage_percent();
-            if usage > 85.0 {
+            if talos9s_core::memory_health(f64::from(usage))
+                != talos9s_core::HealthIndicator::Healthy
+            {
                 warnings.push(format!("{}High memory usage: {:.1}%", prefix(idx), usage));
             } else if stats.total_memory > 0
                 && let Some(proc) = data.processes.iter().find(|p| {
-                    p.node == idx && p.resident_memory as f64 / stats.total_memory as f64 > 0.85
+                    p.node == idx
+                        && p.resident_memory as f64 / stats.total_memory as f64 * 100.0
+                            > talos9s_core::constants::MEMORY_WARN_PERCENT
                 })
             {
                 warnings.push(format!(

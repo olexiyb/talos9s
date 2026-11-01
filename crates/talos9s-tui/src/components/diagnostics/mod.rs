@@ -34,8 +34,7 @@ use talos9s_core::AsyncState;
 use crate::ui_ext::CheckStatusExt;
 pub use types::*;
 
-/// Default auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 10;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::SLOW;
 
 /// Data loaded asynchronously for the diagnostics component
 #[derive(Debug, Clone, Default)]

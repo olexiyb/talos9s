@@ -21,8 +21,7 @@ use std::time::Duration;
 use talos_rs::TalosClient;
 use talos9s_core::AsyncState;
 
-/// Auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// Loaded security data (wrapped by AsyncState)
 #[derive(Debug, Clone, Default)]

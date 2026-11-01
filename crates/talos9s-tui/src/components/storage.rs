@@ -18,8 +18,7 @@ use std::time::Duration;
 use talos_rs::{DiskInfo, VolumeStatus, get_disks_for_node, get_volume_status_for_node};
 use talos9s_core::{AsyncState, HealthIndicator, format_bytes};
 
-/// Auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
+const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// View mode for the storage component
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

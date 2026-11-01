@@ -1236,10 +1236,7 @@ struct NodeClock {
 /// Upper bound for one node's Time API call
 const CLOCK_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Clock offsets that are worth a look / a problem (seconds): etcd leases
-/// and certificate checks start failing well before a few seconds
-const CLOCK_WARN_SECS: f64 = 0.1;
-const CLOCK_ERROR_SECS: f64 = 1.0;
+use talos9s_core::constants::{CLOCK_ERROR_SECS, CLOCK_WARN_SECS};
 
 /// Ask a node for its time and its NTP server's. `None` unless both are
 /// known (the client library reads a missing time as a zero offset).
@@ -2766,7 +2763,9 @@ impl ClusterComponent {
         }
         match self.last_auto_refresh {
             None => true,
-            Some(last) => last.elapsed().as_secs() >= 5,
+            Some(last) => {
+                last.elapsed().as_secs() >= talos9s_core::constants::refresh_intervals::NORMAL
+            }
         }
     }
 
