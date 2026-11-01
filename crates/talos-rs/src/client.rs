@@ -48,6 +48,74 @@ impl NodeChannels {
     }
 }
 
+/// Placeholder for the excluded port in the BPF programs below; no real
+/// operand of theirs is `u32::MAX`
+const BPF_PORT: u32 = u32::MAX;
+
+/// `tcpdump -dd -y EN10MB 'not port <port>'` as `(op, jt, jf, k)`:
+/// Ethernet-framed packets (eth*, ens*, bond*, lo, …); IPv4 and IPv6, TCP,
+/// UDP and SCTP, IPv4 fragments
+#[rustfmt::skip]
+const BPF_NOT_PORT_EN10MB: &[(u16, u8, u8, u32)] = &[
+    (0x28, 0, 0, 0x0000000c), // 000 ldh [12]              EtherType
+    (0x15, 0, 8, 0x000086dd), // 001 jeq #0x86dd, 0, 8     IPv6, else IPv4 at 010
+    (0x30, 0, 0, 0x00000014), // 002 ldb [20]              IPv6 next header
+    (0x15, 2, 0, 0x00000084), // 003 jeq #132, 2, 0        SCTP
+    (0x15, 1, 0, 0x00000006), // 004 jeq #6, 1, 0          TCP
+    (0x15, 0, 17, 0x00000011), // 005 jeq #17, 0, 17       UDP, else accept
+    (0x28, 0, 0, 0x00000036), // 006 ldh [54]              IPv6 src port
+    (0x15, 14, 0, BPF_PORT),  // 007 jeq #port, 14, 0      reject
+    (0x28, 0, 0, 0x00000038), // 008 ldh [56]              IPv6 dst port
+    (0x15, 12, 13, BPF_PORT), // 009 jeq #port, 12, 13     reject, else accept
+    (0x15, 0, 12, 0x00000800), // 010 jeq #0x0800, 0, 12   IPv4, else accept
+    (0x30, 0, 0, 0x00000017), // 011 ldb [23]              IPv4 protocol
+    (0x15, 2, 0, 0x00000084), // 012 jeq #132, 2, 0        SCTP
+    (0x15, 1, 0, 0x00000006), // 013 jeq #6, 1, 0          TCP
+    (0x15, 0, 8, 0x00000011), // 014 jeq #17, 0, 8         UDP, else accept
+    (0x28, 0, 0, 0x00000014), // 015 ldh [20]              fragment offset
+    (0x45, 6, 0, 0x00001fff), // 016 jset #0x1fff, 6, 0    fragment: accept
+    (0xb1, 0, 0, 0x0000000e), // 017 ldxb 4*([14]&0xf)     IP header length
+    (0x48, 0, 0, 0x0000000e), // 018 ldh [x+14]            src port
+    (0x15, 2, 0, BPF_PORT),   // 019 jeq #port, 2, 0       reject
+    (0x48, 0, 0, 0x00000010), // 020 ldh [x+16]            dst port
+    (0x15, 0, 1, BPF_PORT),   // 021 jeq #port, 0, 1       reject, else accept
+    (0x06, 0, 0, 0x00000000), // 022 ret #0                reject
+    (0x06, 0, 0, 0x00040000), // 023 ret #262144           accept
+];
+
+/// `tcpdump -dd -y RAW 'not port <port>'` as `(op, jt, jf, k)`: packets
+/// that start with the IP header (kubespan, wireguard, tun, …)
+#[rustfmt::skip]
+const BPF_NOT_PORT_RAW: &[(u16, u8, u8, u32)] = &[
+    (0x30, 0, 0, 0x00000000), // 000 ldb [0]               IP version byte
+    (0x54, 0, 0, 0x000000f0), // 001 and #0xf0
+    (0x15, 0, 8, 0x00000060), // 002 jeq #0x60, 0, 8       IPv6, else IPv4 at 011
+    (0x30, 0, 0, 0x00000006), // 003 ldb [6]               IPv6 next header
+    (0x15, 2, 0, 0x00000084), // 004 jeq #132, 2, 0        SCTP
+    (0x15, 1, 0, 0x00000006), // 005 jeq #6, 1, 0          TCP
+    (0x15, 0, 19, 0x00000011), // 006 jeq #17, 0, 19       UDP, else accept
+    (0x28, 0, 0, 0x00000028), // 007 ldh [40]              IPv6 src port
+    (0x15, 16, 0, BPF_PORT),  // 008 jeq #port, 16, 0      reject
+    (0x28, 0, 0, 0x0000002a), // 009 ldh [42]              IPv6 dst port
+    (0x15, 14, 15, BPF_PORT), // 010 jeq #port, 14, 15     reject, else accept
+    (0x30, 0, 0, 0x00000000), // 011 ldb [0]               IP version byte
+    (0x54, 0, 0, 0x000000f0), // 012 and #0xf0
+    (0x15, 0, 12, 0x00000040), // 013 jeq #0x40, 0, 12     IPv4, else accept
+    (0x30, 0, 0, 0x00000009), // 014 ldb [9]               IPv4 protocol
+    (0x15, 2, 0, 0x00000084), // 015 jeq #132, 2, 0        SCTP
+    (0x15, 1, 0, 0x00000006), // 016 jeq #6, 1, 0          TCP
+    (0x15, 0, 8, 0x00000011), // 017 jeq #17, 0, 8         UDP, else accept
+    (0x28, 0, 0, 0x00000006), // 018 ldh [6]               fragment offset
+    (0x45, 6, 0, 0x00001fff), // 019 jset #0x1fff, 6, 0    fragment: accept
+    (0xb1, 0, 0, 0x00000000), // 020 ldxb 4*([0]&0xf)      IP header length
+    (0x48, 0, 0, 0x00000000), // 021 ldh [x+0]             src port
+    (0x15, 2, 0, BPF_PORT),   // 022 jeq #port, 2, 0       reject
+    (0x48, 0, 0, 0x00000002), // 023 ldh [x+2]             dst port
+    (0x15, 0, 1, BPF_PORT),   // 024 jeq #port, 0, 1       reject, else accept
+    (0x06, 0, 0, 0x00000000), // 025 ret #0                reject
+    (0x06, 0, 0, 0x00040000), // 026 ret #262144           accept
+];
+
 /// High-level client for Talos API
 #[derive(Clone)]
 pub struct TalosClient {
@@ -1123,408 +1191,24 @@ impl TalosClient {
     ///
     /// Returns BPF bytecode that accepts all packets EXCEPT those with
     /// the specified port as either source or destination (TCP or UDP).
-    ///
-    /// # Arguments
-    /// * `port` - Port number to exclude
-    /// * `link_type` - Link type determines header offsets
+    /// The link type determines the header offsets.
     fn build_port_exclusion_filter(
         port: u16,
         link_type: LinkType,
     ) -> Vec<crate::proto::machine::BpfInstruction> {
-        match link_type {
-            LinkType::EN10MB => Self::build_port_exclusion_filter_ethernet(port),
-            LinkType::RAW => Self::build_port_exclusion_filter_raw(port),
-        }
-    }
-
-    /// Build BPF filter for Ethernet-framed packets (EN10MB/DLT_EN10MB).
-    ///
-    /// Used for standard Ethernet interfaces (eth*, ens*, bond*, lo, etc.)
-    /// Generated from: tcpdump -dd -y EN10MB 'not port 50000'
-    fn build_port_exclusion_filter_ethernet(
-        port: u16,
-    ) -> Vec<crate::proto::machine::BpfInstruction> {
-        use crate::proto::machine::BpfInstruction;
-
-        let port_k = port as u32;
-
-        // BPF bytecode from: tcpdump -dd -y EN10MB 'not port <port>'
-        // Handles IPv4, IPv6, TCP, UDP, SCTP, and fragment checking
-        vec![
-            // (000) ldh [12]                  ; Load EtherType
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x0000000c,
-            },
-            // (001) jeq #0x86dd, 0, 8         ; If IPv6, continue; else check IPv4
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 8,
-                k: 0x000086dd,
-            },
-            // (002) ldb [20]                  ; Load IPv6 next header
-            BpfInstruction {
-                op: 0x30,
-                jt: 0,
-                jf: 0,
-                k: 0x00000014,
-            },
-            // (003) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction {
-                op: 0x15,
-                jt: 2,
-                jf: 0,
-                k: 0x00000084,
-            },
-            // (004) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction {
-                op: 0x15,
-                jt: 1,
-                jf: 0,
-                k: 0x00000006,
-            },
-            // (005) jeq #17, 0, 17            ; Check UDP
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 17,
-                k: 0x00000011,
-            },
-            // (006) ldh [54]                  ; Load IPv6 src port
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x00000036,
-            },
-            // (007) jeq #port, 14, 0          ; If port matches, goto reject
-            BpfInstruction {
-                op: 0x15,
-                jt: 14,
-                jf: 0,
-                k: port_k,
-            },
-            // (008) ldh [56]                  ; Load IPv6 dst port
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x00000038,
-            },
-            // (009) jeq #port, 12, 13         ; If port matches, goto reject; else accept
-            BpfInstruction {
-                op: 0x15,
-                jt: 12,
-                jf: 13,
-                k: port_k,
-            },
-            // (010) jeq #0x0800, 0, 12        ; Check IPv4
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 12,
-                k: 0x00000800,
-            },
-            // (011) ldb [23]                  ; Load IPv4 protocol
-            BpfInstruction {
-                op: 0x30,
-                jt: 0,
-                jf: 0,
-                k: 0x00000017,
-            },
-            // (012) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction {
-                op: 0x15,
-                jt: 2,
-                jf: 0,
-                k: 0x00000084,
-            },
-            // (013) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction {
-                op: 0x15,
-                jt: 1,
-                jf: 0,
-                k: 0x00000006,
-            },
-            // (014) jeq #17, 0, 8             ; Check UDP
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 8,
-                k: 0x00000011,
-            },
-            // (015) ldh [20]                  ; Load frag offset field
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x00000014,
-            },
-            // (016) jset #0x1fff, 6, 0        ; Check if fragmented
-            BpfInstruction {
-                op: 0x45,
-                jt: 6,
-                jf: 0,
-                k: 0x00001fff,
-            },
-            // (017) ldxb 4*([14]&0xf)         ; Load IP header length
-            BpfInstruction {
-                op: 0xb1,
-                jt: 0,
-                jf: 0,
-                k: 0x0000000e,
-            },
-            // (018) ldh [x+14]                ; Load src port
-            BpfInstruction {
-                op: 0x48,
-                jt: 0,
-                jf: 0,
-                k: 0x0000000e,
-            },
-            // (019) jeq #port, 2, 0           ; If port matches, goto reject
-            BpfInstruction {
-                op: 0x15,
-                jt: 2,
-                jf: 0,
-                k: port_k,
-            },
-            // (020) ldh [x+16]                ; Load dst port
-            BpfInstruction {
-                op: 0x48,
-                jt: 0,
-                jf: 0,
-                k: 0x00000010,
-            },
-            // (021) jeq #port, 0, 1           ; If port matches, goto reject; else accept
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 1,
-                k: port_k,
-            },
-            // (022) ret #0                    ; Reject packet
-            BpfInstruction {
-                op: 0x06,
-                jt: 0,
-                jf: 0,
-                k: 0x00000000,
-            },
-            // (023) ret #262144               ; Accept packet
-            BpfInstruction {
-                op: 0x06,
-                jt: 0,
-                jf: 0,
-                k: 0x00040000,
-            },
-        ]
-    }
-
-    /// Build BPF filter for raw IP packets (RAW/DLT_RAW).
-    ///
-    /// Used for tunnel interfaces (kubespan, wireguard, tun, etc.)
-    /// where packets start directly with IP header (no Ethernet frame).
-    /// Generated from: tcpdump -dd -y RAW 'not port 50000'
-    fn build_port_exclusion_filter_raw(port: u16) -> Vec<crate::proto::machine::BpfInstruction> {
-        use crate::proto::machine::BpfInstruction;
-
-        let port_k = port as u32;
-
-        // BPF bytecode from: tcpdump -dd -y RAW 'not port <port>'
-        // Handles IPv4, IPv6, TCP, UDP, SCTP, and fragment checking
-        vec![
-            // (000) ldb [0]                   ; Load IP version byte
-            BpfInstruction {
-                op: 0x30,
-                jt: 0,
-                jf: 0,
-                k: 0x00000000,
-            },
-            // (001) and #0xf0                 ; Mask for IP version
-            BpfInstruction {
-                op: 0x54,
-                jt: 0,
-                jf: 0,
-                k: 0x000000f0,
-            },
-            // (002) jeq #0x60, 0, 8           ; If IPv6, continue; else check IPv4
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 8,
-                k: 0x00000060,
-            },
-            // (003) ldb [6]                   ; Load IPv6 next header
-            BpfInstruction {
-                op: 0x30,
-                jt: 0,
-                jf: 0,
-                k: 0x00000006,
-            },
-            // (004) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction {
-                op: 0x15,
-                jt: 2,
-                jf: 0,
-                k: 0x00000084,
-            },
-            // (005) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction {
-                op: 0x15,
-                jt: 1,
-                jf: 0,
-                k: 0x00000006,
-            },
-            // (006) jeq #17, 0, 19            ; Check UDP
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 19,
-                k: 0x00000011,
-            },
-            // (007) ldh [40]                  ; Load IPv6 src port
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x00000028,
-            },
-            // (008) jeq #port, 16, 0          ; If port matches, goto reject
-            BpfInstruction {
-                op: 0x15,
-                jt: 16,
-                jf: 0,
-                k: port_k,
-            },
-            // (009) ldh [42]                  ; Load IPv6 dst port
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x0000002a,
-            },
-            // (010) jeq #port, 14, 15         ; If port matches, goto reject; else accept
-            BpfInstruction {
-                op: 0x15,
-                jt: 14,
-                jf: 15,
-                k: port_k,
-            },
-            // (011) ldb [0]                   ; Load IP version byte again
-            BpfInstruction {
-                op: 0x30,
-                jt: 0,
-                jf: 0,
-                k: 0x00000000,
-            },
-            // (012) and #0xf0                 ; Mask for IP version
-            BpfInstruction {
-                op: 0x54,
-                jt: 0,
-                jf: 0,
-                k: 0x000000f0,
-            },
-            // (013) jeq #0x40, 0, 12          ; Check IPv4
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 12,
-                k: 0x00000040,
-            },
-            // (014) ldb [9]                   ; Load IPv4 protocol
-            BpfInstruction {
-                op: 0x30,
-                jt: 0,
-                jf: 0,
-                k: 0x00000009,
-            },
-            // (015) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction {
-                op: 0x15,
-                jt: 2,
-                jf: 0,
-                k: 0x00000084,
-            },
-            // (016) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction {
-                op: 0x15,
-                jt: 1,
-                jf: 0,
-                k: 0x00000006,
-            },
-            // (017) jeq #17, 0, 8             ; Check UDP
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 8,
-                k: 0x00000011,
-            },
-            // (018) ldh [6]                   ; Load frag offset field
-            BpfInstruction {
-                op: 0x28,
-                jt: 0,
-                jf: 0,
-                k: 0x00000006,
-            },
-            // (019) jset #0x1fff, 6, 0        ; Check if fragmented
-            BpfInstruction {
-                op: 0x45,
-                jt: 6,
-                jf: 0,
-                k: 0x00001fff,
-            },
-            // (020) ldxb 4*([0]&0xf)          ; Load IP header length
-            BpfInstruction {
-                op: 0xb1,
-                jt: 0,
-                jf: 0,
-                k: 0x00000000,
-            },
-            // (021) ldh [x+0]                 ; Load src port
-            BpfInstruction {
-                op: 0x48,
-                jt: 0,
-                jf: 0,
-                k: 0x00000000,
-            },
-            // (022) jeq #port, 2, 0           ; If port matches, goto reject
-            BpfInstruction {
-                op: 0x15,
-                jt: 2,
-                jf: 0,
-                k: port_k,
-            },
-            // (023) ldh [x+2]                 ; Load dst port
-            BpfInstruction {
-                op: 0x48,
-                jt: 0,
-                jf: 0,
-                k: 0x00000002,
-            },
-            // (024) jeq #port, 0, 1           ; If port matches, goto reject; else accept
-            BpfInstruction {
-                op: 0x15,
-                jt: 0,
-                jf: 1,
-                k: port_k,
-            },
-            // (025) ret #0                    ; Reject packet
-            BpfInstruction {
-                op: 0x06,
-                jt: 0,
-                jf: 0,
-                k: 0x00000000,
-            },
-            // (026) ret #262144               ; Accept packet
-            BpfInstruction {
-                op: 0x06,
-                jt: 0,
-                jf: 0,
-                k: 0x00040000,
-            },
-        ]
+        let program = match link_type {
+            LinkType::EN10MB => BPF_NOT_PORT_EN10MB,
+            LinkType::RAW => BPF_NOT_PORT_RAW,
+        };
+        program
+            .iter()
+            .map(|&(op, jt, jf, k)| crate::proto::machine::BpfInstruction {
+                op: op.into(),
+                jt: jt.into(),
+                jf: jf.into(),
+                k: if k == BPF_PORT { port.into() } else { k },
+            })
+            .collect()
     }
 
     /// Internal packet capture with explicit BPF filter
@@ -2770,6 +2454,47 @@ fn stream_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bpf_program(port: u16, link: LinkType) -> Vec<(u32, u32, u32, u32)> {
+        TalosClient::build_port_exclusion_filter(port, link)
+            .iter()
+            .map(|i| (i.op, i.jt, i.jf, i.k))
+            .collect()
+    }
+
+    /// `tcpdump -dd -y EN10MB|RAW 'not port 50000'`: the programs the node
+    /// runs must not drift
+    #[test]
+    fn port_exclusion_filters_match_tcpdump() {
+        #[rustfmt::skip]
+        let ethernet = [
+            (40, 0, 0, 12), (21, 0, 8, 34525), (48, 0, 0, 20), (21, 2, 0, 132),
+            (21, 1, 0, 6), (21, 0, 17, 17), (40, 0, 0, 54), (21, 14, 0, 50000),
+            (40, 0, 0, 56), (21, 12, 13, 50000), (21, 0, 12, 2048), (48, 0, 0, 23),
+            (21, 2, 0, 132), (21, 1, 0, 6), (21, 0, 8, 17), (40, 0, 0, 20),
+            (69, 6, 0, 8191), (177, 0, 0, 14), (72, 0, 0, 14), (21, 2, 0, 50000),
+            (72, 0, 0, 16), (21, 0, 1, 50000), (6, 0, 0, 0), (6, 0, 0, 262144),
+        ];
+        #[rustfmt::skip]
+        let raw = [
+            (48, 0, 0, 0), (84, 0, 0, 240), (21, 0, 8, 96), (48, 0, 0, 6),
+            (21, 2, 0, 132), (21, 1, 0, 6), (21, 0, 19, 17), (40, 0, 0, 40),
+            (21, 16, 0, 50000), (40, 0, 0, 42), (21, 14, 15, 50000), (48, 0, 0, 0),
+            (84, 0, 0, 240), (21, 0, 12, 64), (48, 0, 0, 9), (21, 2, 0, 132),
+            (21, 1, 0, 6), (21, 0, 8, 17), (40, 0, 0, 6), (69, 6, 0, 8191),
+            (177, 0, 0, 0), (72, 0, 0, 0), (21, 2, 0, 50000), (72, 0, 0, 2),
+            (21, 0, 1, 50000), (6, 0, 0, 0), (6, 0, 0, 262144),
+        ];
+        for (link, expected) in [(LinkType::EN10MB, &ethernet[..]), (LinkType::RAW, &raw[..])] {
+            assert_eq!(bpf_program(50000, link), expected);
+            // Another port changes only the port comparisons
+            let port_22: Vec<_> = expected
+                .iter()
+                .map(|&(op, jt, jf, k)| (op, jt, jf, if k == 50000 { 22 } else { k }))
+                .collect();
+            assert_eq!(bpf_program(22, link), port_22);
+        }
+    }
 
     fn service(health: Option<(bool, bool)>) -> ServiceInfo {
         ServiceInfo {
