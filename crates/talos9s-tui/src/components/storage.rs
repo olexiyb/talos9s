@@ -4,6 +4,7 @@
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::ui_ext::HealthIndicatorExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::{
@@ -17,7 +18,7 @@ use std::time::Duration;
 use talos_rs::{
     DiskInfo, TalosClient, VolumeStatus, get_disks_for_node, get_volume_status_for_node,
 };
-use talos9s_core::{AsyncState, format_bytes};
+use talos9s_core::{AsyncState, HealthIndicator, format_bytes};
 
 /// Auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
@@ -51,6 +52,38 @@ pub struct StorageData {
     pub disks: Vec<DiskInfo>,
     /// Volume status
     pub volumes: Vec<VolumeStatus>,
+    /// Why the last disk / volume read failed; the lists keep what was last
+    /// read, so a failure doesn't look like "no disks"
+    pub disks_error: Option<String>,
+    pub volumes_error: Option<String>,
+}
+
+/// Health of a Talos volume phase. Phases a volume passes through on the
+/// way to ready are not failures; one this code doesn't know is unknown.
+fn phase_health(phase: &str) -> HealthIndicator {
+    match phase {
+        "ready" => HealthIndicator::Healthy,
+        "waiting" | "located" | "provisioned" | "prepared" => HealthIndicator::Pending,
+        "missing" => HealthIndicator::Warning,
+        "failed" => HealthIndicator::Error,
+        // Closed on purpose (e.g. unmounted)
+        "closed" => HealthIndicator::Info,
+        _ => HealthIndicator::Unknown,
+    }
+}
+
+/// Table title, naming a failed read
+fn table_title(name: &str, error: Option<&str>) -> Line<'static> {
+    match error {
+        None => Line::styled(format!(" {name} "), Style::default().fg(Color::Cyan)),
+        Some(e) => Line::from(vec![
+            Span::styled(format!(" {name} "), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("· read failed: {e} "),
+                Style::default().fg(Color::Red),
+            ),
+        ]),
+    }
 }
 
 /// Storage component for viewing disk and volume information
@@ -178,25 +211,29 @@ impl StorageComponent {
         // Get or create data
         let mut data = self.state.take_data().unwrap_or_default();
 
-        // Fetch disk information using context-aware async function
-        match get_disks_for_node(context, node, self.config_path.as_deref()).await {
+        let config_path = self.config_path.as_deref();
+        let (disks, volumes) = tokio::join!(
+            get_disks_for_node(context, node, config_path),
+            get_volume_status_for_node(context, node, config_path),
+        );
+        match disks {
             Ok(disks) => {
                 data.disks = disks;
+                data.disks_error = None;
             }
             Err(e) => {
                 tracing::warn!("Failed to fetch disks: {}", e);
-                data.disks.clear();
+                data.disks_error = Some(e.to_string());
             }
         }
-
-        // Fetch volume status using context-aware async function
-        match get_volume_status_for_node(context, node, self.config_path.as_deref()).await {
+        match volumes {
             Ok(volumes) => {
                 data.volumes = volumes;
+                data.volumes_error = None;
             }
             Err(e) => {
                 tracing::warn!("Failed to fetch volumes: {}", e);
-                data.volumes.clear();
+                data.volumes_error = Some(e.to_string());
             }
         }
 
@@ -329,12 +366,10 @@ impl StorageComponent {
         let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Disks ")
-                    .title_style(Style::default().fg(Color::Cyan)),
-            )
+            .block(Block::default().borders(Borders::ALL).title(table_title(
+                "Disks",
+                self.data().and_then(|d| d.disks_error.as_deref()),
+            )))
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
         frame.render_stateful_widget(table, chunks[0], &mut self.disk_table_state);
@@ -433,11 +468,7 @@ impl StorageComponent {
             data.volumes
                 .iter()
                 .map(|vol| {
-                    let phase_color = match vol.phase.as_str() {
-                        "ready" => Color::Green,
-                        "waiting" => Color::Yellow,
-                        _ => Color::Red,
-                    };
+                    let phase_color = phase_health(&vol.phase).color();
 
                     let encryption = vol
                         .encryption_provider
@@ -475,12 +506,10 @@ impl StorageComponent {
         let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Partitions ")
-                    .title_style(Style::default().fg(Color::Cyan)),
-            )
+            .block(Block::default().borders(Borders::ALL).title(table_title(
+                "Partitions",
+                self.data().and_then(|d| d.volumes_error.as_deref()),
+            )))
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
         frame.render_stateful_widget(table, chunks[0], &mut self.volume_table_state);
@@ -633,5 +662,28 @@ impl Component for StorageComponent {
 impl crate::components::BackgroundRefresh for StorageComponent {
     fn adopt_refresh(&mut self, refreshed: Self) {
         self.state = refreshed.state;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_phases_on_the_way_to_ready_are_not_failures() {
+        assert_eq!(phase_health("ready"), HealthIndicator::Healthy);
+        for phase in ["waiting", "located", "provisioned", "prepared"] {
+            assert_eq!(phase_health(phase), HealthIndicator::Pending, "{phase}");
+        }
+        assert_eq!(phase_health("closed"), HealthIndicator::Info);
+        assert_eq!(phase_health("failed"), HealthIndicator::Error);
+        assert_eq!(phase_health("something-new"), HealthIndicator::Unknown);
+    }
+
+    #[test]
+    fn failed_read_is_named_in_the_title() {
+        let title = table_title("Disks", Some("timed out after 10s"));
+        let text: String = title.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " Disks · read failed: timed out after 10s ");
     }
 }

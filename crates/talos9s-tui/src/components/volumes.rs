@@ -803,10 +803,11 @@ impl VolumesComponent {
                 Span::raw(format!("  {:<10}", v.node)),
                 Span::styled(
                     format!("{:<10}", v.state),
-                    Style::default().fg(if v.state == "Ready" {
-                        Color::Green
-                    } else {
-                        Color::Red
+                    // Same verdict as `zfs_volume_issues`
+                    Style::default().fg(match v.state.as_str() {
+                        "Ready" => Color::Green,
+                        "Pending" | "Unknown" => Color::Yellow,
+                        _ => Color::Red,
                     }),
                 ),
                 Span::styled("local dataset, not replicated", dim),
@@ -979,7 +980,9 @@ fn disk_color(r: &Replica) -> Color {
         _ if !r.drbd_layer => Color::Reset,
         _ if r.diskless => Color::DarkGray,
         "UpToDate" => Color::Green,
-        "Inconsistent" => Color::Yellow,
+        // Warnings in `volume_issues`, not errors
+        "Inconsistent" | "Attaching" | "Negotiating" | "Detaching" => Color::Yellow,
+        "" | "Unknown" | "DUnknown" => Color::DarkGray,
         _ => Color::Red,
     }
 }

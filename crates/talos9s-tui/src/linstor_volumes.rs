@@ -973,16 +973,24 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
             continue;
         }
         if !r.diskless && r.disk_state != "UpToDate" {
-            if r.disk_state == "Inconsistent" && syncing(r) {
-                push(
+            match r.disk_state.as_str() {
+                "Inconsistent" if syncing(r) => push(
                     Severity::Warning,
                     format!("{}: Inconsistent (syncing)", r.node),
-                );
-            } else {
-                push(
+                ),
+                // Passed through while attaching or connecting
+                "Attaching" | "Negotiating" | "Detaching" => push(
+                    Severity::Warning,
+                    format!("{}: disk {}", r.node, r.disk_state),
+                ),
+                // Not reported (satellite not answering): unknown, not broken
+                "" | "Unknown" | "DUnknown" => {
+                    push(Severity::Warning, format!("{}: disk state unknown", r.node))
+                }
+                _ => push(
                     Severity::Error,
                     format!("{}: disk {}", r.node, r.disk_state),
-                );
+                ),
             }
         }
         for p in r.peers.iter().filter(|p| p.connected) {
@@ -1433,6 +1441,69 @@ mod tests {
         let volume = volumes_from(&resources, &definitions()).remove(0);
         assert!(!volume.replicas[0].drbd_layer);
         assert!(volume_issues(&volume).is_empty());
+    }
+
+    #[test]
+    fn transitional_and_unreported_disk_states_are_not_errors() {
+        for (disk, text) in [
+            ("Attaching", "bc2: disk Attaching"),
+            ("Negotiating", "bc2: disk Negotiating"),
+            ("DUnknown", "bc2: disk state unknown"),
+            ("Unknown", "bc2: disk state unknown"),
+        ] {
+            let resources = json!([
+                resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
+                resource("bc2", false, disk, &[("bc1", true, "Established")]),
+            ]);
+            let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
+            assert_eq!(
+                issues,
+                [Issue {
+                    severity: Severity::Warning,
+                    text: text.to_string()
+                }],
+                "{disk}"
+            );
+        }
+
+        // No disk_state at all is unknown too
+        let mut missing = resource("bc2", false, "UpToDate", &[("bc1", true, "Established")]);
+        missing["volumes"][0]["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove("disk_state");
+        let resources = json!([
+            resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
+            missing,
+        ]);
+        let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
+        assert!(
+            issues.iter().all(|i| i.severity == Severity::Warning),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn paused_sync_counts_as_syncing() {
+        let resources = json!([
+            resource("bc1", true, "UpToDate", &[("bc3", true, "PausedSyncS")]),
+            resource(
+                "bc3",
+                false,
+                "Inconsistent",
+                &[("bc1", true, "PausedSyncT")]
+            ),
+        ]);
+        let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
+        assert!(
+            issues.iter().all(|i| i.severity == Severity::Warning),
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.text == "bc3: Inconsistent (syncing)")
+        );
     }
 
     #[test]

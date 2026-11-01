@@ -194,27 +194,14 @@ pub fn get_volume_status(node: &str) -> Result<Vec<VolumeStatus>, TalosError> {
     parse_volume_status_yaml(&output)
 }
 
-/// Get volume status for a specific node using context authentication (async, non-blocking)
-///
-/// Executes: talosctl --context <context> [--talosconfig <path>] -n <node> get volumestatus -o yaml
+/// Volume status of a node: `talosctl --context <context> -n <node> get
+/// volumestatus`, bounded like every resource read
 pub async fn get_volume_status_for_node(
     context: &str,
     node_ip: &str,
     config_path: Option<&str>,
 ) -> Result<Vec<VolumeStatus>, TalosError> {
-    let mut args = vec!["--context", context];
-
-    // Add talosconfig path if provided
-    let config_path_string;
-    if let Some(path) = config_path {
-        config_path_string = path.to_string();
-        args.push("--talosconfig");
-        args.push(&config_path_string);
-    }
-
-    args.extend_from_slice(&["-n", node_ip, "get", "volumestatus", "-o", "yaml"]);
-
-    let output = exec_talosctl_async(&args).await?;
+    let output = get_resource_yaml(Some(context), node_ip, config_path, &["volumestatus"]).await?;
     parse_volume_status_yaml(&output)
 }
 
@@ -226,27 +213,14 @@ pub fn get_disks(node: &str) -> Result<Vec<DiskInfo>, TalosError> {
     parse_disks_yaml(&output)
 }
 
-/// Get disk information for a specific node using context authentication (async, non-blocking)
-///
-/// Executes: talosctl --context <context> [--talosconfig <path>] -n <node> get disks -o yaml
+/// Disks of a node: `talosctl --context <context> -n <node> get disks`,
+/// bounded like every resource read
 pub async fn get_disks_for_node(
     context: &str,
     node_ip: &str,
     config_path: Option<&str>,
 ) -> Result<Vec<DiskInfo>, TalosError> {
-    let mut args = vec!["--context", context];
-
-    // Add talosconfig path if provided
-    let config_path_string;
-    if let Some(path) = config_path {
-        config_path_string = path.to_string();
-        args.push("--talosconfig");
-        args.push(&config_path_string);
-    }
-
-    args.extend_from_slice(&["-n", node_ip, "get", "disks", "-o", "yaml"]);
-
-    let output = exec_talosctl_async(&args).await?;
+    let output = get_resource_yaml(Some(context), node_ip, config_path, &["disks"]).await?;
     parse_disks_yaml(&output)
 }
 

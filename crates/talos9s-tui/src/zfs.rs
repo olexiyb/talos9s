@@ -157,6 +157,11 @@ pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issu
             severity: Severity::Warning,
             text: format!("{}: volume Pending", volume.node),
         }),
+        // A new ZFSVolume has no status until the node agent picks it up
+        "Unknown" => issues.push(Issue {
+            severity: Severity::Warning,
+            text: format!("{}: volume state unknown", volume.node),
+        }),
         state => issues.push(Issue {
             severity: Severity::Error,
             text: format!("{}: volume {state}", volume.node),
@@ -271,6 +276,21 @@ mod tests {
             fs,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn volume_without_status_is_unknown_not_failed() {
+        let issues = zfs_volume_issues(&zfs_volume("Unknown", 0, None));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(
+            issues[0].severity,
+            crate::linstor_volumes::Severity::Warning
+        );
+        assert_eq!(issues[0].text, "bc2: volume state unknown");
+        assert_eq!(
+            zfs_volume_issues(&zfs_volume("Failed", 0, None))[0].severity,
+            crate::linstor_volumes::Severity::Error
+        );
     }
 
     #[test]
