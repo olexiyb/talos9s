@@ -210,6 +210,19 @@ impl LogLevel {
     }
 }
 
+/// First of `total` entries to draw so the last one ends at the bottom of a
+/// pane `height` rows high, when entry `i` takes `rows(i)` rows
+fn bottom_start(total: usize, height: usize, rows: impl Fn(usize) -> usize) -> usize {
+    let mut used = 0;
+    for i in (0..total).rev() {
+        used += rows(i);
+        if used >= height {
+            return i;
+        }
+    }
+    0
+}
+
 /// Byte ranges of `text` matching `query` case-insensitively, without
 /// overlap. Compared char by char in `text` itself: offsets found in a
 /// lowercased copy don't fit the original when lowercasing changes a
@@ -689,32 +702,16 @@ impl MultiLogsComponent {
                 None => return,
             };
 
+            // Up to MAX_LINES_PER_TICK a tick so drawing keeps up; the rest
+            // waits in the channel for the next tick. Dropping it lost the
+            // initial tails and status events (a stream stuck "connecting").
             let mut lines = Vec::with_capacity(MAX_LINES_PER_TICK);
-            let mut count = 0;
-
-            // Drain up to MAX_LINES_PER_TICK entries
-            while let Ok(item) = rx.try_recv() {
-                lines.push(item);
-                count += 1;
-                if count >= MAX_LINES_PER_TICK {
-                    break;
+            while lines.len() < MAX_LINES_PER_TICK {
+                match rx.try_recv() {
+                    Ok(item) => lines.push(item),
+                    Err(_) => break,
                 }
             }
-
-            // If we hit the limit and there's more, log a warning (channel backing up)
-            if count >= MAX_LINES_PER_TICK {
-                // Check if there's more in the channel (indicates backlog)
-                if rx.try_recv().is_ok() {
-                    tracing::debug!(
-                        "Log stream channel has backlog, may be dropping older entries"
-                    );
-                    // Drain remainder to prevent unbounded growth, but don't process
-                    while rx.try_recv().is_ok() {
-                        // Discard to prevent memory growth
-                    }
-                }
-            }
-
             lines
         };
 
@@ -1850,10 +1847,35 @@ impl MultiLogsComponent {
         let visible_height = area.height as usize;
         let content_width = area.width.saturating_sub(1) as usize; // -1 for scrollbar
 
+        // indicator + time + node + service + level
+        let node_width = self.node_column_width();
+        let node_prefix = if node_width > 0 { node_width + 1 } else { 0 };
+        let prefix_width = 1 + 8 + 1 + node_prefix + 12 + 1 + 3 + 1;
+        // At least 1, or wrapping a narrow pane would never end
+        let available = content_width.saturating_sub(prefix_width).max(1);
+        let rows_of = |vi: usize| {
+            let chars = data.entries[data.visible_indices[vi]]
+                .message
+                .chars()
+                .count();
+            if self.wrap {
+                chars.div_ceil(available).max(1)
+            } else {
+                1
+            }
+        };
+
         // Safety clamp scroll to valid range (max is where last entry is at viewport bottom)
         let total = data.visible_indices.len();
         let max_start = total.saturating_sub(visible_height);
-        let start = (self.scroll as usize).min(max_start);
+        // Following: the newest entries fill the pane from the bottom, counting
+        // the rows wrapped entries take
+        let at_bottom = self.following || self.scroll as usize >= max_start;
+        let start = if at_bottom {
+            bottom_start(total, visible_height, rows_of)
+        } else {
+            (self.scroll as usize).min(max_start)
+        };
         let end = (start + visible_height).min(total);
 
         let mut lines: Vec<Line> = Vec::new();
@@ -1908,7 +1930,6 @@ impl MultiLogsComponent {
             spans.push(Span::raw(" "));
 
             // Node name (colored, fixed width) when streaming several
-            let node_width = self.node_column_width();
             if node_width > 0
                 && let Some(node) = self.nodes.get(entry.node)
             {
@@ -1935,12 +1956,8 @@ impl MultiLogsComponent {
             spans.push(Span::raw(" "));
 
             // Message with optional highlighting
-            // indicator + time + node + service + level
-            let node_prefix = if node_width > 0 { node_width + 1 } else { 0 };
-            let prefix_width = 1 + 8 + 1 + node_prefix + 12 + 1 + 3 + 1;
-            let available = content_width.saturating_sub(prefix_width);
-
-            if self.wrap && entry.message.len() > available {
+            let message_chars = entry.message.chars().count();
+            if self.wrap && message_chars > available {
                 // Wrap mode: split message into multiple lines
                 let msg_chars: Vec<char> = entry.message.chars().collect();
                 let mut chunk_start = 0;
@@ -1975,7 +1992,7 @@ impl MultiLogsComponent {
                     }
                     chunk_start = chunk_end;
                 }
-            } else if entry.message.len() <= available {
+            } else if message_chars <= available {
                 if is_match && !self.search_query.is_empty() {
                     spans.extend(
                         self.render_message_with_highlight(&entry.message, is_current_match),
@@ -2001,7 +2018,13 @@ impl MultiLogsComponent {
             }
         }
 
-        let logs = Paragraph::new(lines);
+        // Anchored to the bottom, the newest row is the last one drawn
+        let skip = if at_bottom {
+            lines.len().saturating_sub(visible_height)
+        } else {
+            0
+        };
+        let logs = Paragraph::new(lines).scroll((skip as u16, 0));
         frame.render_widget(logs, area);
 
         // Scrollbar
@@ -2807,6 +2830,66 @@ mod tests {
         }
         logs.update(Action::Tick).unwrap();
         logs
+    }
+
+    #[test]
+    fn following_with_wrap_keeps_the_newest_row_in_view() {
+        // One row each: the last 5 of 10 fill a 5-row pane
+        assert_eq!(bottom_start(10, 5, |_| 1), 5);
+        // The newest entry wraps to 3 rows: only 3 entries fit
+        assert_eq!(bottom_start(10, 5, |i| if i == 9 { 3 } else { 1 }), 7);
+        // One entry taller than the pane
+        assert_eq!(bottom_start(10, 5, |i| if i == 9 { 8 } else { 1 }), 9);
+        assert_eq!(bottom_start(2, 5, |_| 1), 0);
+
+        let long = format!("2026-11-01T10:00:02Z {}", "x".repeat(2000));
+        let mut logs = cluster_logs(&[
+            (0, "etcd", "2026-11-01T10:00:00Z first"),
+            (1, "etcd", "2026-11-01T10:00:01Z second"),
+            (2, "etcd", &long),
+            (0, "etcd", "2026-11-01T10:00:03Z newest line"),
+        ]);
+        logs.wrap = true;
+        let screen = render(&mut logs);
+        assert!(screen.contains("newest line"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn a_burst_is_spread_over_ticks_not_dropped() {
+        let lines: Vec<(usize, &str, String)> = (0..MAX_LINES_PER_TICK * 2 + 50)
+            .map(|i| (0, "etcd", format!("2026-11-01T10:00:00Z line {i}")))
+            .collect();
+        let borrowed: Vec<(usize, &str, &str)> =
+            lines.iter().map(|(n, s, l)| (*n, *s, l.as_str())).collect();
+        let mut logs = cluster_logs(&[]);
+        let tx = logs.stream_tx.clone().unwrap();
+        logs.streams.insert(
+            (1, "etcd".to_string()),
+            (tokio::spawn(async {}), StreamStatus::Waiting),
+        );
+        for (node, service, line) in &borrowed {
+            tx.send(StreamEvent::Line {
+                node: *node,
+                service: service.to_string(),
+                line: line.to_string(),
+            })
+            .unwrap();
+        }
+        // A status after the burst must still arrive
+        tx.send(StreamEvent::Status {
+            node: 1,
+            service: "etcd".to_string(),
+            status: StreamStatus::Streaming,
+        })
+        .unwrap();
+        for _ in 0..3 {
+            logs.process_stream_entries();
+        }
+        assert_eq!(logs.data().unwrap().entries.len(), borrowed.len());
+        assert_eq!(
+            logs.streams.get(&(1, "etcd".to_string())).map(|(_, s)| s),
+            Some(&StreamStatus::Streaming)
+        );
     }
 
     fn render(logs: &mut MultiLogsComponent) -> String {
