@@ -113,19 +113,70 @@ enum LogLevel {
 }
 
 impl LogLevel {
-    fn from_str(s: &str) -> Self {
-        let lower = s.to_lowercase();
-        if lower.contains("error") || lower.contains("err") {
-            LogLevel::Error
-        } else if lower.contains("warn") {
-            LogLevel::Warn
-        } else if lower.contains("info") {
-            LogLevel::Info
-        } else if lower.contains("debug") || lower.contains("trace") {
-            LogLevel::Debug
-        } else {
-            LogLevel::Unknown
+    /// The level a level field or word names
+    fn named(word: &str) -> Option<Self> {
+        match word.to_ascii_lowercase().as_str() {
+            "error" | "err" | "fatal" | "panic" | "crit" | "critical" | "alert" | "emerg" => {
+                Some(LogLevel::Error)
+            }
+            "warn" | "warning" => Some(LogLevel::Warn),
+            "info" | "notice" => Some(LogLevel::Info),
+            "debug" | "trace" => Some(LogLevel::Debug),
+            _ => None,
         }
+    }
+
+    /// Level of a log line. A level the line states (klog prefix,
+    /// `level=`, JSON `"level"`, a leading level word) wins over words in
+    /// the message: `level=info msg="retrying after error"` is Info. Without
+    /// one, whole words count, so "stderr" or "deferred" are not errors.
+    /// `rest` is the line after its timestamp.
+    fn of_line(line: &str, rest: &str) -> Self {
+        // klog: I0109 16:42:01.123456 ...
+        let bytes = line.as_bytes();
+        if bytes.len() > 6 && bytes[1..5].iter().all(u8::is_ascii_digit) && bytes[5] == b' ' {
+            match bytes[0] {
+                b'I' => return LogLevel::Info,
+                b'W' => return LogLevel::Warn,
+                b'E' | b'F' => return LogLevel::Error,
+                _ => {}
+            }
+        }
+
+        // level=info, lvl=warn, "level":"error", "severity":"INFO"
+        for key in ["level", "lvl", "severity"] {
+            for pattern in [format!("{key}="), format!("\"{key}\":")] {
+                if let Some(pos) = line.find(&pattern) {
+                    let value = line[pos + pattern.len()..]
+                        .trim_start()
+                        .trim_start_matches('"');
+                    let end = value
+                        .find(|c: char| !c.is_ascii_alphabetic())
+                        .unwrap_or(value.len());
+                    if let Some(level) = Self::named(&value[..end]) {
+                        return level;
+                    }
+                }
+            }
+        }
+
+        let mut words = rest
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty() && !w.bytes().all(|b| b.is_ascii_digit()));
+        // A leading level word: "INFO msg", "[warn] msg", "info\tmsg"
+        if let Some(level) = words.next().and_then(Self::named) {
+            return level;
+        }
+        let mut found = LogLevel::Unknown;
+        for word in line.split(|c: char| !c.is_ascii_alphanumeric()) {
+            match Self::named(word) {
+                Some(LogLevel::Error) => return LogLevel::Error,
+                Some(LogLevel::Warn) => found = LogLevel::Warn,
+                Some(level) if found == LogLevel::Unknown => found = level,
+                _ => {}
+            }
+        }
+        found
     }
 
     fn color(&self) -> Color {
@@ -834,7 +885,8 @@ impl MultiLogsComponent {
         }
 
         let (timestamp, timestamp_sort, rest) = Self::extract_timestamp(line);
-        let level = LogLevel::from_str(rest);
+        // The whole line: klog's level letter is part of its timestamp
+        let level = LogLevel::of_line(line, rest);
         let message = Self::clean_message(rest);
 
         MultiLogEntry {
@@ -2849,6 +2901,43 @@ mod tests {
             .all(|w| w[0].timestamp_sort <= w[1].timestamp_sort);
         println!("sorted: {sorted}, total {}", data.entries.len());
         logs.stop_streaming();
+    }
+
+    #[test]
+    fn log_level_prefers_the_stated_level() {
+        let level = |line: &str| {
+            let (_, _, rest) = MultiLogsComponent::extract_timestamp(line);
+            LogLevel::of_line(line, rest)
+        };
+        // Words inside other words are not levels
+        assert_eq!(level("copying stderr to file"), LogLevel::Unknown);
+        assert_eq!(level("deferred cleanup done"), LogLevel::Unknown);
+        // A stated level wins over words in the message
+        assert_eq!(
+            level(r#"time="2026-11-01T10:00:00Z" level=info msg="retry after error""#),
+            LogLevel::Info
+        );
+        assert_eq!(
+            level(r#"{"level":"info","msg":"error budget ok"}"#),
+            LogLevel::Info
+        );
+        assert_eq!(level(r#"{"severity":"WARNING","msg":"x"}"#), LogLevel::Warn);
+        assert_eq!(
+            level("I1101 10:00:00.123456    1 reflector.go:1] error watching"),
+            LogLevel::Info
+        );
+        assert_eq!(
+            level("E1101 10:00:00.123456    1 server.go:1] failed"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            level("2026-11-01T10:00:00.000Z\tinfo\tthe error count is 0"),
+            LogLevel::Info
+        );
+        assert_eq!(level("[WARN] disk almost full"), LogLevel::Warn);
+        // Without a stated level, whole words count
+        assert_eq!(level("connection error, retrying"), LogLevel::Error);
+        assert_eq!(level("warning: clock skew"), LogLevel::Warn);
     }
 
     #[test]
