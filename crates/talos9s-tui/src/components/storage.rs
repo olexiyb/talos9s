@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -32,13 +32,6 @@ pub enum StorageViewMode {
 }
 
 impl StorageViewMode {
-    pub fn next(&self) -> Self {
-        match self {
-            StorageViewMode::Disks => StorageViewMode::Partitions,
-            StorageViewMode::Partitions => StorageViewMode::Disks,
-        }
-    }
-
     pub fn label(&self) -> &'static str {
         match self {
             StorageViewMode::Disks => "Disks",
@@ -74,6 +67,8 @@ pub struct StorageComponent {
 
     /// Table state for volume list
     volume_table_state: TableState,
+    /// Where the table was drawn last, for clicks
+    table_area: Rect,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -133,6 +128,7 @@ impl StorageComponent {
             view_mode: StorageViewMode::Disks,
             disk_table_state,
             volume_table_state,
+            table_area: Rect::default(),
             auto_refresh: true,
             client: None,
             node_address,
@@ -340,6 +336,7 @@ impl StorageComponent {
             )
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
+        self.table_area = chunks[0];
         frame.render_stateful_widget(table, chunks[0], &mut self.disk_table_state);
 
         // Draw detail section
@@ -478,6 +475,7 @@ impl StorageComponent {
             )
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
+        self.table_area = chunks[0];
         frame.render_stateful_widget(table, chunks[0], &mut self.volume_table_state);
 
         // Draw detail section
@@ -531,46 +529,52 @@ impl StorageComponent {
         let paragraph = Paragraph::new(content).block(block);
         frame.render_widget(paragraph, area);
     }
-
-    /// Draw tab bar
-    fn draw_tabs(&self, frame: &mut Frame, area: Rect) {
-        let tabs = [StorageViewMode::Disks, StorageViewMode::Partitions];
-
-        let tab_spans: Vec<Span> = tabs
-            .iter()
-            .map(|tab| {
-                let style = if *tab == self.view_mode {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-                Span::styled(format!(" [{}] ", tab.label()), style)
-            })
-            .collect();
-
-        let hostname = self.data().map(|d| d.hostname.clone()).unwrap_or_default();
-
-        let mut line_spans = tab_spans;
-        line_spans.push(Span::raw("  "));
-        line_spans.push(Span::styled(
-            format!("Node: {}", hostname),
-            Style::default().fg(Color::DarkGray),
-        ));
-
-        let tabs_line = Line::from(line_spans);
-        let paragraph = Paragraph::new(tabs_line);
-        frame.render_widget(paragraph, area);
-    }
 }
 
 impl Component for StorageComponent {
+    /// A click on a row selects it (the table has a border and a header)
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return Ok(None);
+        }
+        let area = self.table_area;
+        let first = area.y + 2;
+        if mouse.column < area.x || mouse.column >= area.right() {
+            return Ok(None);
+        }
+        if mouse.row < first || mouse.row + 1 >= area.bottom() {
+            return Ok(None);
+        }
+        let line = (mouse.row - first) as usize;
+        let count = |data: Option<&StorageData>, disks: bool| {
+            data.map_or(0, |d| {
+                if disks {
+                    d.disks.len()
+                } else {
+                    d.volumes.len()
+                }
+            })
+        };
+        match self.view_mode {
+            StorageViewMode::Disks => {
+                let i = self.disk_table_state.offset() + line;
+                if i < count(self.data(), true) {
+                    self.disk_table_state.select(Some(i));
+                }
+            }
+            StorageViewMode::Partitions => {
+                let i = self.volume_table_state.offset() + line;
+                if i < count(self.data(), false) {
+                    self.volume_table_state.select(Some(i));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
         Some(Line::from(vec![
-            key("[Tab]"),
-            Span::raw(" disks/partitions  "),
             key("[↑/↓]"),
             Span::raw(" navigate  "),
             key("[r]"),
@@ -578,17 +582,10 @@ impl Component for StorageComponent {
         ]))
     }
 
-    fn uses_tab_key(&self) -> bool {
-        true
-    }
-
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 return Ok(Some(Action::Back));
-            }
-            KeyCode::Tab => {
-                self.view_mode = self.view_mode.next();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.select_prev();
@@ -636,19 +633,13 @@ impl Component for StorageComponent {
             return Ok(());
         }
 
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // Tabs
-            Constraint::Min(0),    // Content
-        ])
-        .split(area);
-
-        // Draw tabs
-        self.draw_tabs(frame, chunks[0]);
+        // Disks and Partitions are separate menu entries: no tab bar, and
+        // the window title names the node
 
         // Draw content based on view mode
         match self.view_mode {
-            StorageViewMode::Disks => self.draw_disks_view(frame, chunks[1]),
-            StorageViewMode::Partitions => self.draw_volumes_view(frame, chunks[1]),
+            StorageViewMode::Disks => self.draw_disks_view(frame, area),
+            StorageViewMode::Partitions => self.draw_volumes_view(frame, area),
         }
 
         Ok(())

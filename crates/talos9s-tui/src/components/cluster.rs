@@ -226,6 +226,9 @@ const NODE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// is never retried: the cluster would show "connecting…" for good.
 const CLUSTER_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Shown for a view picked before the cluster's nodes are known
+pub const LOADING_NODES_HINT: &str = "Loading the cluster's nodes…";
+
 /// How often a running cluster refresh hands what it has so far to the
 /// dashboard
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -1149,6 +1152,9 @@ pub struct ClusterComponent {
     tree_pane: FocusedPane,
     /// Where Esc in the view goes back to, when not just the tree
     back_hint: Option<String>,
+    /// Group or node remembered from the last run, selected once the
+    /// cluster lists its nodes (unless the user moved first)
+    pending_selection: Option<crate::state::Selection>,
     /// First tree row shown, when the tree is taller than its pane
     tree_scroll: usize,
     /// Scroll of the node pane (lines), the node it belongs to, and how far
@@ -1676,6 +1682,7 @@ impl ClusterComponent {
             view_focused: false,
             tree_pane: FocusedPane::Nodes,
             back_hint: None,
+            pending_selection: None,
             tree_scroll: 0,
             details_scroll: 0,
             details_scroll_node: String::new(),
@@ -2420,6 +2427,7 @@ impl ClusterComponent {
         }
         if changed {
             self.last_refresh = Some(std::time::Instant::now());
+            self.resolve_pending_selection();
             self.ensure_selection_visible();
         }
     }
@@ -2949,7 +2957,7 @@ impl ClusterComponent {
                 ))
             })
         };
-        match item {
+        let action = match item {
             NavMenuItem::Dashboard => Some(Action::ShowDashboard),
             NavMenuItem::Logs => self.logs_action(None),
             NavMenuItem::Etcd => Some(Action::ShowEtcd),
@@ -2966,7 +2974,20 @@ impl ClusterComponent {
             NavMenuItem::Containers => node_only(NodeInfoTab::Containers),
             NavMenuItem::Config => node_only(NodeInfoTab::Config),
             NavMenuItem::Extensions => node_only(NodeInfoTab::Extensions),
-        }
+        };
+        // Picked before the cluster's nodes are known (e.g. right after
+        // start): say so; the app opens the view once they arrive
+        action.or_else(|| {
+            self.nodes_pending()
+                .then(|| Action::ShowHint(item, LOADING_NODES_HINT.to_string()))
+        })
+    }
+
+    /// The selected cluster is still connecting or has listed no nodes yet
+    fn nodes_pending(&self) -> bool {
+        self.clusters
+            .get(self.active_cluster)
+            .is_some_and(|c| c.loading || c.versions.is_empty())
     }
 
     /// Identity of the selected tree row (cluster, group or node), for
@@ -3014,6 +3035,131 @@ impl ClusterComponent {
     /// [`restore_selection`]: Self::restore_selection
     pub fn selection(&self) -> TreeSelection {
         TreeSelection(self.selected_item.clone())
+    }
+
+    /// Put back the tree as the last run left it: folds, auto-refresh and
+    /// the selected cluster now, a group or node once its nodes are known.
+    /// A remembered cluster wins over the talosconfig's current context.
+    pub fn apply_saved(&mut self, state: &crate::state::UiState) {
+        for folds in &state.tree {
+            if let Some(c) = self.clusters.iter_mut().find(|c| c.name == folds.cluster) {
+                c.expanded = folds.expanded;
+                c.controlplane_expanded = folds.control_plane;
+                c.workers_expanded = folds.workers;
+            }
+        }
+        if let Some(auto) = state.auto_refresh {
+            self.auto_refresh = auto;
+        }
+        let Some(selection) = &state.selection else {
+            return;
+        };
+        let Some(idx) = self
+            .clusters
+            .iter()
+            .position(|c| c.name == selection.cluster)
+        else {
+            return;
+        };
+        self.active_cluster = idx;
+        self.selected_item = NodeListItem::ClusterHeader(idx);
+        self.clusters[idx].expanded = true;
+        if selection.group.is_some() || selection.node.is_some() {
+            self.pending_selection = Some(selection.clone());
+        }
+    }
+
+    /// Select the remembered group or node once the cluster lists nodes;
+    /// give up when the finished refresh doesn't have it
+    fn resolve_pending_selection(&mut self) {
+        let Some(selection) = self.pending_selection.clone() else {
+            return;
+        };
+        let Some(idx) = self
+            .clusters
+            .iter()
+            .position(|c| c.name == selection.cluster)
+        else {
+            self.pending_selection = None;
+            return;
+        };
+        let refreshing = self
+            .background_refresh
+            .get(idx)
+            .is_some_and(|h| h.is_some());
+        if self.clusters[idx].versions.is_empty() {
+            if !refreshing && !self.clusters[idx].loading {
+                self.pending_selection = None;
+            }
+            return;
+        }
+        self.active_cluster = idx;
+        let found = match (&selection.node, selection.group.as_deref()) {
+            (Some(node), _) => self.select_node(node),
+            (None, Some("control-plane")) if !self.controlplane_nodes_for(idx).is_empty() => {
+                self.selected_item = NodeListItem::ControlPlaneHeader(idx);
+                true
+            }
+            (None, Some("workers")) if !self.worker_nodes_for(idx).is_empty() => {
+                self.selected_item = NodeListItem::WorkersHeader(idx);
+                true
+            }
+            _ => false,
+        };
+        if found {
+            self.clusters[idx].expanded = true;
+        }
+        if found || !refreshing {
+            self.pending_selection = None;
+        }
+    }
+
+    /// The user moved the selection: forget the one remembered from the
+    /// last run
+    pub fn selection_moved(&mut self, before: &TreeSelection) {
+        if self.selected_item != before.0 {
+            self.pending_selection = None;
+        }
+    }
+
+    /// The selected row by name, to remember (the remembered one while it
+    /// is still waiting for the nodes)
+    pub fn saved_selection(&self) -> Option<crate::state::Selection> {
+        if let Some(pending) = &self.pending_selection {
+            return Some(pending.clone());
+        }
+        let idx = self.selected_cluster_index()?;
+        let cluster = self.clusters.get(idx)?.name.clone();
+        let (group, node) = match &self.selected_item {
+            NodeListItem::ClusterHeader(_) => (None, None),
+            NodeListItem::ControlPlaneHeader(_) => (Some("control-plane".to_string()), None),
+            NodeListItem::WorkersHeader(_) => (Some("workers".to_string()), None),
+            NodeListItem::ControlPlaneNode(..) | NodeListItem::WorkerNode(..) => {
+                (None, Some(self.current_node_name()?))
+            }
+        };
+        Some(crate::state::Selection {
+            cluster,
+            group,
+            node,
+        })
+    }
+
+    /// Folds of every listed cluster, to remember
+    pub fn saved_folds(&self) -> Vec<crate::state::Folds> {
+        self.clusters
+            .iter()
+            .map(|c| crate::state::Folds {
+                cluster: c.name.clone(),
+                expanded: c.expanded,
+                control_plane: c.controlplane_expanded,
+                workers: c.workers_expanded,
+            })
+            .collect()
+    }
+
+    pub fn auto_refresh(&self) -> bool {
+        self.auto_refresh
     }
 
     pub fn restore_selection(&mut self, selection: TreeSelection) {
@@ -5774,6 +5920,29 @@ mod tests {
         assert!(!cluster.offline.contains_key("w1"));
         // A light refresh keeps cp1's load
         assert_eq!(cluster.load_avg.len(), 1);
+    }
+
+    /// A view picked before the nodes are known shows the loading hint
+    /// instead of doing nothing; once nodes are listed it opens for real
+    #[test]
+    fn views_picked_while_nodes_load_say_so() {
+        let mut comp = ClusterComponent::default();
+        comp.clusters.push(ClusterData {
+            name: "test".to_string(),
+            loading: true,
+            ..Default::default()
+        });
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Network),
+            Some(Action::ShowHint(NavMenuItem::Network, ref m)) if m == LOADING_NODES_HINT
+        ));
+
+        let mut comp = two_node_cluster();
+        comp.selected_item = NodeListItem::ClusterHeader(0);
+        assert!(matches!(
+            comp.action_for(NavMenuItem::Network),
+            Some(Action::ShowGroup(GroupKind::Network, ..))
+        ));
     }
 
     /// The service × node matrix gives way to one row per service when the

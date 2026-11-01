@@ -194,6 +194,13 @@ pub struct App {
     log_level_filter: crate::components::multi_logs::LevelFilter,
     /// Volumes view toggle, filter and selection, kept across visits
     volumes_view_state: Option<crate::components::volumes::VolumesViewState>,
+    /// Processes sort, kept across visits
+    processes_sort: crate::components::processes::SortBy,
+    /// Network sorts and listening-only filter, kept across visits
+    network_settings: crate::components::network::NetworkSettings,
+    /// Where the state between runs lives, and what was last written there
+    state_path: Option<std::path::PathBuf>,
+    saved_state: crate::state::UiState,
     /// Etcd status component (created when viewing etcd)
     etcd: Option<EtcdComponent>,
     /// Processes component (created when viewing processes)
@@ -288,6 +295,10 @@ impl App {
             multi_logs: None,
             log_level_filter: crate::components::multi_logs::ALL_LEVELS,
             volumes_view_state: None,
+            processes_sort: Default::default(),
+            network_settings: Default::default(),
+            state_path: None,
+            saved_state: Default::default(),
             etcd: None,
             processes: None,
             network: None,
@@ -670,12 +681,151 @@ impl App {
         }
     }
 
+    /// Apply what the last run left in the state file; the menu entry it
+    /// showed, for the caller to open
+    fn restore_state(&mut self) -> Option<NavMenuItem> {
+        use crate::components::{network, processes, volumes};
+        use crate::state::{LOG_LEVELS, by_name};
+        let state = crate::state::load(self.state_path.as_deref()?);
+        self.cluster.apply_saved(&state);
+        self.pane_width = by_name(
+            &[PaneWidth::Full, PaneWidth::Compact, PaneWidth::Hidden],
+            state.pane_width.as_deref(),
+        );
+        if let Some(levels) = state.log_levels.as_ref().filter(|l| !l.is_empty()) {
+            self.log_level_filter = LOG_LEVELS.map(|l| levels.iter().any(|x| x == l));
+        }
+        if state.volumes.show_all.is_some() || state.volumes.type_filter.is_some() {
+            self.volumes_view_state = Some(volumes::VolumesViewState {
+                show_all: state.volumes.show_all.unwrap_or(true),
+                type_filter: by_name(
+                    &[
+                        volumes::TypeFilter::All,
+                        volumes::TypeFilter::Linstor,
+                        volumes::TypeFilter::Zfs,
+                    ],
+                    state.volumes.type_filter.as_deref(),
+                )
+                .unwrap_or_default(),
+                ..Default::default()
+            });
+        }
+        self.processes_sort = by_name(
+            &[
+                processes::SortBy::CpuPercent,
+                processes::SortBy::CpuTime,
+                processes::SortBy::Mem,
+            ],
+            state.processes_sort.as_deref(),
+        )
+        .unwrap_or_default();
+        self.network_settings = network::NetworkSettings {
+            sort_by: by_name(
+                &[network::SortBy::Traffic, network::SortBy::Errors],
+                state.network.sort.as_deref(),
+            )
+            .unwrap_or_default(),
+            conn_sort_by: by_name(
+                &[network::ConnSortBy::State, network::ConnSortBy::Port],
+                state.network.connections_sort.as_deref(),
+            )
+            .unwrap_or_default(),
+            listening_only: state.network.listening_only.unwrap_or(false),
+        };
+        let item = by_name(&NavMenuItem::ALL, state.view.as_deref());
+        self.saved_state = state;
+        item
+    }
+
+    /// What to remember now: the open views' own settings when they are
+    /// shown, otherwise the ones kept from their last visit
+    fn current_state(&self) -> crate::state::UiState {
+        use crate::state::{LOG_LEVELS, name_of};
+        let mut tree = self.saved_state.tree.clone();
+        for folds in self.cluster.saved_folds() {
+            tree.retain(|t| t.cluster != folds.cluster);
+            tree.push(folds);
+        }
+        tree.sort_by(|a, b| a.cluster.cmp(&b.cluster));
+        let levels = self
+            .multi_logs
+            .as_ref()
+            .map_or(self.log_level_filter, |l| l.level_filter());
+        let volumes = self
+            .volumes
+            .as_ref()
+            .map(|v| v.view_state())
+            .or_else(|| self.volumes_view_state.clone());
+        let processes_sort = self
+            .processes
+            .as_ref()
+            .map_or(self.processes_sort, |p| p.sort_by());
+        let network = self
+            .network
+            .as_ref()
+            .map_or(self.network_settings, |n| n.settings());
+        crate::state::UiState {
+            // Nothing listed yet (no talosconfig): keep the remembered one
+            selection: self
+                .cluster
+                .saved_selection()
+                .or_else(|| self.saved_state.selection.clone()),
+            view: Some(name_of(self.pane)),
+            pane_width: self.pane_width.map(name_of),
+            tree,
+            auto_refresh: Some(self.cluster.auto_refresh()),
+            log_levels: Some(
+                LOG_LEVELS
+                    .iter()
+                    .zip(levels)
+                    .filter(|(_, shown)| *shown)
+                    .map(|(name, _)| name.to_string())
+                    .collect(),
+            ),
+            volumes: crate::state::VolumesSettings {
+                show_all: volumes.as_ref().map(|v| v.show_all),
+                type_filter: volumes.map(|v| name_of(v.type_filter)),
+            },
+            processes_sort: Some(name_of(processes_sort)),
+            network: crate::state::NetworkSettings {
+                sort: Some(name_of(network.sort_by)),
+                connections_sort: Some(name_of(network.conn_sort_by)),
+                listening_only: Some(network.listening_only),
+            },
+        }
+    }
+
+    /// Write the state file when something worth remembering changed
+    fn persist_state(&mut self) {
+        let Some(path) = self.state_path.clone() else {
+            return;
+        };
+        let state = self.current_state();
+        if state == self.saved_state {
+            return;
+        }
+        if let Err(e) = crate::state::save(&path, &state) {
+            tracing::warn!("Could not write {}: {}", path.display(), e);
+        }
+        // Also on failure: retrying every frame would only repeat the warning
+        self.saved_state = state;
+    }
+
     /// Main event loop
     async fn main_loop(&mut self, terminal: &mut Tui) -> Result<()> {
         // Load the cluster list from talosconfig. This does no network I/O:
         // each cluster connects in the background and fills in as it becomes
         // reachable, so the UI is usable at once even if some are down.
         self.cluster.connect().await?;
+        // Back where the last run left off; a view of a node waits (with a
+        // loading note) until the cluster lists its nodes
+        self.state_path = crate::state::default_path();
+        if let Some(item) = self.restore_state()
+            && item != NavMenuItem::Dashboard
+            && let Some(action) = self.cluster.action_for(item)
+        {
+            self.handle_action(action).await?;
+        }
 
         loop {
             // Draw current view
@@ -723,6 +873,7 @@ impl App {
             // never refills, and once it is spent every await on a budgeted
             // resource (and every poll of a finished task) reads as pending.
             tokio::task::yield_now().await;
+            self.persist_state();
 
             // Check async results (non-blocking)
             self.poll_refresh_job();
@@ -951,6 +1102,13 @@ impl App {
     /// Keys for the tree and menu. Where the dashboard has its services list,
     /// Tab / Shift+Tab move into the view instead.
     fn dispatch_tree_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        let before = self.cluster.selection();
+        let action = self.dispatch_tree_key_inner(key);
+        self.cluster.selection_moved(&before);
+        action
+    }
+
+    fn dispatch_tree_key_inner(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         let pane = self.cluster.focused_pane();
         // Esc or Left in the dashboard's services list hands the keyboard back
         // to the tree side it came from, as in any other view
@@ -1125,7 +1283,9 @@ impl App {
                     ClickTarget::None => self.view_has_focus = false,
                 }
             }
+            let before = self.cluster.selection();
             let action = self.cluster.handle_mouse_event(mouse);
+            self.cluster.selection_moved(&before);
             if !matches!(action, Ok(Some(_))) {
                 self.focus_after_show = false;
             }
@@ -1145,11 +1305,7 @@ impl App {
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && !overlay {
             // The click selects the row under it; a second click on the same
             // cell opens it, like Enter
-            if self.view == View::Group
-                && let Some(group) = &mut self.group
-            {
-                group.handle_mouse_event(mouse)?;
-            }
+            self.view_mouse(mouse)?;
             if self.is_double_click(mouse.column, mouse.row) {
                 return self.dispatch_view_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
             }
@@ -1161,6 +1317,33 @@ impl App {
             _ => return Ok(None),
         };
         self.dispatch_view_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Hand a click to the open view (rows, column headers); views without
+    /// a handler ignore it
+    fn view_mouse(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        macro_rules! to {
+            ($c:expr) => {
+                match &mut $c {
+                    Some(c) => c.handle_mouse_event(mouse),
+                    None => Ok(None),
+                }
+            };
+        }
+        match self.view {
+            View::Group => to!(self.group),
+            View::Network => to!(self.network),
+            View::Storage => to!(self.storage),
+            View::MultiLogs => to!(self.multi_logs),
+            View::Etcd => to!(self.etcd),
+            View::Processes => to!(self.processes),
+            View::Diagnostics => to!(self.diagnostics),
+            View::Security => to!(self.security),
+            View::Lifecycle => to!(self.lifecycle),
+            View::Workloads => to!(self.workloads),
+            View::Volumes => to!(self.volumes),
+            _ => Ok(None),
+        }
     }
 
     /// The keys the view on the right acts on right now, for the bottom line
@@ -1361,10 +1544,10 @@ impl App {
                 self.volumes_view_state = Some(v.view_state());
                 CachedView::Volumes(Box::new(v))
             }),
-            View::Network => self
-                .network
-                .take()
-                .map(|c| CachedView::Network(Box::new(c))),
+            View::Network => self.network.take().map(|c| {
+                self.network_settings = c.settings();
+                CachedView::Network(Box::new(c))
+            }),
             View::Storage => self
                 .storage
                 .take()
@@ -1373,10 +1556,10 @@ impl App {
                 .node_info
                 .take()
                 .map(|c| CachedView::NodeInfo(Box::new(c))),
-            View::Processes => self
-                .processes
-                .take()
-                .map(|c| CachedView::Processes(Box::new(c))),
+            View::Processes => self.processes.take().map(|c| {
+                self.processes_sort = c.sort_by();
+                CachedView::Processes(Box::new(c))
+            }),
             View::Diagnostics => self
                 .diagnostics
                 .take()
@@ -1418,6 +1601,17 @@ impl App {
         let key = self.scope_key(self.pane);
         if key == self.applied_target {
             self.pending_target = None;
+            // A view picked while the nodes were loading opens once they
+            // are known; the selection hasn't changed, so nothing else would
+            if self.view == View::Hint
+                && self.hint.as_deref() == Some(crate::components::cluster::LOADING_NODES_HINT)
+                && !matches!(
+                    self.cluster.action_for(self.pane),
+                    None | Some(Action::ShowHint(..))
+                )
+            {
+                return self.retarget().await;
+            }
             return Ok(());
         }
         let now = Instant::now();
@@ -1557,6 +1751,7 @@ impl App {
             Action::ShowKubeSpan(hostname, address) => {
                 self.leave_view();
                 let mut network = NetworkStatsComponent::new_kubespan(hostname, address.clone());
+                network.set_settings(self.network_settings);
                 if let Some(client) = self.cluster.client() {
                     network.set_client(client.with_node(&address));
                     network.set_talos_context(
@@ -1952,6 +2147,7 @@ impl App {
                 tracing::info!("ShowProcesses: '{}' ({} node(s))", title, nodes.len());
 
                 let mut processes = ProcessesComponent::new(title, nodes);
+                processes.set_sort_by(self.processes_sort);
                 match self.cluster.client() {
                     Some(client) => {
                         processes.set_client(client.clone());
@@ -1981,6 +2177,7 @@ impl App {
 
                 // Create network component
                 let mut network = NetworkStatsComponent::new(hostname, address.clone());
+                network.set_settings(self.network_settings);
 
                 // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {

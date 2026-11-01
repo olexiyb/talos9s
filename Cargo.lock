@@ -3336,6 +3336,7 @@ dependencies = [
  "kube",
  "ratatui",
  "rustls",
+ "serde",
  "serde-saphyr 2.0.0",
  "serde_json",
  "talos-rs",

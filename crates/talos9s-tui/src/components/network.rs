@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::components::{Component, LogNode};
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -146,6 +146,14 @@ impl ViewMode {
             ViewMode::KubeSpan => "KubeSpan",
         }
     }
+}
+
+/// Network view settings that carry over (see `NetworkStatsComponent::settings`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NetworkSettings {
+    pub sort_by: SortBy,
+    pub conn_sort_by: ConnSortBy,
+    pub listening_only: bool,
 }
 
 /// Sort order for connection list
@@ -292,6 +300,8 @@ pub struct NetworkStatsComponent {
     selected: usize,
     /// Table state for rendering
     table_state: TableState,
+    /// Where the tables and the breadcrumb were last drawn, for clicks
+    hits: NetworkHits,
     /// Current sort order
     sort_by: SortBy,
 
@@ -357,6 +367,22 @@ impl Default for NetworkStatsComponent {
 }
 
 impl NetworkStatsComponent {
+    /// Sort orders and the listening-only filter, remembered between visits
+    /// and runs
+    pub fn settings(&self) -> NetworkSettings {
+        NetworkSettings {
+            sort_by: self.sort_by,
+            conn_sort_by: self.conn_sort_by,
+            listening_only: self.listening_only,
+        }
+    }
+
+    pub fn set_settings(&mut self, settings: NetworkSettings) {
+        self.sort_by = settings.sort_by;
+        self.conn_sort_by = settings.conn_sort_by;
+        self.listening_only = settings.listening_only;
+    }
+
     pub fn new(hostname: String, address: String) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
@@ -373,6 +399,7 @@ impl NetworkStatsComponent {
             state: AsyncState::new(),
             selected: 0,
             table_state,
+            hits: NetworkHits::default(),
             sort_by: SortBy::Traffic,
             auto_refresh: true,
             view_mode: ViewMode::Interfaces,
@@ -1330,6 +1357,7 @@ impl NetworkStatsComponent {
             .bottom_margin(1);
 
         // Get data for building rows
+        self.hits.devices = area;
         let Some(data) = self.data() else {
             let table = Table::new(Vec::<Row>::new(), [Constraint::Fill(1)]).header(header);
             frame.render_stateful_widget(table, area, &mut self.table_state);
@@ -1718,6 +1746,7 @@ impl NetworkStatsComponent {
     fn draw_conn_table(&mut self, frame: &mut Frame, area: Rect) {
         // Update viewport height for page navigation
         self.conn_viewport_height = area.height;
+        self.hits.connections = area;
 
         // Build column headers with sort indicators
         let state_header = if self.conn_sort_by == ConnSortBy::State {
@@ -2092,6 +2121,7 @@ impl NetworkStatsComponent {
         ])
         .split(area);
 
+        self.hits.breadcrumb = chunks[0];
         self.draw_conn_header(frame, chunks[0]);
         self.draw_conn_summary_bar(frame, chunks[1]);
         self.draw_conn_table(frame, chunks[2]);
@@ -2100,6 +2130,7 @@ impl NetworkStatsComponent {
 
     /// Draw the KubeSpan peer status view
     fn draw_kubespan_view(&mut self, frame: &mut Frame, area: Rect) {
+        self.hits.kubespan = Rect::default();
         let chunks = Layout::vertical([
             Constraint::Length(1), // Caption
             Constraint::Min(5),    // Content
@@ -2368,6 +2399,7 @@ impl NetworkStatsComponent {
         .header(header_row)
         .block(Block::default().borders(Borders::TOP));
 
+        self.hits.kubespan = content_chunks[1];
         frame.render_stateful_widget(table, content_chunks[1], &mut self.kubespan_table_state);
 
         // Detail section for selected peer
@@ -2842,7 +2874,124 @@ impl NetworkStatsComponent {
     }
 }
 
+/// Areas drawn last frame, in screen coordinates
+#[derive(Debug, Default, Clone, Copy)]
+struct NetworkHits {
+    devices: Rect,
+    connections: Rect,
+    breadcrumb: Rect,
+    kubespan: Rect,
+}
+
+fn contains(r: Rect, column: u16, row: u16) -> bool {
+    column >= r.x && column < r.right() && row >= r.y && row < r.bottom()
+}
+
+/// Index of the fixed-width column at `x` in a table drawn at `area` with a
+/// two-column highlight symbol and one column between columns
+fn column_at(area: Rect, widths: &[u16], x: u16) -> Option<usize> {
+    let mut left = area.x + 2;
+    for (i, w) in widths.iter().enumerate() {
+        if x >= left && x < left + w {
+            return Some(i);
+        }
+        left += w + 1;
+    }
+    None
+}
+
+/// Row of a table under `y`: `header` lines (header + its margin) below the
+/// table's top, plus the rows scrolled away
+fn row_at(area: Rect, header: u16, offset: usize, y: u16) -> Option<usize> {
+    let first = area.y + header;
+    (y >= first && y < area.bottom()).then(|| offset + (y - first) as usize)
+}
+
+impl NetworkStatsComponent {
+    /// Clicks: a row selects it, a sortable column header sorts by it,
+    /// "Interfaces" in the connections breadcrumb goes back. A second click
+    /// opens the row (the app sends Enter).
+    fn click(&mut self, column: u16, row: u16) {
+        match self.view_mode {
+            ViewMode::Interfaces => {
+                let area = self.hits.devices;
+                if !contains(area, column, row) {
+                    return;
+                }
+                if row == area.y {
+                    // INTERFACE, RX RATE, TX RATE, RX ERR
+                    match column_at(area, &[14, 12, 12, 8], column) {
+                        Some(1) => self.sort_by = SortBy::Traffic,
+                        Some(3) => self.sort_by = SortBy::Errors,
+                        _ => return,
+                    }
+                    self.sort_devices();
+                    return;
+                }
+                let count = self.data().map_or(0, |d| d.devices.len());
+                if let Some(i) = row_at(area, 2, self.table_state.offset(), row)
+                    && i < count
+                {
+                    self.selected = i;
+                    self.table_state.select(Some(i));
+                }
+            }
+            ViewMode::Connections => {
+                let crumb = self.hits.breadcrumb;
+                if contains(crumb, column, row) && column < crumb.x + "Interfaces".len() as u16 {
+                    self.exit_connections_view();
+                    return;
+                }
+                let area = self.hits.connections;
+                if !contains(area, column, row) {
+                    return;
+                }
+                if row == area.y {
+                    // PROTO, LOCAL, REMOTE, STATE
+                    let sort = match column_at(area, &[6, 22, 24, 12], column) {
+                        Some(1) => ConnSortBy::Port,
+                        Some(3) => ConnSortBy::State,
+                        _ => return,
+                    };
+                    self.conn_sort_by = sort;
+                    self.conn_selected = 0;
+                    self.conn_table_state.select(Some(0));
+                    self.conn_selection_start = None;
+                    return;
+                }
+                let count = self.get_filtered_connections().len();
+                if let Some(i) = row_at(area, 2, self.conn_table_state.offset(), row)
+                    && i < count
+                {
+                    self.conn_selected = i;
+                    self.conn_table_state.select(Some(i));
+                    self.conn_selection_start = None;
+                }
+            }
+            ViewMode::KubeSpan => {
+                let area = self.hits.kubespan;
+                // Top border, then the header
+                let count = self.data().map_or(0, |d| d.kubespan_peers.len());
+                if let Some(i) = row_at(area, 2, self.kubespan_table_state.offset(), row)
+                    && contains(area, column, row)
+                    && i < count
+                {
+                    self.kubespan_selected = i;
+                    self.kubespan_table_state.select(Some(i));
+                }
+            }
+        }
+    }
+}
+
 impl Component for NetworkStatsComponent {
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.click(mouse.column, mouse.row);
+        }
+        Ok(None)
+    }
+
     fn key_hints(&self) -> Option<Line<'static>> {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
         if self.file_viewer.is_some() {
@@ -3857,5 +4006,31 @@ impl NetworkStatsComponent {
             let bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
             frame.render_widget(bar, area);
         }
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+
+    /// Header and row hit-testing for the device and connection tables
+    #[test]
+    fn columns_and_rows_under_the_mouse() {
+        let area = Rect::new(31, 8, 100, 20);
+        // The highlight symbol takes two columns, columns are one apart
+        let widths = [6, 22, 24, 12];
+        assert_eq!(column_at(area, &widths, 31), None);
+        assert_eq!(column_at(area, &widths, 33), Some(0));
+        assert_eq!(column_at(area, &widths, 40), Some(1));
+        assert_eq!(column_at(area, &widths, 61), Some(1));
+        assert_eq!(column_at(area, &widths, 62), None);
+        assert_eq!(column_at(area, &widths, 63), Some(2));
+        assert_eq!(column_at(area, &widths, 88), Some(3));
+        assert_eq!(column_at(area, &widths, 100), None);
+        // Header and its margin, then rows from the scroll offset
+        assert_eq!(row_at(area, 2, 0, 9), None);
+        assert_eq!(row_at(area, 2, 0, 10), Some(0));
+        assert_eq!(row_at(area, 2, 30, 12), Some(32));
+        assert_eq!(row_at(area, 2, 0, 28), None);
     }
 }

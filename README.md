@@ -206,13 +206,19 @@ Moving around:
   terminals, IntelliJ's among them, never pass `Esc` to the app. In the tree,
   `Esc` returns to the Dashboard.
 - `Tab` moves to the next window: Nodes → menu → view → Nodes (`Shift+Tab`
-  the other way). In a view with its own tab bar (containers, storage,
+  the other way). In a view with its own tab bar (the node view,
   diagnostics) `Tab` switches those tabs; use `←` or `Esc` to leave.
 - Mouse: click a row to select it, double-click to open it (a node from a
-  group table), click a tab or a menu entry to switch.
+  group table, an interface's connections), click a tab or a menu entry to
+  switch. In Network, clicking a sortable column header sorts by it and
+  "Interfaces" in the connections breadcrumb goes back.
 - `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,
   `q` in the tree quits, `Ctrl+C` quits from anywhere.
 - `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
+- talos9s starts where you left it: the selected cluster, group or node, the
+  view, the pane width, folded groups, log levels, sort orders and view
+  toggles are kept in `~/.talos9s/state.yaml`. Text filters are not. Delete
+  the file to start fresh.
 - The top line lists the keys that work everywhere (`Tab`, `Z`, `[` `]`,
   `Ctrl+C`); the bottom line lists only what acts in the focused window
   right now, so `Space` fold appears on an expandable row, `o` ops on a
@@ -231,9 +237,10 @@ node, so it is careful about what it changes:
   shown and copied for you to review and run.
 - **Never shows secrets.** The machine config viewer masks keys, tokens,
   passwords, private keys and Secret data before anything is drawn.
-- **Writes only:** the audit log, its debug log (temp dir or `--log-file`),
-  packet captures you save (`/tmp`, owner-only) and the wizard's output
-  directory. It has no configuration file.
+- **Writes only:** the audit log, the remembered view state
+  (`~/.talos9s/state.yaml`, no cluster data), its debug log (temp dir or
+  `--log-file`), packet captures you save (`/tmp`, owner-only) and the
+  wizard's output directory. It has no configuration file.
 - **No in-cluster access needed.** Nothing runs in the cluster and no
   Kubernetes namespace needs Talos API rights.
 

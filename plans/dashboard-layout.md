@@ -7,8 +7,10 @@ Differences from this plan, as built: the details pane stays in `cluster.rs`
 `dashboard.rs`; `Enter` on any tree row enters the view when it isn't the
 Dashboard (`Space` folds); compact width is the longest node name within
 14-22 columns; carried-over settings are the node view's tab, the volumes
-view state and the log levels (not yet processes sorting); open questions 1
-(`Alt+key`) and 4 (remembering layout) are not done.
+view state, the log levels, processes and network sorting; open question 1
+(`Alt+key`) is not done. Question 4 is: `~/.talos9s/state.yaml` keeps the
+selection, view, pane width, folds and view settings between runs
+(`crates/talos9s-tui/src/state.rs`).
 Comes before [upgrades](upgrades.md); the upgrade view will use this layout.
 
 ## Summary

@@ -317,6 +317,15 @@ impl Default for ProcessesComponent {
 }
 
 impl ProcessesComponent {
+    /// Sort order, remembered between visits and runs
+    pub fn sort_by(&self) -> SortBy {
+        self.sort_by
+    }
+
+    pub fn set_sort_by(&mut self, sort_by: SortBy) {
+        self.sort_by = sort_by;
+    }
+
     pub fn new(title: String, nodes: Vec<ProcessNode>) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));

@@ -13,6 +13,7 @@ pub mod linstor;
 pub mod linstor_volumes;
 pub mod orphans;
 pub mod reachability;
+pub mod state;
 pub mod task;
 pub mod tui;
 pub mod ui_ext;
