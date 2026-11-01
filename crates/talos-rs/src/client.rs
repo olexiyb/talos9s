@@ -2623,11 +2623,6 @@ impl ConnectionCounts {
             + self.syn_sent
             + self.other
     }
-
-    /// Check if there are any warning conditions
-    pub fn has_warnings(&self) -> bool {
-        self.time_wait > 100 || self.close_wait > 0 || self.syn_sent > 0
-    }
 }
 
 /// Information about a single network connection

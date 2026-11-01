@@ -21,7 +21,7 @@ use talos_rs::{
     ServiceRestartResult, TalosClient, TalosError, get_kubespan_peers_for_node,
     is_kubespan_enabled_for_node,
 };
-use talos9s_core::constants::MAX_CAPTURE_SIZE;
+use talos9s_core::constants::{CLOSE_WAIT_WARN, MAX_CAPTURE_SIZE, SYN_SENT_WARN, TIME_WAIT_WARN};
 use talos9s_core::{AsyncState, format_bytes};
 use tokio::task::JoinHandle;
 
@@ -100,6 +100,13 @@ fn take_finished<T>(task: &mut Option<JoinHandle<T>>) -> Option<T> {
 /// Well-known Talos/Kubernetes service ports
 fn port_to_service(port: u32) -> Option<&'static str> {
     talos9s_core::network::port_to_service_u32(port)
+}
+
+/// Whether a node's TCP state counts are worth a look (see the thresholds)
+fn conn_warnings(cc: &ConnectionCounts) -> bool {
+    cc.time_wait >= TIME_WAIT_WARN
+        || cc.close_wait >= CLOSE_WAIT_WARN
+        || cc.syn_sent >= SYN_SENT_WARN
 }
 
 /// Auto-refresh interval in seconds (faster than processes for responsive rates)
@@ -1215,8 +1222,11 @@ impl NetworkStatsComponent {
             .data()
             .map(|d| d.conn_counts.clone())
             .unwrap_or_default();
-        let has_warnings = cc.has_warnings();
-        let warning = if has_warnings { "! " } else { "" };
+        let (tw_high, cw_high) = (
+            cc.time_wait >= TIME_WAIT_WARN,
+            cc.close_wait >= CLOSE_WAIT_WARN,
+        );
+        let warning = if conn_warnings(&cc) { "! " } else { "" };
 
         let mut spans = vec![
             Span::styled(
@@ -1244,8 +1254,7 @@ impl NetworkStatsComponent {
         spans.push(Span::styled("LISTEN", Style::default().fg(Color::DarkGray)));
         spans.push(Span::raw("  "));
 
-        // TIME_WAIT count (yellow if > 100)
-        let tw_style = if cc.time_wait > 100 {
+        let tw_style = if tw_high {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
@@ -1257,9 +1266,8 @@ impl NetworkStatsComponent {
         ));
         spans.push(Span::raw("  "));
 
-        // CLOSE_WAIT count (red if > 0)
-        let cw_style = if cc.close_wait > 0 {
-            Style::default().fg(Color::Red)
+        let cw_style = if cw_high {
+            Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         };
@@ -2858,7 +2866,7 @@ impl NetworkStatsComponent {
             .map(|d| {
                 (
                     d.errors_per_sec > 0.0 || d.dropped_per_sec > 0.0,
-                    d.conn_counts.has_warnings(),
+                    conn_warnings(&d.conn_counts),
                     d.connections.is_empty(),
                 )
             })
@@ -4093,5 +4101,32 @@ mod click_tests {
         assert_eq!(column_at(area, &widths, 63), Some(2));
         assert_eq!(column_at(area, &widths, 88), Some(3));
         assert_eq!(column_at(area, &widths, 100), None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn busy_healthy_node_has_no_connection_warning() {
+        // Seen on a healthy control plane node
+        let busy = ConnectionCounts {
+            established: 1375,
+            listen: 67,
+            time_wait: 839,
+            close_wait: 2,
+            syn_sent: 1,
+            other: 345,
+        };
+        assert!(!conn_warnings(&busy));
+        assert!(conn_warnings(&ConnectionCounts {
+            close_wait: 150,
+            ..busy.clone()
+        }));
+        assert!(conn_warnings(&ConnectionCounts {
+            time_wait: 25_000,
+            ..busy
+        }));
     }
 }

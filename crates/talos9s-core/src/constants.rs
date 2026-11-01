@@ -10,6 +10,14 @@ pub const HIGH_RESTART_THRESHOLD: i32 = 5;
 /// count never goes down, so old restarts would flag a pod forever
 pub const RECENT_RESTART_SECS: i64 = 3600;
 
+/// TCP connections in one state that are worth a look on a node. Busy
+/// healthy nodes hold hundreds of TIME_WAIT and the odd SYN_SENT; these
+/// flag port exhaustion (ephemeral range ~28k), sockets an app never closes,
+/// and many peers that don't answer.
+pub const TIME_WAIT_WARN: usize = 20_000;
+pub const CLOSE_WAIT_WARN: usize = 100;
+pub const SYN_SENT_WARN: usize = 50;
+
 /// A pod Pending for less than this is being scheduled or pulled, not stuck
 pub const POD_PENDING_GRACE_SECS: i64 = 120;
 

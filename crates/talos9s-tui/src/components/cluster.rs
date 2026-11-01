@@ -1301,13 +1301,23 @@ impl Default for ClusterComponent {
 }
 
 /// Whether a service is in a good state: running and not failing its health
-/// check, or a one-shot service that finished (e.g. `ext-nvidia-cdi-gen`).
+/// check, a one-shot service that finished (e.g. `ext-nvidia-cdi-gen`), or
+/// one the config leaves out.
 fn service_ok(s: &ServiceInfo) -> bool {
     match s.state.as_str() {
         "Running" => s.is_healthy() != Some(false),
-        "Finished" => true,
+        "Finished" | "Skipped" => true,
         _ => false,
     }
+}
+
+/// The tree's dot for a node: every service as the services matrix judges
+/// it, and memory below critical. What isn't known yet doesn't count.
+fn node_row_ok(memory_pct: Option<f64>, services: Option<&[ServiceInfo]>) -> bool {
+    let services_ok = services.is_none_or(|services| services.iter().all(service_ok));
+    let memory_ok = memory_pct
+        .is_none_or(|pct| talos9s_core::memory_health(pct) != talos9s_core::HealthIndicator::Error);
+    services_ok && memory_ok
 }
 
 /// A node's KubeSpan links as it sees them: how many peers are up, and the
@@ -2080,13 +2090,9 @@ impl ClusterComponent {
         }
         let mem_pct = self
             .get_node_memory_for(cluster_idx, node)
-            .map(|m| m.usage_percent())
-            .unwrap_or(0.0);
-        let svc_healthy = self
-            .get_node_services_for(cluster_idx, node)
-            .map(|services| services.iter().all(|s| s.is_healthy() != Some(false)))
-            .unwrap_or(true);
-        if svc_healthy && mem_pct < 90.0 {
+            .map(|m| f64::from(m.usage_percent()));
+        let services = self.get_node_services_for(cluster_idx, node);
+        if node_row_ok(mem_pct, services.map(Vec::as_slice)) {
             ("●", Color::Green, String::new())
         } else {
             ("◐", Color::Yellow, String::new())
@@ -6385,6 +6391,25 @@ mod tests {
         assert!(service_ok(&svc("Running", Some((false, true)))));
         assert!(!service_ok(&svc("Running", Some((false, false)))));
         assert!(!service_ok(&svc("Failed", None)));
+        assert!(service_ok(&svc("Skipped", None)));
+    }
+
+    #[test]
+    fn node_dot_agrees_with_the_services_matrix() {
+        let svc = |state: &str| ServiceInfo {
+            id: "kubelet".to_string(),
+            state: state.to_string(),
+            health: None,
+        };
+        // A stopped service with no health check is a problem in the
+        // matrix, so the dot isn't green either
+        assert!(!node_row_ok(Some(40.0), Some(&[svc("Failed")])));
+        assert!(node_row_ok(Some(40.0), Some(&[svc("Running")])));
+        // Memory: critical only past the shared threshold
+        assert!(node_row_ok(Some(89.0), Some(&[svc("Running")])));
+        assert!(!node_row_ok(Some(95.0), Some(&[svc("Running")])));
+        // Memory not answered yet doesn't make it unhealthy
+        assert!(node_row_ok(None, Some(&[svc("Running")])));
     }
 
     #[test]
