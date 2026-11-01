@@ -2601,15 +2601,21 @@ impl ClusterComponent {
         (mode, width)
     }
 
-    /// Indent, selector and health dot, then the longest node name
+    /// The longest node name (after indent, selector and health dot) or
+    /// menu entry (" m Machine config"), plus borders
     fn compact_pane_width(&self) -> u16 {
-        let longest = self
+        let node = self
             .clusters
             .iter()
-            .flat_map(|c| c.versions.iter().map(|v| v.node.chars().count()))
+            .flat_map(|c| c.versions.iter().map(|v| v.node.chars().count() + 11))
             .max()
             .unwrap_or(0);
-        (longest as u16 + 11).clamp(COMPACT_PANE_MIN_WIDTH, COMPACT_PANE_MAX_WIDTH)
+        let menu = NavMenuItem::ALL
+            .iter()
+            .map(|item| 1 + item.hotkey().len() + 1 + item.label().len() + 2)
+            .max()
+            .unwrap_or(0);
+        (node.max(menu) as u16).clamp(COMPACT_PANE_MIN_WIDTH, COMPACT_PANE_MAX_WIDTH)
     }
 
     /// Draw the header, the nodes pane at `width` and the bottom key line,
@@ -3380,10 +3386,10 @@ impl ClusterComponent {
     fn nodes_pane_width(&self) -> u16 {
         let (lines, _) = self.node_list_lines(None);
         let list = lines.iter().map(Line::width).max().unwrap_or(0);
-        // " ▸ [m] Machine config"
+        // " m Machine config"
         let menu = NavMenuItem::ALL
             .iter()
-            .map(|item| 3 + item.hotkey().len() + 3 + item.label().len())
+            .map(|item| 1 + item.hotkey().len() + 1 + item.label().len())
             .max()
             .unwrap_or(0);
         (list.max(menu) + 3) as u16
@@ -3459,40 +3465,38 @@ impl ClusterComponent {
         for (i, item) in NavMenuItem::ALL.iter().enumerate() {
             let menu_index = i + 1; // 1-based for selection
             let is_selected = menu_index == self.selected_menu_item;
-            let show_selector = is_selected && menu_focused;
-
-            let selector = if show_selector { "▸" } else { " " };
-
-            let hotkey_style = if show_selector {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+            // The highlighted row is the selection: no marker column, so
+            // the compact pane keeps room for the names
+            let highlighted = is_selected && menu_focused;
+            let bar = Style::default().fg(Color::Black).bg(Color::Cyan);
+            let hotkey_style = if highlighted {
+                bar.add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Yellow)
-            };
-
-            let label_style = if show_selector {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
-            } else if is_selected && !menu_focused {
+            };
+            let label_style = if highlighted {
+                bar.add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                // The view shown on the right
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
-
+            let text = format!(" {} {}", item.hotkey(), item.label());
+            // A highlight spans the row
+            let pad = (area.width as usize).saturating_sub(text.chars().count());
             lines.push(Line::from(vec![
+                Span::styled(" ", if highlighted { bar } else { Style::default() }),
+                Span::styled(item.hotkey(), hotkey_style),
+                Span::styled(format!(" {}", item.label()), label_style),
                 Span::styled(
-                    format!(" {} ", selector),
-                    if show_selector {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    },
+                    " ".repeat(if highlighted { pad } else { 0 }),
+                    if highlighted { bar } else { Style::default() },
                 ),
-                Span::styled(format!("[{}] ", item.hotkey()), hotkey_style),
-                Span::styled(item.label(), label_style),
             ]));
         }
 
