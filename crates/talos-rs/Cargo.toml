@@ -45,8 +45,12 @@ tracing.workspace = true
 # Random (for fallback node shuffling)
 fastrand = "2"
 
+[features]
+# Regenerate src/generated from proto/ (needs protoc); see build.rs
+regenerate = ["dep:tonic-prost-build"]
+
 [build-dependencies]
-tonic-prost-build = "0.14"
+tonic-prost-build = { version = "0.14", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "macros", "rt-multi-thread"] }

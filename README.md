@@ -128,11 +128,19 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/olexiyb/talos9s/re
 ### From Source
 
 ```bash
+cargo install --git https://github.com/olexiyb/talos9s --locked talos9s
+```
+
+or from a clone:
+
+```bash
 git clone https://github.com/olexiyb/talos9s
 cd talos9s
 cargo build --release
 ./target/release/talos9s
 ```
+
+Building needs only a Rust toolchain: the Talos API client code is committed, so `protoc` is required only to regenerate it (`cargo build -p talos-rs --features regenerate`) after changing `crates/talos-rs/proto/`.
 
 ### NixOS
 

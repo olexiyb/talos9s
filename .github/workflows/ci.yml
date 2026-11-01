@@ -44,6 +44,11 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all --all-targets -- -D warnings
 
+      - name: Generated Talos API code matches proto/
+        run: |
+          cargo build -p talos-rs --features regenerate
+          git diff --exit-code crates/talos-rs/src/generated
+
   test:
     name: Test
     runs-on: ubuntu-latest
