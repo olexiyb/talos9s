@@ -266,6 +266,37 @@ fn offline_version(node: &str) -> VersionInfo {
     }
 }
 
+/// A per-node answer from the Talos API, named by the node it came from
+trait FromNode {
+    fn node(&self) -> &str;
+}
+
+macro_rules! from_node {
+    ($($t:ty),*) => {
+        $(impl FromNode for $t {
+            fn node(&self) -> &str {
+                &self.node
+            }
+        })*
+    };
+}
+from_node!(
+    NodeServices,
+    NodeMemory,
+    NodeLoadAvg,
+    NodeSystemStat,
+    NodeMounts,
+    NodeCpuInfo
+);
+
+/// The answer for `node`. A single-node reply carries no node name, which
+/// matches the unnamed node.
+fn for_node<'a, T: FromNode>(items: &'a [T], node: &str) -> Option<&'a T> {
+    items
+        .iter()
+        .find(|i| i.node() == node || (i.node().is_empty() && node.is_empty()))
+}
+
 /// Per-cluster data storage
 #[derive(Clone, Default)]
 struct ClusterData {
@@ -2619,7 +2650,6 @@ impl ClusterComponent {
             .as_ref()
     }
 
-    /// Network summary for a node in the active cluster, if fetched
     /// Clock offset of a node in a cluster, if fetched
     fn get_node_clock_for(&self, cluster_idx: usize, node_name: &str) -> Option<&NodeClock> {
         let cluster = self.clusters.get(cluster_idx)?;
@@ -2627,6 +2657,7 @@ impl ClusterComponent {
             .get(&(cluster.name.clone(), node_name.to_string()))
     }
 
+    /// Network summary for a node in the active cluster, if fetched
     fn get_node_network_info(&self, node_name: &str) -> Option<&NodeNetworkInfo> {
         self.get_node_network_info_for(self.active_cluster, node_name)
     }
@@ -2775,12 +2806,7 @@ impl ClusterComponent {
         cluster_idx: usize,
         node_name: &str,
     ) -> Option<&Vec<ServiceInfo>> {
-        self.clusters
-            .get(cluster_idx)?
-            .services
-            .iter()
-            .find(|s| s.node == node_name || (s.node.is_empty() && node_name.is_empty()))
-            .map(|s| &s.services)
+        for_node(&self.clusters.get(cluster_idx)?.services, node_name).map(|s| &s.services)
     }
 
     /// Get services for a node in the active cluster
@@ -2790,12 +2816,9 @@ impl ClusterComponent {
 
     /// Get memory for a node in a specific cluster
     fn get_node_memory_for(&self, cluster_idx: usize, node_name: &str) -> Option<&MemInfo> {
-        self.clusters
-            .get(cluster_idx)?
-            .memory
-            .iter()
-            .find(|m| m.node == node_name || (m.node.is_empty() && node_name.is_empty()))
-            .and_then(|m| m.meminfo.as_ref())
+        for_node(&self.clusters.get(cluster_idx)?.memory, node_name)?
+            .meminfo
+            .as_ref()
     }
 
     /// Get memory for a node in the active cluster
@@ -2805,11 +2828,7 @@ impl ClusterComponent {
 
     /// Get load average for a node in a specific cluster
     fn get_node_load_avg_for(&self, cluster_idx: usize, node_name: &str) -> Option<&NodeLoadAvg> {
-        self.clusters
-            .get(cluster_idx)?
-            .load_avg
-            .iter()
-            .find(|l| l.node == node_name || (l.node.is_empty() && node_name.is_empty()))
+        for_node(&self.clusters.get(cluster_idx)?.load_avg, node_name)
     }
 
     /// Get load average for a node in the active cluster
@@ -2828,20 +2847,12 @@ impl ClusterComponent {
         cluster_idx: usize,
         node_name: &str,
     ) -> Option<&NodeSystemStat> {
-        self.clusters
-            .get(cluster_idx)?
-            .system_stat
-            .iter()
-            .find(|s| s.node == node_name || (s.node.is_empty() && node_name.is_empty()))
+        for_node(&self.clusters.get(cluster_idx)?.system_stat, node_name)
     }
 
     /// Get filesystem usage for a node in a specific cluster
     fn get_node_mounts_for(&self, cluster_idx: usize, node_name: &str) -> Option<&NodeMounts> {
-        self.clusters
-            .get(cluster_idx)?
-            .mounts
-            .iter()
-            .find(|m| m.node == node_name || (m.node.is_empty() && node_name.is_empty()))
+        for_node(&self.clusters.get(cluster_idx)?.mounts, node_name)
     }
 
     /// Get ZFS pools for a node in a specific cluster
@@ -2854,14 +2865,9 @@ impl ClusterComponent {
 
     /// Get CPU info for a node in a specific cluster
     fn get_node_cpu_info_for(&self, cluster_idx: usize, node_name: &str) -> Option<&NodeCpuInfo> {
-        self.clusters
-            .get(cluster_idx)?
-            .cpu_info
-            .iter()
-            .find(|c| c.node == node_name || (c.node.is_empty() && node_name.is_empty()))
+        for_node(&self.clusters.get(cluster_idx)?.cpu_info, node_name)
     }
 
-    /// Get CPU info for a node in the active cluster
     /// Talos version a node reported (none for an offline placeholder)
     fn get_node_talos_version_for(&self, cluster_idx: usize, node_name: &str) -> Option<&str> {
         self.clusters
@@ -2882,6 +2888,7 @@ impl ClusterComponent {
             .map(String::as_str)
     }
 
+    /// Get CPU info for a node in the active cluster
     fn get_node_cpu_info(&self, node_name: &str) -> Option<&NodeCpuInfo> {
         self.get_node_cpu_info_for(self.active_cluster, node_name)
     }
