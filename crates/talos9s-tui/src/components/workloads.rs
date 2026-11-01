@@ -165,6 +165,22 @@ pub struct NamespaceSummary {
     pub healthy_workloads: usize,
 }
 
+/// The summary of namespace `ns`, created empty on first use
+fn namespace<'a>(
+    map: &'a mut HashMap<String, NamespaceSummary>,
+    ns: &str,
+) -> &'a mut NamespaceSummary {
+    map.entry(ns.to_string())
+        .or_insert_with(|| NamespaceSummary {
+            name: ns.to_string(),
+            health: HealthState::Healthy,
+            workloads: Vec::new(),
+            problem_pods: Vec::new(),
+            total_workloads: 0,
+            healthy_workloads: 0,
+        })
+}
+
 /// A workload's namespace, kind and name
 type WorkloadKey = (String, WorkloadKind, String);
 
@@ -470,151 +486,69 @@ impl WorkloadHealthComponent {
         let mut total_pods_degraded = 0usize;
         let mut total_pods_failing = 0usize;
 
-        // Process deployments
-        for deploy in deployments.items {
-            let ns = deploy
-                .metadata
-                .namespace
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let name = deploy
-                .metadata
-                .name
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let Some(here) = here(&ns, WorkloadKind::Deployment, &name) else {
-                continue;
-            };
-            total_deployments += 1;
-
-            let status = deploy.status.as_ref();
-            // spec, not status: status.replicas counts surge pods during a
-            // rollout. Unset means 1.
-            let desired = deploy.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1);
+        // (namespace, name, kind, ready, desired, available) per workload.
+        // Desired is the spec's (status counts surge pods mid-rollout),
+        // unset meaning 1; a DaemonSet wants one per scheduled node.
+        let ns_name = |meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta| {
+            (
+                meta.namespace
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+                meta.name.clone().unwrap_or_else(|| "unknown".to_string()),
+            )
+        };
+        let mut found = Vec::new();
+        for d in &deployments.items {
+            let (ns, name) = ns_name(&d.metadata);
+            let status = d.status.as_ref();
             let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
-            let available = status.and_then(|s| s.available_replicas).unwrap_or(0);
-
-            let (health, issues) = Self::classify_workload_health(ready, desired, available);
-
-            let workload = WorkloadInfo {
+            found.push((
+                ns,
                 name,
-                namespace: ns.clone(),
-                kind: WorkloadKind::Deployment,
+                WorkloadKind::Deployment,
                 ready,
-                desired,
-                health,
-                issues,
-                here,
-            };
-
-            ns_map
-                .entry(ns)
-                .or_insert_with(|| NamespaceSummary {
-                    name: workload.namespace.clone(),
-                    health: HealthState::Healthy,
-                    workloads: Vec::new(),
-                    problem_pods: Vec::new(),
-                    total_workloads: 0,
-                    healthy_workloads: 0,
-                })
-                .workloads
-                .push(workload);
+                d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1),
+                status.and_then(|s| s.available_replicas).unwrap_or(0),
+            ));
         }
-
-        // Process statefulsets
-        for sts in statefulsets.items {
-            let ns = sts
-                .metadata
-                .namespace
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let name = sts
-                .metadata
-                .name
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let Some(here) = here(&ns, WorkloadKind::StatefulSet, &name) else {
-                continue;
-            };
-            total_statefulsets += 1;
-
-            let status = sts.status.as_ref();
+        for sts in &statefulsets.items {
+            let (ns, name) = ns_name(&sts.metadata);
+            let ready = sts
+                .status
+                .as_ref()
+                .and_then(|s| s.ready_replicas)
+                .unwrap_or(0);
             let desired = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1);
-            let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
-
-            let (health, issues) = Self::classify_workload_health(ready, desired, ready);
-
-            let workload = WorkloadInfo {
-                name,
-                namespace: ns.clone(),
-                kind: WorkloadKind::StatefulSet,
-                ready,
-                desired,
-                health,
-                issues,
-                here,
-            };
-
-            ns_map
-                .entry(ns)
-                .or_insert_with(|| NamespaceSummary {
-                    name: workload.namespace.clone(),
-                    health: HealthState::Healthy,
-                    workloads: Vec::new(),
-                    problem_pods: Vec::new(),
-                    total_workloads: 0,
-                    healthy_workloads: 0,
-                })
-                .workloads
-                .push(workload);
+            found.push((ns, name, WorkloadKind::StatefulSet, ready, desired, ready));
+        }
+        for ds in &daemonsets.items {
+            let (ns, name) = ns_name(&ds.metadata);
+            let status = ds.status.as_ref();
+            let ready = status.map(|s| s.number_ready).unwrap_or(0);
+            let desired = status.map(|s| s.desired_number_scheduled).unwrap_or(0);
+            found.push((ns, name, WorkloadKind::DaemonSet, ready, desired, ready));
         }
 
-        // Process daemonsets
-        for ds in daemonsets.items {
-            let ns = ds
-                .metadata
-                .namespace
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let name = ds
-                .metadata
-                .name
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let Some(here) = here(&ns, WorkloadKind::DaemonSet, &name) else {
+        for (ns, name, kind, ready, desired, available) in found {
+            let Some(here) = here(&ns, kind, &name) else {
                 continue;
             };
-            total_daemonsets += 1;
-
-            let status = ds.status.as_ref();
-            let desired = status.map(|s| s.desired_number_scheduled).unwrap_or(0);
-            let ready = status.map(|s| s.number_ready).unwrap_or(0);
-
-            let (health, issues) = Self::classify_workload_health(ready, desired, ready);
-
-            let workload = WorkloadInfo {
+            match kind {
+                WorkloadKind::Deployment => total_deployments += 1,
+                WorkloadKind::StatefulSet => total_statefulsets += 1,
+                WorkloadKind::DaemonSet => total_daemonsets += 1,
+            }
+            let (health, issues) = Self::classify_workload_health(ready, desired, available);
+            namespace(&mut ns_map, &ns).workloads.push(WorkloadInfo {
                 name,
-                namespace: ns.clone(),
-                kind: WorkloadKind::DaemonSet,
+                namespace: ns,
+                kind,
                 ready,
                 desired,
                 health,
                 issues,
                 here,
-            };
-
-            ns_map
-                .entry(ns)
-                .or_insert_with(|| NamespaceSummary {
-                    name: workload.namespace.clone(),
-                    health: HealthState::Healthy,
-                    workloads: Vec::new(),
-                    problem_pods: Vec::new(),
-                    total_workloads: 0,
-                    healthy_workloads: 0,
-                })
-                .workloads
-                .push(workload);
+            });
         }
 
         // Process pods - find problematic ones
@@ -676,18 +610,7 @@ impl WorkloadHealthComponent {
                     age,
                 };
 
-                ns_map
-                    .entry(ns)
-                    .or_insert_with(|| NamespaceSummary {
-                        name: pod_info.namespace.clone(),
-                        health: HealthState::Healthy,
-                        workloads: Vec::new(),
-                        problem_pods: Vec::new(),
-                        total_workloads: 0,
-                        healthy_workloads: 0,
-                    })
-                    .problem_pods
-                    .push(pod_info);
+                namespace(&mut ns_map, &ns).problem_pods.push(pod_info);
             }
         }
 
