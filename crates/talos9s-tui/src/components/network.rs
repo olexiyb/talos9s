@@ -130,16 +130,6 @@ fn handshake_age(time: &str, now: i64) -> Option<i64> {
     (t > 0).then(|| (now - t).max(0))
 }
 
-/// `45s`, `3m`, `2h`, `5d`
-fn format_age_secs(secs: i64) -> String {
-    match secs {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
-}
-
 /// Whether a node's TCP state counts are worth a look (see the thresholds)
 fn conn_warnings(cc: &ConnectionCounts) -> bool {
     cc.time_wait >= TIME_WAIT_WARN
@@ -2475,7 +2465,10 @@ impl NetworkStatsComponent {
                     .and_then(|t| handshake_age(t, now))
                 {
                     Some(age) => (
-                        format!("{} ago", format_age_secs(age)),
+                        format!(
+                            "{} ago",
+                            talos9s_core::format_secs_human(age.unsigned_abs())
+                        ),
                         if age > HANDSHAKE_STALE_SECS {
                             Style::default().fg(Color::Yellow)
                         } else {
@@ -4205,8 +4198,6 @@ mod tests {
         // Never: Go's zero time
         assert_eq!(handshake_age("0001-01-01T00:00:00Z", now), None);
         assert_eq!(handshake_age("garbage", now), None);
-        assert_eq!(format_age_secs(98), "1m");
-        assert_eq!(format_age_secs(45), "45s");
     }
 
     #[test]

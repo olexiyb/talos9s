@@ -102,8 +102,15 @@ pub fn format_bytes_compact(bytes: u64) -> String {
 /// assert_eq!(format_duration_human(Duration::days(3)), "3d");
 /// ```
 pub fn format_duration_human(duration: Duration) -> String {
-    let secs = duration.num_seconds().abs();
+    format_secs_human(duration.num_seconds().unsigned_abs())
+}
 
+/// [`format_duration_human`] for a number of seconds: `45s`, `3m`, `2h`, `5d`
+///
+/// ```
+/// assert_eq!(talos9s_core::format_secs_human(98), "1m");
+/// ```
+pub fn format_secs_human(secs: u64) -> String {
     if secs < 60 {
         format!("{}s", secs)
     } else if secs < 3600 {

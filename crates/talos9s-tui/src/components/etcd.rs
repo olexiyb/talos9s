@@ -401,15 +401,6 @@ fn log_line(line: &str) -> Line<'static> {
     ])
 }
 
-/// "42s", "5m", "3h"
-fn short_age(age: Duration) -> String {
-    match age.as_secs() {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s => format!("{}h", s / 3600),
-    }
-}
-
 /// Members reporting errors, one line each
 fn member_errors(members: &[EtcdMember]) -> Vec<String> {
     members
@@ -851,7 +842,12 @@ impl EtcdComponent {
             let age = self
                 .state
                 .elapsed_since_refresh()
-                .map(|d| format!(" — data from {} ago", short_age(d)))
+                .map(|d| {
+                    format!(
+                        " — data from {} ago",
+                        talos9s_core::format_secs_human(d.as_secs())
+                    )
+                })
                 .unwrap_or_default();
             line.spans.push(Span::styled(
                 format!("    ⚠ {error}{age}"),

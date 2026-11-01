@@ -581,7 +581,7 @@ impl WorkloadHealthComponent {
                 .creation_timestamp
                 .as_ref()
                 .and_then(|ts| chrono::DateTime::from_timestamp(ts.0.as_second(), 0))
-                .map(|ts| Self::format_age(&ts))
+                .map(|ts| talos9s_core::format_duration_human(chrono::Utc::now() - ts))
                 .unwrap_or_else(|| "?".to_string());
 
             // Track global counts
@@ -800,22 +800,6 @@ impl WorkloadHealthComponent {
         }
 
         (restarts, None)
-    }
-
-    /// Format age from timestamp
-    fn format_age(ts: &chrono::DateTime<chrono::Utc>) -> String {
-        let now = chrono::Utc::now();
-        let duration = now.signed_duration_since(*ts);
-
-        if duration.num_days() > 0 {
-            format!("{}d", duration.num_days())
-        } else if duration.num_hours() > 0 {
-            format!("{}h", duration.num_hours())
-        } else if duration.num_minutes() > 0 {
-            format!("{}m", duration.num_minutes())
-        } else {
-            format!("{}s", duration.num_seconds())
-        }
     }
 
     /// Navigate to previous item
