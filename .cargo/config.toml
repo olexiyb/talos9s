@@ -1,0 +1,10 @@
+[alias]
+# Run the app and rebuild + restart it on every source change (cargo-watch):
+#   TALOS9S_CONTEXT=bc cargo dev
+# (an array: cargo splits a string alias on spaces, so quoting wouldn't survive)
+dev = [
+    "watch", "--quiet", "--clear",
+    "--watch", "src", "--watch", "crates",
+    "--ignore", "crates/talos-rs/src/generated/**",
+    "--exec", "run --quiet",
+]

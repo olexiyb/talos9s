@@ -15,7 +15,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Talos context to use (from talosconfig)
-    #[arg(short, long)]
+    #[arg(short, long, env = "TALOS9S_CONTEXT")]
     context: Option<String>,
 
     /// Path to talosconfig file

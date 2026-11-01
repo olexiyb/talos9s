@@ -316,6 +316,7 @@ impl App {
     pub async fn run(&mut self) -> Result<()> {
         // Install panic hook
         tui::install_panic_hook();
+        tui::exit_on_signal();
 
         // Initialize terminal
         let mut terminal = tui::init()?;
