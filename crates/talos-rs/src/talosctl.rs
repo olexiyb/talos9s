@@ -113,6 +113,15 @@ pub struct MachineConfigText {
     pub staged_differs: bool,
 }
 
+/// KubeSpan settings that decide how it combines with a CNI
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KubeSpanSettings {
+    pub enabled: bool,
+    /// Pod and service networks are routed over KubeSpan (needed by
+    /// Cilium's native routing)
+    pub advertise_kubernetes_networks: bool,
+}
+
 /// A system extension installed on a node (ExtensionStatus resource)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExtensionInfo {
@@ -885,6 +894,18 @@ pub async fn is_kubespan_enabled_for_node(
         .is_ok_and(|output| kubespan_enabled_in(&output))
 }
 
+/// KubeSpan settings of a node, from its KubeSpanConfig resource
+///
+/// Executes: `talosctl -n <node> get kubespanconfig -o yaml`
+pub async fn get_kubespan_settings_for_node(
+    context: Option<&str>,
+    node_ip: &str,
+    config_path: Option<&str>,
+) -> Result<KubeSpanSettings, TalosError> {
+    let output = get_resource_yaml(context, node_ip, config_path, &["kubespanconfig"]).await?;
+    Ok(parse_kubespan_settings(&output))
+}
+
 /// Get the machine config resource of a node in `context` (async, with timeout)
 pub async fn get_machine_config_for_node(
     context: Option<&str>,
@@ -1118,6 +1139,21 @@ pub fn is_kubespan_enabled(node: &str) -> bool {
 }
 
 /// Whether `talosctl get kubespanconfig -o yaml` output shows `enabled: true`
+/// `spec.enabled` and `spec.advertiseKubernetesNetworks` of KubeSpanConfig;
+/// both false when the resource is absent (KubeSpan not configured)
+fn parse_kubespan_settings(output: &str) -> KubeSpanSettings {
+    resource_documents(output)
+        .find_map(|doc| {
+            let spec = doc.get("spec")?;
+            let flag = |key: &str| spec.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+            Some(KubeSpanSettings {
+                enabled: flag("enabled"),
+                advertise_kubernetes_networks: flag("advertiseKubernetesNetworks"),
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn kubespan_enabled_in(output: &str) -> bool {
     let trimmed = output.trim();
     !trimmed.is_empty() && trimmed.contains("KubeSpanConfig") && trimmed.contains("enabled: true")
@@ -1781,6 +1817,33 @@ mod tests {
         let staged = super::parse_machine_config_text(&machine_config_output("bc9")).unwrap();
         assert!(staged.staged_differs);
         assert!(super::parse_machine_config_text("").is_err());
+    }
+
+    #[test]
+    fn parses_kubespan_settings() {
+        let yaml = "node: 10.0.0.1
+metadata:
+    namespace: config
+    type: KubeSpanConfigs.kubespan.talos.dev
+    id: kubespan
+spec:
+    enabled: true
+    clusterId: x
+    forceRouting: true
+    advertiseKubernetesNetworks: true
+    mtu: 1420
+";
+        assert_eq!(
+            super::parse_kubespan_settings(yaml),
+            super::KubeSpanSettings {
+                enabled: true,
+                advertise_kubernetes_networks: true
+            }
+        );
+        assert_eq!(
+            super::parse_kubespan_settings(""),
+            super::KubeSpanSettings::default()
+        );
     }
 
     #[test]

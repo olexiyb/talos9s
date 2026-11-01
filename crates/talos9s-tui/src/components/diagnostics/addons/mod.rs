@@ -106,8 +106,9 @@ pub async fn detect_addons(client: &Client) -> DetectedAddons {
 
 /// Detect addons by checking for their CRDs
 async fn detect_addons_via_crds(client: &Client) -> Result<DetectedAddons, kube::Error> {
+    // Names only: full CRDs carry their schemas, megabytes on a busy cluster
     let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
-    let crd_list = crds.list(&ListParams::default()).await?;
+    let crd_list = crds.list_metadata(&ListParams::default()).await?;
 
     let mut addons = DetectedAddons::default();
 
@@ -169,7 +170,7 @@ async fn detect_addons_via_pods(client: &Client) -> Result<DetectedAddons, kube:
 
     for ns in namespaces {
         let pods: Api<Pod> = Api::namespaced(client.clone(), ns);
-        if let Ok(pod_list) = pods.list(&ListParams::default().limit(1)).await
+        if let Ok(pod_list) = pods.list_metadata(&ListParams::default().limit(1)).await
             && !pod_list.items.is_empty()
         {
             match ns {
@@ -183,7 +184,7 @@ async fn detect_addons_via_pods(client: &Client) -> Result<DetectedAddons, kube:
 
     // Also check kube-system for ingress controllers
     let kube_system_pods: Api<Pod> = Api::namespaced(client.clone(), "kube-system");
-    if let Ok(pod_list) = kube_system_pods.list(&ListParams::default()).await {
+    if let Ok(pod_list) = kube_system_pods.list_metadata(&ListParams::default()).await {
         for pod in pod_list.items {
             let name = pod.metadata.name.unwrap_or_default().to_lowercase();
             if name.contains("ingress-nginx") {

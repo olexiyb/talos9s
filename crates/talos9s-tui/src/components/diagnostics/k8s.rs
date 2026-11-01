@@ -335,19 +335,6 @@ fn ambient_context_for_ca(ca: &str) -> Option<(kube::config::Kubeconfig, String)
     Some((kubeconfig, context))
 }
 
-/// Create a Kubernetes client, optionally using a different client to fetch kubeconfig
-///
-/// This allows fetching kubeconfig from a control plane node while diagnosing a worker node.
-/// Legacy function - prefer create_k8s_client_with_source for new code.
-pub async fn create_k8s_client_with_kubeconfig_source(
-    talos_client: &TalosClient,
-    kubeconfig_client: Option<&TalosClient>,
-) -> Result<Client, K8sError> {
-    let (client, _source) =
-        create_k8s_client_with_source(talos_client, None, kubeconfig_client).await?;
-    Ok(client)
-}
-
 /// A cluster node as seen by the Kubernetes API.
 ///
 /// Every node — control plane and worker — registers a `Node` object with the
@@ -641,11 +628,20 @@ impl PodHealthInfo {
 /// Check pod health across all namespaces using K8s API
 ///
 /// This is the authoritative way to check for crashing pods - no log parsing!
-pub async fn check_pod_health(client: &Client) -> Result<PodHealthInfo, K8sError> {
+pub async fn check_pod_health(
+    client: &Client,
+    node: Option<&str>,
+) -> Result<PodHealthInfo, K8sError> {
     let pods: Api<Pod> = Api::all(client.clone());
+    // A node's own pods: the API filters them, instead of sending every pod
+    // of the cluster (seconds on a big one)
+    let params = match node {
+        Some(node) => ListParams::default().fields(&format!("spec.nodeName={node}")),
+        None => ListParams::default(),
+    };
 
     let pod_list = pods
-        .list(&ListParams::default())
+        .list(&params)
         .await
         .map_err(|e| K8sError::ApiError(e.to_string()))?;
 

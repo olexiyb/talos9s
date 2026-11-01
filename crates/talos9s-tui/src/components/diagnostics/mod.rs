@@ -450,6 +450,10 @@ impl DiagnosticsComponent {
         self.state.start_loading();
 
         let timeout = std::time::Duration::from_secs(15);
+        // Where a refresh spends its time, for the debug log
+        let addr = self.data().map(|d| d.address.clone()).unwrap_or_default();
+        let started = std::time::Instant::now();
+        let mut lap = started;
 
         // Fetch platform info first
         if let Ok(versions) = client.version().await
@@ -461,6 +465,8 @@ impl DiagnosticsComponent {
             tracing::info!("Detected platform: {}", data.context.platform);
         }
 
+        log_stage(&addr, "version", &mut lap);
+
         // Get CPU count for load threshold scaling
         if let Ok(cpu_info) = client.cpu_info().await
             && let Some(info) = cpu_info.first()
@@ -470,23 +476,24 @@ impl DiagnosticsComponent {
             tracing::info!("Detected {} CPUs", data.context.cpu_count);
         }
 
-        // Try to create K8s client once for all K8s-based checks
-        // For worker nodes, use the control plane endpoint to fetch kubeconfig
-        let kubeconfig_client = if let Some(ref cp_endpoint) = self.controlplane_endpoint {
-            tracing::info!(
-                "Worker node: using control plane {} for kubeconfig",
-                cp_endpoint
-            );
-            Some(client.with_node(cp_endpoint))
-        } else {
-            None
-        };
+        log_stage(&addr, "cpu info", &mut lap);
 
-        let k8s_client = match k8s::create_k8s_client_with_kubeconfig_source(
-            &client,
-            kubeconfig_client.as_ref(),
-        )
-        .await
+        // One Kubernetes client for all checks, pinned to this node's cluster:
+        // its kubeconfig comes from a control plane (the node itself, or the
+        // one given for a worker), and a KUBECONFIG context is used only if
+        // it names the same cluster. Unpinned, the ambient current context
+        // would answer, possibly for another cluster.
+        let pin = self.controlplane_endpoint.clone().or_else(|| {
+            self.data()
+                .filter(|d| d.context.node_role == "controlplane")
+                .and_then(|d| d.context.node_endpoint.clone())
+        });
+        if let Some(cp) = &pin {
+            tracing::info!("Kubernetes client pinned to control plane {}", cp);
+        }
+        let k8s_client = match k8s::create_k8s_client_with_source(&client, pin.as_deref(), None)
+            .await
+            .map(|(client, _source)| client)
         {
             Ok(client) => {
                 tracing::info!("K8s client created successfully");
@@ -508,57 +515,74 @@ impl DiagnosticsComponent {
             }
         };
 
-        // Detect CNI type (uses K8s API if available, falls back to file checks)
-        let (cni_type, cni_info) = cni::detect_cni_with_client(&client, k8s_client.as_ref()).await;
+        log_stage(&addr, "kubernetes client", &mut lap);
+
+        // CNI, the node's pods and the cluster's addons don't depend on each
+        // other: ask at once
+        let hostname = self
+            .data()
+            .map(|d| d.context.hostname.clone())
+            .unwrap_or_default();
+        let ((cni_type, cni_info), pod_health, detected_addons) = tokio::join!(
+            cni::detect_cni_with_client(&client, k8s_client.as_ref()),
+            async {
+                match &k8s_client {
+                    Some(kc) => Some(k8s::check_pod_health(kc, Some(&hostname)).await),
+                    None => None,
+                }
+            },
+            async {
+                match &k8s_client {
+                    Some(kc) => Some(addons::detect_addons(kc).await),
+                    None => None,
+                }
+            },
+        );
+        log_stage(&addr, "CNI, pods and addons", &mut lap);
         if let Some(data) = self.data_mut() {
             data.context.cni_type = cni_type;
             data.context.cni_info = cni_info.clone();
             tracing::info!("Detected CNI: {:?}", data.context.cni_type);
         }
 
-        // Get pod health from K8s API (reusing the same client)
-        if let Some(ref kc) = k8s_client {
-            match k8s::check_pod_health(kc).await {
-                Ok(health) => {
-                    // Convert k8s::PodHealthInfo to types::PodHealthInfo
-                    let pod_health = PodHealthInfo {
-                        crashing: health
-                            .crashing
-                            .iter()
-                            .map(|p| UnhealthyPodInfo {
-                                name: p.name.clone(),
-                                namespace: p.namespace.clone(),
-                                state: p.state.clone(),
-                                restart_count: p.restart_count,
-                            })
-                            .collect(),
-                        image_pull_errors: health
-                            .image_pull_errors
-                            .iter()
-                            .map(|p| UnhealthyPodInfo {
-                                name: p.name.clone(),
-                                namespace: p.namespace.clone(),
-                                state: p.state.clone(),
-                                restart_count: p.restart_count,
-                            })
-                            .collect(),
-                        total_pods: health.total_pods,
-                    };
-                    if let Some(data) = self.data_mut() {
-                        data.context.pod_health = Some(pod_health);
-                    }
-                    tracing::info!("Pod health check complete: {} pods", health.total_pods);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to check pod health via K8s API: {}", e);
+        match pod_health {
+            Some(Ok(health)) => {
+                // Convert k8s::PodHealthInfo to types::PodHealthInfo
+                let pod_health = PodHealthInfo {
+                    crashing: health
+                        .crashing
+                        .iter()
+                        .map(|p| UnhealthyPodInfo {
+                            name: p.name.clone(),
+                            namespace: p.namespace.clone(),
+                            state: p.state.clone(),
+                            restart_count: p.restart_count,
+                        })
+                        .collect(),
+                    image_pull_errors: health
+                        .image_pull_errors
+                        .iter()
+                        .map(|p| UnhealthyPodInfo {
+                            name: p.name.clone(),
+                            namespace: p.namespace.clone(),
+                            state: p.state.clone(),
+                            restart_count: p.restart_count,
+                        })
+                        .collect(),
+                    total_pods: health.total_pods,
+                };
+                tracing::info!("Pod health check complete: {} pods", health.total_pods);
+                if let Some(data) = self.data_mut() {
+                    data.context.pod_health = Some(pod_health);
                 }
             }
-
-            // Detect installed addons
-            let detected_addons = addons::detect_addons(kc).await;
-            if let Some(data) = self.data_mut() {
-                data.detected_addons = detected_addons;
-            }
+            Some(Err(e)) => tracing::warn!("Failed to check pod health via K8s API: {}", e),
+            None => {}
+        }
+        if let Some(detected_addons) = detected_addons
+            && let Some(data) = self.data_mut()
+        {
+            data.detected_addons = detected_addons;
         }
 
         // Get context and detected_addons for use in async block
@@ -569,22 +593,25 @@ impl DiagnosticsComponent {
             .unwrap_or_default();
 
         let result = tokio::time::timeout(timeout, async {
-            // Run core checks
-            let mut system_checks = core::run_system_checks(&client, &context).await;
-            let kubernetes_checks = core::run_kubernetes_checks(&client, &context).await;
-            let service_checks = core::run_service_checks(&client, &context).await;
-
-            // Run certificate checks and add to system checks
-            let cert_checks =
-                core::run_certificate_checks(&client, &context, self.config_path.as_deref()).await;
+            // Independent checks: run at once
+            let mut lap = std::time::Instant::now();
+            let (
+                mut system_checks,
+                kubernetes_checks,
+                service_checks,
+                cert_checks,
+                cni_checks,
+                addon_checks,
+            ) = tokio::join!(
+                core::run_system_checks(&client, &context),
+                core::run_kubernetes_checks(&client, &context),
+                core::run_service_checks(&client, &context),
+                core::run_certificate_checks(&client, &context, self.config_path.as_deref()),
+                cni::run_cni_checks(&client, &context, k8s_client.as_ref()),
+                addons::run_addon_checks(k8s_client.as_ref(), &detected_addons, &context),
+            );
             system_checks.extend(cert_checks);
-
-            // Run CNI-specific checks
-            let cni_checks = cni::run_cni_checks(&client, &context, k8s_client.as_ref()).await;
-
-            // Run addon-specific checks
-            let addon_checks =
-                addons::run_addon_checks(k8s_client.as_ref(), &detected_addons, &context).await;
+            log_stage(&addr, "checks", &mut lap);
 
             (
                 system_checks,
@@ -596,6 +623,7 @@ impl DiagnosticsComponent {
         })
         .await;
 
+        tracing::debug!("diagnostics {}: refresh took {:?}", addr, started.elapsed());
         match result {
             Ok((system, kubernetes, services, cni, addons_result)) => {
                 if let Some(data) = self.data_mut() {
@@ -914,6 +942,13 @@ impl DiagnosticsComponent {
         let content = Paragraph::new(lines);
         frame.render_widget(content, inner);
     }
+}
+
+/// Log how long a refresh stage took since `lap`, and restart the lap
+fn log_stage(address: &str, stage: &str, lap: &mut std::time::Instant) {
+    let now = std::time::Instant::now();
+    tracing::debug!("diagnostics {}: {} took {:?}", address, stage, now - *lap);
+    *lap = now;
 }
 
 impl Component for DiagnosticsComponent {

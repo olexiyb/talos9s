@@ -82,6 +82,22 @@ Live tests against real clusters are `#[ignore]`d and read
 3. Graceful degradation: with the API or node unreachable, nothing crashes or hangs.
 4. Stale log immunity: old log lines don't change the current verdict.
 
+## Releasing
+
+`CHANGELOG.md` is the release notes: on a `v*` tag the release workflow
+(cargo-dist) builds binaries and installers and puts the version's section
+into the GitHub release. Don't edit the changelog per commit; write it once
+per release:
+
+1. Draft `## X.Y.Z` from `git log vPREV..HEAD`: features, fixes, changes,
+   written for users, related commits merged, internal work left out,
+   behavior changes (keys, defaults, files) called out.
+2. The user reviews it.
+3. Bump `version` in the root `Cargo.toml` (and `Cargo.lock` via a build),
+   commit `release: X.Y.Z`, tag `vX.Y.Z`, push `main` and the tag.
+4. Watch the Release workflow; check the release page and that
+   `releases/latest/download/talos9s-installer.sh` resolves.
+
 ## Documentation
 
 | Doc | Purpose |

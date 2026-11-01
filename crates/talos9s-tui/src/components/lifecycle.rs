@@ -564,7 +564,7 @@ impl LifecycleComponent {
 
         // Fetch pod and PDB health from K8s
         let (pod_health, pdb_health) = if let Some(k8s) = &self.k8s_client {
-            let pod_result = check_pod_health(k8s).await;
+            let pod_result = check_pod_health(k8s, None).await;
             let pdb_result = check_pdb_health(k8s).await;
 
             (pod_result.ok(), pdb_result.ok())

@@ -5,7 +5,7 @@
 //! - Cilium Operator deployment status
 //! - Hubble Relay deployment status (if enabled)
 //! - Cilium eBPF mode detection (kube-proxy replacement)
-//! - Cilium + KubeSpan compatibility warning
+//! - Cilium + KubeSpan: native routing set up the way Talos documents
 //!
 //! Philosophy: Check actual K8s API state, not logs. The pod status
 //! and readiness conditions are the definitive indicators of health.
@@ -14,12 +14,12 @@ use crate::components::diagnostics::types::{
     CniInfo, CniPodInfo, DiagnosticCheck, DiagnosticContext,
 };
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{ConfigMap, Pod};
 use kube::{
     Client,
     api::{Api, ListParams},
 };
-use talos_rs::is_kubespan_enabled_for_node;
+use talos_rs::{KubeSpanSettings, get_kubespan_settings_for_node};
 
 /// Run Cilium-specific diagnostic checks
 pub async fn run_cilium_checks(
@@ -329,64 +329,80 @@ pub async fn detect_ebpf_mode(client: &Client) -> bool {
     }
 }
 
-/// Check for Cilium eBPF + KubeSpan compatibility issues
-///
-/// Cilium in eBPF mode (kube-proxy replacement) combined with KubeSpan
-/// can cause asymmetric routing issues because:
-/// - KubeSpan routes traffic through WireGuard tunnels between nodes
-/// - Cilium eBPF mode manages service routing at the eBPF level
-/// - This combination can cause packets to be sent via different paths
-///   for outbound vs inbound traffic, breaking connection tracking
-///
-/// Returns Some(check) if both conditions are detected, None otherwise.
+/// Talos' guide to combining Cilium and KubeSpan
+const CILIUM_KUBESPAN_DOCS: &str = "https://docs.siderolabs.com/talos/v1.14/networking/kubespan";
+
+/// Cilium + KubeSpan, from Cilium's settings (`kube-system/cilium-config`)
+/// and the node's KubeSpanConfig. `None` without KubeSpan, or when either
+/// can't be read: unknown is not a problem.
 async fn check_kubespan_compatibility(
     ctx: &DiagnosticContext,
     k8s_client: &Client,
 ) -> Option<DiagnosticCheck> {
-    // First check if Cilium is in eBPF mode (no kube-proxy)
-    let is_ebpf_mode = detect_ebpf_mode(k8s_client).await;
-
-    if !is_ebpf_mode {
-        // Cilium is not in eBPF mode, no compatibility issue
+    let endpoint = ctx.node_endpoint.as_ref()?;
+    let kubespan = get_kubespan_settings_for_node(
+        ctx.talos_context.as_deref(),
+        endpoint,
+        ctx.config_path.as_deref(),
+    )
+    .await
+    .ok()?;
+    if !kubespan.enabled {
         return None;
     }
+    let config_maps: Api<ConfigMap> = Api::namespaced(k8s_client.clone(), "kube-system");
+    let data = config_maps.get("cilium-config").await.ok()?.data?;
+    let setting = |key: &str| data.get(key).map(String::as_str);
+    Some(kubespan_compatibility(
+        setting("routing-mode"),
+        setting("enable-host-legacy-routing"),
+        kubespan,
+    ))
+}
 
-    // Check if KubeSpan is enabled
-    let kubespan_enabled = if let Some(ref endpoint) = ctx.node_endpoint {
-        is_kubespan_enabled_for_node(
-            ctx.talos_context.as_deref(),
-            endpoint,
-            ctx.config_path.as_deref(),
-        )
-        .await
-    } else {
-        false
-    };
-
-    if kubespan_enabled {
-        // Both Cilium eBPF and KubeSpan are enabled - this is problematic
-        Some(
-            DiagnosticCheck::warn(
-                "cilium_kubespan_compat",
-                "Cilium + KubeSpan",
-                "Compatibility issue detected",
-            )
-            .with_details(
-                "Cilium is running in eBPF mode (kube-proxy replacement) with KubeSpan enabled.\n\n\
-            This combination can cause networking issues due to asymmetric routing:\n\
-            - KubeSpan routes inter-node traffic through WireGuard tunnels\n\
-            - Cilium eBPF manages service routing at the kernel level\n\
-            - Packets may take different paths for outbound vs inbound traffic\n\
-            - Connection tracking can be broken, causing intermittent failures\n\n\
-            Recommendations:\n\
-            1. Disable KubeSpan if using Cilium eBPF mode\n\
-            2. Or use Cilium in legacy mode (with kube-proxy) if KubeSpan is required\n\n\
-            See: https://www.talos.dev/latest/kubernetes-guides/network/kubespan/",
-            ),
+/// Talos 1.13+ documents two working setups: Cilium's default tunnel
+/// routing as is, and native routing with legacy host routing (eBPF host
+/// routing bypasses the kernel routing table KubeSpan uses) plus KubeSpan
+/// advertising the pod networks
+fn kubespan_compatibility(
+    routing_mode: Option<&str>,
+    host_legacy_routing: Option<&str>,
+    kubespan: KubeSpanSettings,
+) -> DiagnosticCheck {
+    const ID: &str = "cilium_kubespan_compat";
+    const NAME: &str = "Cilium + KubeSpan";
+    if routing_mode != Some("native") {
+        return DiagnosticCheck::pass(ID, NAME, "tunnel routing, works with KubeSpan as is");
+    }
+    let mut problems = Vec::new();
+    if host_legacy_routing != Some("true") {
+        problems.push(
+            "eBPF host routing is on (set bpf.hostLegacyRouting: true): it bypasses the \
+             kernel routes KubeSpan uses",
+        );
+    }
+    if !kubespan.advertise_kubernetes_networks {
+        problems
+            .push("KubeSpan doesn't route pod networks (set advertiseKubernetesNetworks: true)");
+    }
+    if problems.is_empty() {
+        DiagnosticCheck::pass(
+            ID,
+            NAME,
+            "native routing with legacy host routing and pod networks over KubeSpan",
         )
     } else {
-        // KubeSpan not enabled, no issue
-        None
+        DiagnosticCheck::warn(
+            ID,
+            NAME,
+            &format!("native routing: {}", problems.join("; ")),
+        )
+        .with_details(&format!(
+            "Cilium routes pods natively, which Talos supports with KubeSpan only when \
+             eBPF host routing is off and KubeSpan advertises the Kubernetes networks. \
+             Otherwise traffic between nodes can take different paths each way and \
+             connections break.\n\nSee: {CILIUM_KUBESPAN_DOCS}"
+        ))
     }
 }
 
@@ -401,13 +417,80 @@ fn determine_overall_status(
     let has_failure = checks.iter().any(|c| c.status == CheckStatus::Fail);
     let has_warning = checks.iter().any(|c| c.status == CheckStatus::Warn);
 
+    // Name the checks behind the summary, so it says something on its own
+    let named = |status: CheckStatus| {
+        checks
+            .iter()
+            .filter(|c| c.status == status)
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if has_failure {
-        DiagnosticCheck::fail("cni", "CNI (Cilium)", "Some components unhealthy", None)
+        DiagnosticCheck::fail(
+            "cni",
+            "CNI (Cilium)",
+            &format!("unhealthy: {}", named(CheckStatus::Fail)),
+            None,
+        )
     } else if has_warning {
-        DiagnosticCheck::warn("cni", "CNI (Cilium)", "Minor issues detected")
+        DiagnosticCheck::warn(
+            "cni",
+            "CNI (Cilium)",
+            &format!("warnings in {}", named(CheckStatus::Warn)),
+        )
     } else if ctx.cni_info.is_some() {
         DiagnosticCheck::pass("cni", "CNI (Cilium)", "OK")
     } else {
         DiagnosticCheck::pass("cni", "CNI (Cilium)", "Detected")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::diagnostics::types::CheckStatus;
+
+    fn kubespan(advertise: bool) -> KubeSpanSettings {
+        KubeSpanSettings {
+            enabled: true,
+            advertise_kubernetes_networks: advertise,
+        }
+    }
+
+    /// The two setups Talos documents pass: kprod (tunnel) and bc (native
+    /// routing with legacy host routing and pod networks over KubeSpan)
+    #[test]
+    fn documented_setups_pass() {
+        let tunnel = kubespan_compatibility(Some("tunnel"), Some("true"), kubespan(false));
+        assert_eq!(tunnel.status, CheckStatus::Pass);
+        let native = kubespan_compatibility(Some("native"), Some("true"), kubespan(true));
+        assert_eq!(native.status, CheckStatus::Pass);
+        // Cilium's default when the key is missing is tunnel routing
+        let default = kubespan_compatibility(None, None, kubespan(false));
+        assert_eq!(default.status, CheckStatus::Pass);
+    }
+
+    /// Native routing names what's missing, so the warning stands on its own
+    #[test]
+    fn native_routing_names_what_is_missing() {
+        let check = kubespan_compatibility(Some("native"), Some("false"), kubespan(false));
+        assert_eq!(check.status, CheckStatus::Warn);
+        assert!(check.message.contains("bpf.hostLegacyRouting: true"));
+        assert!(check.message.contains("advertiseKubernetesNetworks: true"));
+
+        let check = kubespan_compatibility(Some("native"), Some("true"), kubespan(false));
+        assert!(!check.message.contains("hostLegacyRouting"));
+        assert!(check.message.contains("advertiseKubernetesNetworks"));
+    }
+
+    #[test]
+    fn summary_names_the_checks_behind_it() {
+        let checks = vec![
+            DiagnosticCheck::pass("cilium_agents", "Cilium agents", "4/4"),
+            DiagnosticCheck::warn("hubble_relay", "Hubble Relay", "0/1 ready"),
+        ];
+        let summary = determine_overall_status(&checks, &DiagnosticContext::default());
+        assert_eq!(summary.message, "warnings in Hubble Relay");
     }
 }

@@ -101,10 +101,18 @@ pub async fn run_service_checks(
                         checks.push(DiagnosticCheck::pass(&id, &service.id, &status_msg));
                     } else if health.is_none() {
                         // No health check defined (dashboard, system extensions):
-                        // a running service is fine; otherwise flag its state
-                        // without claiming it is unhealthy.
+                        // a running service is fine, and so is a one-shot one
+                        // (e.g. an extension's setup task) that finished, as in
+                        // the cluster view; otherwise flag its state without
+                        // claiming it is unhealthy.
                         if service.state == "Running" {
                             checks.push(DiagnosticCheck::pass(&id, &service.id, &status_msg));
+                        } else if service.state == "Finished" {
+                            checks.push(DiagnosticCheck::pass(
+                                &id,
+                                &service.id,
+                                "Finished (one-shot task, completed)",
+                            ));
                         } else {
                             checks.push(DiagnosticCheck::warn(&id, &service.id, &status_msg));
                         }
@@ -204,7 +212,7 @@ pub async fn run_kubernetes_checks(
             checks.push(DiagnosticCheck::pass(
                 "pod_health",
                 "Pod Health",
-                &format!("{} pods", pod_health.total_pods),
+                &format!("{} pods on this node", pod_health.total_pods),
             ));
         }
     } else {
