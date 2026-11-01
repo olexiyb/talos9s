@@ -2,7 +2,7 @@
 
 use crate::action::Action;
 use crate::components::BackgroundRefresh;
-use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth};
+use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth, TreeSelection};
 use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
 use crate::components::{
@@ -161,6 +161,9 @@ pub struct App {
     hint: Option<String>,
     /// Title of the view's window: the view and what it shows
     pane_title: String,
+    /// A node view opened from a group view (Enter in its table): the group
+    /// row to reselect on Esc, so the group view comes back
+    drill_return: Option<(TreeSelection, String)>,
     /// View under an operations overlay, shown again when it closes
     overlay_return: View,
     /// Nodes pane and view areas of the last frame, for the mouse
@@ -261,6 +264,7 @@ impl App {
             pending_target: None,
             hint: None,
             pane_title: String::new(),
+            drill_return: None,
             overlay_return: View::Cluster,
             tree_area: Rect::default(),
             view_area: Rect::default(),
@@ -823,6 +827,21 @@ impl App {
     /// Route a key press: overlays first, then the layout keys, then the
     /// tree or the view on the right, whichever has the keyboard
     fn dispatch_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // Where each key goes, for the debug log (--debug): tree or view,
+        // and which view
+        tracing::debug!(
+            "key {:?} {:?} -> {} ({:?}, tree pane {:?}, captures text {})",
+            key.code,
+            key.modifiers,
+            if self.view == View::Cluster || !self.view_has_focus {
+                "tree"
+            } else {
+                "view"
+            },
+            self.view,
+            self.cluster.focused_pane(),
+            self.view_captures_text()
+        );
         if matches!(self.view, View::NodeOperations | View::RollingOperations) {
             return self.dispatch_view_key(key);
         }
@@ -832,7 +851,54 @@ impl App {
         if self.view == View::Cluster || !self.view_has_focus {
             return self.dispatch_tree_key(key);
         }
-        self.dispatch_view_key(key)
+        // Left returns to the tree unless the view is using it (a scrolled
+        // config, a Yes/No dialog); Right is the view's
+        if key.code == KeyCode::Left && !self.view_uses_horizontal_keys() {
+            self.view_has_focus = false;
+            return Ok(None);
+        }
+        // Tab is the next window (Nodes → menu → view → Nodes) unless the
+        // view has a tab bar of its own
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && !self.view_uses_tab_key() {
+            self.view_has_focus = false;
+            self.cluster.set_focused_pane(if key.code == KeyCode::Tab {
+                FocusedPane::Nodes
+            } else {
+                FocusedPane::Menu
+            });
+            return Ok(None);
+        }
+        let action = self.dispatch_view_key(key)?;
+        // q quits from anywhere, as in the tree: a view answering it with
+        // Back had no other use for it (a dialog closing on q answers None)
+        if key.code == KeyCode::Char('q') && matches!(action, Some(Action::Back)) {
+            return Ok(Some(Action::Quit));
+        }
+        Ok(action)
+    }
+
+    fn view_uses_tab_key(&self) -> bool {
+        match self.view {
+            View::NodeInfo => self.node_info.as_ref().is_some_and(|c| c.uses_tab_key()),
+            View::Storage => self.storage.as_ref().is_some_and(|c| c.uses_tab_key()),
+            View::Network => self.network.as_ref().is_some_and(|c| c.uses_tab_key()),
+            View::Diagnostics => self.diagnostics.as_ref().is_some_and(|c| c.uses_tab_key()),
+            _ => false,
+        }
+    }
+
+    fn view_uses_horizontal_keys(&self) -> bool {
+        match self.view {
+            View::NodeInfo => self
+                .node_info
+                .as_ref()
+                .is_some_and(|c| c.uses_horizontal_keys()),
+            View::Diagnostics => self
+                .diagnostics
+                .as_ref()
+                .is_some_and(|c| c.uses_horizontal_keys()),
+            _ => false,
+        }
     }
 
     /// `Z` zoom, `[` narrower and `]` wider nodes pane; true when handled
@@ -875,23 +941,28 @@ impl App {
     /// Tab / Shift+Tab move into the view instead.
     fn dispatch_tree_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         let pane = self.cluster.focused_pane();
-        // Esc in the dashboard's services list hands the keyboard back to the
-        // tree, as it does in any other view
-        if self.view == View::Cluster && pane == FocusedPane::Services && key.code == KeyCode::Esc {
-            self.cluster.set_focused_pane(FocusedPane::Nodes);
+        // Esc or Left in the dashboard's services list hands the keyboard back
+        // to the tree side it came from, as in any other view
+        if self.view == View::Cluster
+            && pane == FocusedPane::Services
+            && matches!(key.code, KeyCode::Esc | KeyCode::Left)
+        {
+            self.cluster.leave_services();
             return Ok(None);
         }
-        if self.view != View::Cluster {
+        // Right from the tree goes into the view (the dashboard's services list)
+        let into_view = match key.code {
+            KeyCode::Right => pane != FocusedPane::Services,
             // Enter on any tree row (group rows too: Space folds them)
-            let into_view = match key.code {
-                KeyCode::Tab => pane == FocusedPane::Menu,
-                KeyCode::BackTab | KeyCode::Enter => pane == FocusedPane::Nodes,
-                _ => false,
-            };
-            if into_view {
-                self.focus_view();
-                return Ok(None);
+            KeyCode::Tab => self.view != View::Cluster && pane == FocusedPane::Menu,
+            KeyCode::BackTab | KeyCode::Enter => {
+                self.view != View::Cluster && pane == FocusedPane::Nodes
             }
+            _ => false,
+        };
+        if into_view {
+            self.focus_view();
+            return Ok(None);
         }
         self.focus_after_show =
             key.code == KeyCode::Enter && matches!(pane, FocusedPane::Menu | FocusedPane::Services);
@@ -904,8 +975,8 @@ impl App {
         if self.view == View::Cluster {
             self.cluster.set_focused_pane(FocusedPane::Services);
         } else {
+            // The tree keeps its side (Nodes or menu) for Left / Esc to return to
             self.view_has_focus = true;
-            self.cluster.set_focused_pane(FocusedPane::Nodes);
         }
     }
 
@@ -1171,6 +1242,8 @@ impl App {
     fn show_in_pane(&mut self, item: NavMenuItem, view: View) {
         self.pane = item;
         self.view = view;
+        self.drill_return = None;
+        self.cluster.set_back_hint(None);
         self.cluster.set_active_menu(item);
         let cluster_wide = matches!(
             item,
@@ -1191,7 +1264,7 @@ impl App {
             }
         } else {
             if self.cluster.focused_pane() == FocusedPane::Services {
-                self.cluster.set_focused_pane(FocusedPane::Nodes);
+                self.cluster.leave_services();
             }
             if std::mem::take(&mut self.focus_after_show) {
                 self.view_has_focus = true;
@@ -1396,8 +1469,16 @@ impl App {
                     self.rolling_operations = None;
                     self.view = std::mem::replace(&mut self.overlay_return, View::Cluster);
                 }
-                // A view hands the keyboard back to the tree and stays shown
-                _ => self.view_has_focus = false,
+                // Back to the group view a node was opened from, else the
+                // view hands the keyboard back to the tree and stays shown
+                _ => {
+                    if let Some((selection, _)) = self.drill_return.take() {
+                        self.cluster.restore_selection(selection);
+                        self.cluster.set_back_hint(None);
+                        return Box::pin(self.retarget()).await;
+                    }
+                    self.view_has_focus = false;
+                }
             },
             Action::ShowDashboard => {
                 if self.view != View::Cluster {
@@ -1690,9 +1771,11 @@ impl App {
             }
             Action::ShowDiagnostics(hostname, address, role, cp_endpoint) => {
                 // A node opened from a group view: the tree follows
-                if self.view == View::Group {
+                let from_group = (self.view == View::Group).then(|| {
+                    let group = (self.cluster.selection(), self.cluster.target_title(false));
                     self.cluster.select_node(&hostname);
-                }
+                    group
+                });
                 self.leave_view();
                 // Switch to diagnostics view for a node
                 tracing::info!(
@@ -1726,6 +1809,10 @@ impl App {
 
                 self.diagnostics = Some(diagnostics);
                 self.show_in_pane(NavMenuItem::Diagnostics, View::Diagnostics);
+                if let Some((selection, title)) = from_group {
+                    self.cluster.set_back_hint(Some(title.clone()));
+                    self.drill_return = Some((selection, title));
+                }
             }
             Action::ApplyDiagnosticFix => {
                 // Apply a diagnostic fix (from confirmation dialog)
@@ -1786,9 +1873,11 @@ impl App {
                 self.show_in_pane(NavMenuItem::Processes, View::Processes);
             }
             Action::ShowNetwork(hostname, address) => {
-                if self.view == View::Group {
+                let from_group = (self.view == View::Group).then(|| {
+                    let group = (self.cluster.selection(), self.cluster.target_title(false));
                     self.cluster.select_node(&hostname);
-                }
+                    group
+                });
                 self.leave_view();
                 // Switch to network stats view for a node
                 tracing::info!(
@@ -1815,6 +1904,10 @@ impl App {
 
                 self.network = Some(network);
                 self.show_in_pane(NavMenuItem::Network, View::Network);
+                if let Some((selection, title)) = from_group {
+                    self.cluster.set_back_hint(Some(title.clone()));
+                    self.drill_return = Some((selection, title));
+                }
             }
             Action::ShowSecurity => {
                 self.leave_view();
@@ -1948,9 +2041,11 @@ impl App {
                 self.show_in_pane(item, View::Group);
             }
             Action::ShowStorage(hostname, address) => {
-                if self.view == View::Group {
+                let from_group = (self.view == View::Group).then(|| {
+                    let group = (self.cluster.selection(), self.cluster.target_title(false));
                     self.cluster.select_node(&hostname);
-                }
+                    group
+                });
                 self.leave_view();
                 // Switch to storage view for a node
                 tracing::info!(
@@ -1977,6 +2072,10 @@ impl App {
 
                 self.storage = Some(storage);
                 self.show_in_pane(NavMenuItem::Storage, View::Storage);
+                if let Some((selection, title)) = from_group {
+                    self.cluster.set_back_hint(Some(title.clone()));
+                    self.drill_return = Some((selection, title));
+                }
             }
             Action::ShowNodeInfo(hostname, address, tab) => {
                 self.leave_view();
@@ -2277,6 +2376,62 @@ mod tests {
         app.focus_after_show = false;
         app.handle_action(Action::ShowDashboard).await.unwrap();
         assert_eq!(app.cluster.focused_pane(), FocusedPane::Nodes);
+    }
+
+    /// Right from the tree enters the view, Left returns to the side of the
+    /// tree that had focus (here the menu), so menu → view → menu is two keys
+    #[tokio::test]
+    async fn left_and_right_move_between_tree_and_view() {
+        let mut app = app_with_view(View::Hint);
+        app.cluster.set_focused_pane(FocusedPane::Menu);
+        assert!(app.dispatch_key(key(KeyCode::Right)).unwrap().is_none());
+        assert!(app.view_has_focus);
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Menu);
+
+        assert!(app.dispatch_key(key(KeyCode::Left)).unwrap().is_none());
+        assert!(!app.view_has_focus);
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Menu);
+
+        // On the dashboard, Right enters the services list and Left leaves it
+        let mut app = app_with_view(View::Cluster);
+        app.cluster.set_focused_pane(FocusedPane::Nodes);
+        assert!(app.dispatch_key(key(KeyCode::Right)).unwrap().is_none());
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Services);
+        assert!(app.dispatch_key(key(KeyCode::Left)).unwrap().is_none());
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Nodes);
+    }
+
+    /// Tab cycles the windows: from a view (without its own tabs) to the
+    /// Nodes list, Shift+Tab back to the menu
+    #[test]
+    fn tab_cycles_windows() {
+        let mut app = app_with_view(View::Hint);
+        app.cluster.set_focused_pane(FocusedPane::Menu);
+        assert!(app.dispatch_key(key(KeyCode::Tab)).unwrap().is_none());
+        assert!(app.view_has_focus);
+        assert!(app.dispatch_key(key(KeyCode::Tab)).unwrap().is_none());
+        assert!(!app.view_has_focus);
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Nodes);
+
+        app.view_has_focus = true;
+        assert!(app.dispatch_key(key(KeyCode::BackTab)).unwrap().is_none());
+        assert!(!app.view_has_focus);
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Menu);
+    }
+
+    /// q quits from a view too; Esc only hands the keyboard back
+    #[test]
+    fn q_quits_from_a_view() {
+        let mut app = app_with_view(View::Hint);
+        app.view_has_focus = true;
+        assert!(matches!(
+            app.dispatch_key(key(KeyCode::Char('q'))).unwrap(),
+            Some(Action::Quit)
+        ));
+        assert!(matches!(
+            app.dispatch_key(key(KeyCode::Esc)).unwrap(),
+            Some(Action::Back)
+        ));
     }
 
     /// Esc in the tree returns to the dashboard; a hint shows its reason

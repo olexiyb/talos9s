@@ -1401,7 +1401,7 @@ impl ProcessesComponent {
             Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
             auto_status,
-            Span::styled("[q]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" back"),
         ]);
 

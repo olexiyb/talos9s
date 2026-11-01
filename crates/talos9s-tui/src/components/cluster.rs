@@ -64,6 +64,10 @@ pub enum FocusedPane {
 /// Narrowest the nodes pane gets, so a short list keeps its look
 const NODES_PANE_MIN_WIDTH: u16 = 30;
 
+/// A tree selection to come back to (opaque to the app)
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeSelection(NodeListItem);
+
 /// What a click in the nodes pane lands on
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickTarget {
@@ -929,6 +933,11 @@ pub struct ClusterComponent {
     hits: std::cell::RefCell<HitMap>,
     /// The view on the right has the keyboard, not the tree (set per draw)
     view_focused: bool,
+    /// Last of Nodes / Menu that had focus, to return to from a view or the
+    /// dashboard's services list (set per draw)
+    tree_pane: FocusedPane,
+    /// Where Esc in the view goes back to, when not just the tree
+    back_hint: Option<String>,
     /// Last diagnostics result per (cluster, node), shown on the dashboard
     diagnostics_summaries: HashMap<(String, String), DiagnosticsSummary>,
 }
@@ -1388,6 +1397,8 @@ impl ClusterComponent {
             node_stats_fetch: None,
             hits: std::cell::RefCell::new(HitMap::default()),
             view_focused: false,
+            tree_pane: FocusedPane::Nodes,
+            back_hint: None,
             diagnostics_summaries: HashMap::new(),
         }
     }
@@ -2560,6 +2571,26 @@ impl ClusterComponent {
             .unwrap_or_default()
     }
 
+    /// The current tree selection, to restore with [`restore_selection`]
+    ///
+    /// [`restore_selection`]: Self::restore_selection
+    pub fn selection(&self) -> TreeSelection {
+        TreeSelection(self.selected_item.clone())
+    }
+
+    pub fn restore_selection(&mut self, selection: TreeSelection) {
+        self.selected_item = selection.0;
+        if let Some(idx) = self.selected_cluster_index() {
+            self.active_cluster = idx;
+        }
+    }
+
+    /// What Esc in the view returns to, shown in the key line (a group view
+    /// a node was opened from)
+    pub fn set_back_hint(&mut self, hint: Option<String>) {
+        self.back_hint = hint;
+    }
+
     /// Select the node named `name` in the active cluster (e.g. opened from
     /// a group view), unfolding its group; false when it isn't listed
     pub fn select_node(&mut self, name: &str) -> bool {
@@ -2618,6 +2649,12 @@ impl ClusterComponent {
 
     pub fn set_focused_pane(&mut self, pane: FocusedPane) {
         self.focused_pane = pane;
+    }
+
+    /// Back from the dashboard's services list to the tree side that had
+    /// focus before (Nodes or the menu)
+    pub fn leave_services(&mut self) {
+        self.focused_pane = self.tree_pane;
     }
 
     /// Mark `item` as the view shown on the right
@@ -2689,6 +2726,9 @@ impl ClusterComponent {
             .split(layout[1]);
 
         self.view_focused = view_focused;
+        if self.focused_pane != FocusedPane::Services {
+            self.tree_pane = self.focused_pane;
+        }
         self.hits.borrow_mut().tree = content[0];
         if nodes_width > 0 {
             self.draw_nodes_pane(frame, content[0]);
@@ -2713,9 +2753,17 @@ impl ClusterComponent {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
         let spans = if view_focused {
-            vec![
-                key(" [Esc]"),
-                label(" back to tree"),
+            let mut spans = match &self.back_hint {
+                Some(hint) => vec![
+                    key(" [Esc]"),
+                    Span::styled(format!(" back to {hint}"), Style::default().dim()),
+                    Span::raw("  "),
+                    key("[←]"),
+                    label(" tree"),
+                ],
+                None => vec![key(" [Esc/←]"), label(" tree")],
+            };
+            spans.extend([
                 Span::raw("  "),
                 key("[Z]"),
                 label(" zoom"),
@@ -2723,9 +2771,10 @@ impl ClusterComponent {
                 key("[ [ ] ]"),
                 label(" pane width"),
                 Span::raw("  "),
-                key("[Ctrl+C]"),
+                key("[q]"),
                 label(" quit"),
-            ]
+            ]);
+            spans
         } else {
             let auto_refresh_status = if self.auto_refresh { "ON" } else { "OFF" };
             let auto_refresh_color = if self.auto_refresh {
@@ -2743,7 +2792,7 @@ impl ClusterComponent {
                 key("[Tab]"),
                 label(" pane"),
                 Span::raw("  "),
-                key("[Enter]"),
+                key("[Enter/→]"),
                 label(" into view"),
                 Span::raw("  "),
                 key("[Z]"),
@@ -3501,7 +3550,9 @@ impl ClusterComponent {
 
     /// Draw the navigation menu (vertical list)
     fn draw_nav_menu(&self, frame: &mut Frame, area: Rect) {
-        let menu_focused = self.focused_pane == FocusedPane::Menu;
+        // Dim while a view has the keyboard, even though this side is the one
+        // Left returns to
+        let menu_focused = self.focused_pane == FocusedPane::Menu && !self.view_focused;
         let mut lines = Vec::new();
 
         // Separator line with focus color

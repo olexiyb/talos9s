@@ -1002,6 +1002,15 @@ fn log_stage(address: &str, stage: &str, lap: &mut std::time::Instant) {
 }
 
 impl Component for DiagnosticsComponent {
+    fn uses_tab_key(&self) -> bool {
+        true
+    }
+
+    fn uses_horizontal_keys(&self) -> bool {
+        // The fix dialog picks Yes/No with Left/Right
+        self.show_confirmation
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle details popup (if showing)
         if self.show_details {
@@ -1222,7 +1231,7 @@ impl Component for DiagnosticsComponent {
             Span::raw(" Details/Fix  "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
             Span::raw(" Refresh  "),
-            Span::styled("[q]", Style::default().fg(Color::Cyan)),
+            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
             Span::raw(" Back"),
         ]));
         frame.render_widget(footer, chunks[2]);

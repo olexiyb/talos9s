@@ -1177,7 +1177,7 @@ impl EtcdComponent {
             Span::raw(" auto:"),
             auto_status,
             Span::raw("  "),
-            Span::styled("[q]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" back"),
         ]);
 

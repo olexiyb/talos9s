@@ -879,7 +879,7 @@ impl VolumesComponent {
                 Span::raw(" filter  "),
                 key("[r]"),
                 Span::raw(" refresh  "),
-                key("[q]"),
+                key("[Esc]"),
                 Span::raw(" back"),
             ];
             if !self.remedies().is_empty() {

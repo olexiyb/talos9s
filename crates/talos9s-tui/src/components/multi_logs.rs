@@ -2135,17 +2135,6 @@ impl Component for MultiLogsComponent {
                 Ok(None)
             }
 
-            // Toggle between floating panes
-            KeyCode::Tab => {
-                self.floating_pane = match self.floating_pane {
-                    FloatingPane::Services => FloatingPane::Levels,
-                    FloatingPane::Levels if self.multi_node() => FloatingPane::Nodes,
-                    FloatingPane::Levels | FloatingPane::Nodes => FloatingPane::Services,
-                    FloatingPane::None => FloatingPane::Services,
-                };
-                Ok(None)
-            }
-
             // Open specific panes
             KeyCode::Char('s') => {
                 self.floating_pane = if self.floating_pane == FloatingPane::Services {
@@ -2620,14 +2609,8 @@ impl Component for MultiLogsComponent {
                 Span::raw("[n]").fg(Color::Yellow),
                 Span::raw(" none").dim(),
                 Span::raw("  "),
-                Span::raw("[Tab]").fg(Color::Yellow),
-                Span::raw(" switch").dim(),
-                Span::raw("  "),
                 Span::raw("[Esc]").fg(Color::Yellow),
                 Span::raw(" close").dim(),
-                Span::raw("  "),
-                Span::raw("[q]").fg(Color::Yellow),
-                Span::raw(" back").dim(),
             ]
         } else if self.in_visual_mode() {
             // Visual mode footer
@@ -2675,7 +2658,7 @@ impl Component for MultiLogsComponent {
                 Span::raw("[y]").fg(Color::Yellow),
                 Span::raw(" yank").dim(),
                 Span::raw(" "),
-                Span::raw("[q]").fg(Color::Yellow),
+                Span::raw("[Esc]").fg(Color::Yellow),
                 Span::raw(" back").dim(),
             ];
             if self.multi_node() {

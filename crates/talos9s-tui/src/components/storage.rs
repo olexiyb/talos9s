@@ -556,6 +556,10 @@ impl StorageComponent {
 }
 
 impl Component for StorageComponent {
+    fn uses_tab_key(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {

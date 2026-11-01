@@ -1637,7 +1637,7 @@ impl NetworkStatsComponent {
             Span::raw("  "),
             Span::styled("[a]", Style::default().fg(Color::Cyan)),
             Span::raw(format!(" {}  ", auto_label)),
-            Span::styled("[q]", Style::default().fg(Color::Cyan)),
+            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
             Span::raw(" back"),
         ];
 
@@ -2939,6 +2939,10 @@ impl NetworkStatsComponent {
 }
 
 impl Component for NetworkStatsComponent {
+    fn uses_tab_key(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // If file viewer is shown, handle its keys
         if self.file_viewer.is_some() {

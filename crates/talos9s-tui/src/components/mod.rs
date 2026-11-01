@@ -73,6 +73,19 @@ pub trait Component {
         false
     }
 
+    /// Whether Left/Right currently mean something to the component (a
+    /// horizontal scroll that isn't at its start, a Yes/No dialog), so the
+    /// app leaves them to it instead of using Left to return to the tree
+    fn uses_horizontal_keys(&self) -> bool {
+        false
+    }
+
+    /// Whether the component switches its own tabs with Tab (a visible tab
+    /// bar); otherwise Tab moves to the next window
+    fn uses_tab_key(&self) -> bool {
+        false
+    }
+
     /// Update the component state based on an action
     fn update(&mut self, action: Action) -> Result<Option<Action>>;
 

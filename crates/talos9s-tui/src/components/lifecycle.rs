@@ -1078,7 +1078,7 @@ impl LifecycleComponent {
             Span::raw(" navigate  "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
             Span::raw(" refresh  "),
-            Span::styled("[q]", Style::default().fg(Color::Cyan)),
+            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
             Span::raw(" back"),
         ];
 

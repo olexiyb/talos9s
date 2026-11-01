@@ -948,6 +948,15 @@ impl Component for NodeInfoComponent {
         self.query().editing
     }
 
+    fn uses_tab_key(&self) -> bool {
+        true
+    }
+
+    fn uses_horizontal_keys(&self) -> bool {
+        // Scrolled config: Left scrolls back; at column 0 it leaves the view
+        self.tab == NodeInfoTab::Config && self.config_hscroll > 0
+    }
+
     /// Click a tab to open it or a row to select it; the wheel scrolls
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         let at = |r: &Rect| {
