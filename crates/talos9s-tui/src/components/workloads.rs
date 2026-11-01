@@ -31,7 +31,9 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use talos9s_core::constants::HIGH_RESTART_THRESHOLD;
+use talos9s_core::constants::{
+    HIGH_RESTART_THRESHOLD, POD_PENDING_GRACE_SECS, RECENT_RESTART_SECS,
+};
 use talos9s_core::{AsyncState, HasHealth, HealthIndicator};
 
 /// Health state of a workload or pod
@@ -502,7 +504,9 @@ impl WorkloadHealthComponent {
             total_deployments += 1;
 
             let status = deploy.status.as_ref();
-            let desired = status.and_then(|s| s.replicas).unwrap_or(0);
+            // spec, not status: status.replicas counts surge pods during a
+            // rollout. Unset means 1.
+            let desired = deploy.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1);
             let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
             let available = status.and_then(|s| s.available_replicas).unwrap_or(0);
 
@@ -551,7 +555,7 @@ impl WorkloadHealthComponent {
             total_statefulsets += 1;
 
             let status = sts.status.as_ref();
-            let desired = status.map(|s| s.replicas).unwrap_or(0);
+            let desired = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1);
             let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
 
             let (health, issues) = Self::classify_workload_health(ready, desired, ready);
@@ -630,6 +634,7 @@ impl WorkloadHealthComponent {
         }
 
         // Process pods - find problematic ones
+        let now = chrono::Utc::now().timestamp();
         for pod in pods {
             let ns = pod
                 .metadata
@@ -650,7 +655,7 @@ impl WorkloadHealthComponent {
             let node = pod.spec.as_ref().and_then(|s| s.node_name.clone());
 
             // Calculate restarts and detect issues
-            let (restarts, issue) = Self::analyze_pod(&pod);
+            let (restarts, issue) = Self::analyze_pod(&pod, now);
 
             // Calculate age
             let age = pod
@@ -783,7 +788,8 @@ impl WorkloadHealthComponent {
             return (HealthState::Healthy, issues); // Scaled to 0 is intentional
         }
 
-        if ready == desired && available == desired {
+        // More than desired happens mid-rollout (surge pods)
+        if ready >= desired && available >= desired {
             return (HealthState::Healthy, issues);
         }
 
@@ -800,8 +806,8 @@ impl WorkloadHealthComponent {
         (HealthState::Healthy, issues)
     }
 
-    /// Analyze a pod for issues
-    fn analyze_pod(pod: &Pod) -> (i32, Option<PodIssue>) {
+    /// Analyze a pod for issues; `now` is seconds since the epoch
+    fn analyze_pod(pod: &Pod, now: i64) -> (i32, Option<PodIssue>) {
         let status = match &pod.status {
             Some(s) => s,
             None => return (0, None),
@@ -809,47 +815,58 @@ impl WorkloadHealthComponent {
 
         let phase = status.phase.as_deref().unwrap_or("Unknown");
 
-        // Calculate total restarts
-        let restarts: i32 = status
-            .container_statuses
+        // A Job retries with new pods; its failed or finished pods stay
+        // behind and say nothing about the Job now
+        let job_owned = pod
+            .metadata
+            .owner_references
             .as_ref()
-            .map(|cs| cs.iter().map(|c| c.restart_count).sum())
-            .unwrap_or(0);
+            .is_some_and(|refs| refs.iter().any(|r| r.kind == "Job"));
+        if job_owned && matches!(phase, "Failed" | "Succeeded") {
+            return (0, None);
+        }
 
-        // Check container statuses for waiting reasons
-        if let Some(container_statuses) = &status.container_statuses {
-            for cs in container_statuses {
-                if let Some(state) = &cs.state {
-                    // Check waiting state
-                    if let Some(waiting) = &state.waiting {
-                        let reason = waiting.reason.as_deref().unwrap_or("");
-                        match reason {
-                            "CrashLoopBackOff" => {
-                                return (restarts, Some(PodIssue::CrashLoopBackOff));
-                            }
-                            "ImagePullBackOff" => {
-                                return (restarts, Some(PodIssue::ImagePullBackOff));
-                            }
-                            "ErrImagePull" => return (restarts, Some(PodIssue::ErrImagePull)),
-                            _ => {}
-                        }
-                    }
+        let containers = status.container_statuses.as_deref().unwrap_or_default();
+        let restarts: i32 = containers.iter().map(|c| c.restart_count).sum();
 
-                    // Check terminated state for OOMKilled
-                    if let Some(terminated) = &state.terminated {
-                        if terminated.reason.as_deref() == Some("OOMKilled") {
-                            return (restarts, Some(PodIssue::OOMKilled));
-                        }
-                        if terminated.reason.as_deref() == Some("Error") {
-                            return (restarts, Some(PodIssue::Error));
-                        }
+        // Init containers first: while one is stuck the app containers
+        // haven't started
+        let init = status
+            .init_container_statuses
+            .as_deref()
+            .unwrap_or_default();
+        for cs in init.iter().chain(containers) {
+            let Some(state) = &cs.state else { continue };
+            if let Some(waiting) = &state.waiting {
+                match waiting.reason.as_deref() {
+                    Some("CrashLoopBackOff") => {
+                        return (restarts, Some(PodIssue::CrashLoopBackOff));
                     }
+                    Some("ImagePullBackOff") => {
+                        return (restarts, Some(PodIssue::ImagePullBackOff));
+                    }
+                    Some("ErrImagePull") => return (restarts, Some(PodIssue::ErrImagePull)),
+                    _ => {}
+                }
+            }
+            // A finished init container is terminated by design
+            if let Some(terminated) = &state.terminated
+                && terminated.exit_code != 0
+            {
+                match terminated.reason.as_deref() {
+                    Some("OOMKilled") => return (restarts, Some(PodIssue::OOMKilled)),
+                    Some("Error") => return (restarts, Some(PodIssue::Error)),
+                    _ => {}
                 }
             }
         }
 
-        // Check phase
-        if phase == "Pending" {
+        let age = pod
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .map(|ts| now - ts.0.as_second());
+        if phase == "Pending" && age.is_none_or(|a| a >= POD_PENDING_GRACE_SECS) {
             return (restarts, Some(PodIssue::Pending));
         }
 
@@ -857,8 +874,21 @@ impl WorkloadHealthComponent {
             return (restarts, Some(PodIssue::Error));
         }
 
-        // Check for high restarts
-        if restarts >= HIGH_RESTART_THRESHOLD {
+        let last_restart = containers
+            .iter()
+            .filter_map(|c| {
+                c.last_state
+                    .as_ref()?
+                    .terminated
+                    .as_ref()?
+                    .finished_at
+                    .as_ref()
+            })
+            .map(|t| t.0.as_second())
+            .max();
+        if restarts >= HIGH_RESTART_THRESHOLD
+            && last_restart.is_some_and(|t| now - t < RECENT_RESTART_SECS)
+        {
             return (restarts, Some(PodIssue::HighRestarts(restarts)));
         }
 
@@ -1394,6 +1424,106 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    const NOW: i64 = 1_800_000_000;
+
+    fn ts(secs: i64) -> String {
+        chrono::DateTime::from_timestamp(secs, 0)
+            .unwrap()
+            .to_rfc3339()
+    }
+
+    fn pod_json(v: k8s_openapi::serde_json::Value) -> Pod {
+        k8s_openapi::serde_json::from_value(v).unwrap()
+    }
+
+    fn issue(pod: &Pod) -> Option<PodIssue> {
+        WorkloadHealthComponent::analyze_pod(pod, NOW).1
+    }
+
+    #[test]
+    fn workload_health_tolerates_rollouts_and_scale_to_zero() {
+        let classify = WorkloadHealthComponent::classify_workload_health;
+        assert_eq!(classify(3, 3, 3).0, HealthState::Healthy);
+        // Surge pod during a rollout: more ready than desired
+        assert_eq!(classify(4, 3, 4).0, HealthState::Healthy);
+        assert_eq!(classify(0, 0, 0).0, HealthState::Healthy);
+        assert_eq!(classify(2, 3, 2).0, HealthState::Degraded);
+        assert_eq!(classify(0, 3, 0).0, HealthState::Failing);
+    }
+
+    #[test]
+    fn old_restarts_are_not_high_restarts() {
+        let restarted = |finished: i64| {
+            pod_json(k8s_openapi::serde_json::json!({
+                "metadata": {"creationTimestamp": ts(NOW - 86_400 * 30)},
+                "status": {"phase": "Running", "containerStatuses": [{
+                    "name": "app", "image": "i", "imageID": "", "ready": true,
+                    "restartCount": 12,
+                    "state": {"running": {}},
+                    "lastState": {"terminated": {"exitCode": 1, "finishedAt": ts(finished)}},
+                }]},
+            }))
+        };
+        assert_eq!(issue(&restarted(NOW - 86_400 * 7)), None);
+        assert!(matches!(
+            issue(&restarted(NOW - 60)),
+            Some(PodIssue::HighRestarts(12))
+        ));
+    }
+
+    #[test]
+    fn finished_job_pods_are_not_failing() {
+        let failed = |owner: &str| {
+            pod_json(k8s_openapi::serde_json::json!({
+                "metadata": {"ownerReferences": [{
+                    "apiVersion": "batch/v1", "kind": owner, "name": "j", "uid": "u"
+                }]},
+                "status": {"phase": "Failed"},
+            }))
+        };
+        assert_eq!(issue(&failed("Job")), None);
+        assert!(matches!(
+            issue(&failed("ReplicaSet")),
+            Some(PodIssue::Error)
+        ));
+    }
+
+    #[test]
+    fn stuck_init_container_is_reported() {
+        let pod = pod_json(k8s_openapi::serde_json::json!({
+            "status": {"phase": "Pending", "initContainerStatuses": [{
+                "name": "init", "image": "i", "imageID": "", "ready": false, "restartCount": 3,
+                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+            }]},
+        }));
+        assert!(matches!(issue(&pod), Some(PodIssue::CrashLoopBackOff)));
+
+        // A completed init container is terminated with exit code 0
+        let done = pod_json(k8s_openapi::serde_json::json!({
+            "metadata": {"creationTimestamp": ts(NOW - 600)},
+            "status": {"phase": "Running", "initContainerStatuses": [{
+                "name": "init", "image": "i", "imageID": "", "ready": true, "restartCount": 0,
+                "state": {"terminated": {"exitCode": 0, "reason": "Completed"}},
+            }]},
+        }));
+        assert_eq!(issue(&done), None);
+    }
+
+    #[test]
+    fn new_pending_pod_is_not_stuck() {
+        let pending = |created: i64| {
+            pod_json(k8s_openapi::serde_json::json!({
+                "metadata": {"creationTimestamp": ts(created)},
+                "status": {"phase": "Pending"},
+            }))
+        };
+        assert_eq!(issue(&pending(NOW - 10)), None);
+        assert!(matches!(
+            issue(&pending(NOW - 600)),
+            Some(PodIssue::Pending)
+        ));
     }
 
     #[test]

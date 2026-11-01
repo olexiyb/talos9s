@@ -298,6 +298,9 @@ pub struct EtcdData {
     pub alarms: Vec<EtcdAlarm>,
     /// Quorum state
     pub quorum_state: QuorumState,
+    /// Whether the status call answered; without it a member with no
+    /// status is unknown, not down
+    pub status_known: bool,
     /// Total DB size (from largest member)
     pub total_db_size: i64,
     /// Current revision (from leader)
@@ -701,14 +704,18 @@ impl EtcdComponent {
             }
         };
 
-        // Process status - non-critical, just log warning
+        // Process status - non-critical, just log warning. Members that
+        // don't answer are left out of the reply; a failed call is unknown.
         let statuses = match status_result {
-            Ok(s) => s,
+            Ok(s) => Some(s),
             Err(e) => {
                 tracing::warn!("Failed to fetch etcd status: {}", e);
-                Vec::new()
+                None
             }
         };
+        let quorum = talos9s_core::EtcdQuorum::assess(&member_infos, statuses.as_deref());
+        let status_known = quorum.healthy.is_some();
+        let statuses = statuses.unwrap_or_default();
 
         // Process alarms - non-critical
         let alarms = match alarms_result {
@@ -746,6 +753,7 @@ impl EtcdComponent {
                 members: SelectableList::new(members),
                 alarms: Vec::new(),
                 quorum_state: QuorumState::Unknown,
+                status_known: false,
                 total_db_size: 0,
                 revision: 0,
                 specs: HashMap::new(),
@@ -760,15 +768,8 @@ impl EtcdComponent {
         // Update alarms
         data.alarms = alarms;
 
-        // Calculate quorum state
-        let total = data.members.len();
-        let healthy = data
-            .members
-            .items()
-            .iter()
-            .filter(|m| m.status.is_some())
-            .count();
-        data.quorum_state = QuorumState::from_counts(healthy, total);
+        data.quorum_state = quorum.state();
+        data.status_known = status_known;
 
         // Calculate totals
         data.total_db_size = data
@@ -845,10 +846,10 @@ impl EtcdComponent {
             Span::raw(format!("  {} members    ", member_count)),
             Span::raw(format!(
                 "Quorum: {} ",
-                if matches!(data.quorum_state, QuorumState::NoQuorum { .. }) {
-                    "No"
-                } else {
-                    "Yes"
+                match data.quorum_state {
+                    QuorumState::NoQuorum { .. } => "No",
+                    QuorumState::Unknown => "?",
+                    _ => "Yes",
                 }
             )),
             Span::raw(format!("   DB: {}    Rev: {}", db_size, data.revision)),
@@ -900,7 +901,8 @@ impl EtcdComponent {
                         ("~", "Learner", Color::Yellow)
                     }
                     Some(_) => ("o", "Follow", Color::Green),
-                    None => ("x", "DOWN", Color::Red),
+                    None if data.status_known => ("x", "DOWN", Color::Red),
+                    None => ("?", "Unknown", Color::DarkGray),
                 };
 
                 let db_size = member
@@ -1453,6 +1455,53 @@ mod tests {
         tx.send(LogEvent::Ended).unwrap();
         log.drain();
         assert_eq!(log.status, LogStatus::Ended);
+    }
+
+    fn screen_of(members: Vec<EtcdMember>, status_known: bool, quorum: QuorumState) -> String {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut etcd = EtcdComponent::new();
+        etcd.state.set_data(EtcdData {
+            members: SelectableList::new(members),
+            quorum_state: quorum,
+            status_known,
+            ..Default::default()
+        });
+        let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+        terminal.draw(|f| etcd.draw(f, f.area()).unwrap()).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn failed_status_call_is_unknown_not_down() {
+        let mut members = vec![
+            member("cp1", 1, 1, 0, 0, (1, 1)),
+            member("cp2", 2, 1, 0, 0, (1, 1)),
+        ];
+        for m in &mut members {
+            m.status = None;
+        }
+        let screen = screen_of(members.clone(), false, QuorumState::Unknown);
+        assert!(!screen.contains("DOWN"), "{screen}");
+        assert!(!screen.contains("NO QUORUM"));
+        assert!(screen.contains("Unknown"));
+        assert!(screen.contains("Quorum: ?"));
+
+        // When the call answered, a member missing from it is down
+        let screen = screen_of(
+            members,
+            true,
+            QuorumState::NoQuorum {
+                healthy: 0,
+                total: 2,
+            },
+        );
+        assert!(screen.contains("DOWN"));
     }
 
     #[test]

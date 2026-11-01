@@ -60,12 +60,12 @@ fn most_common<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
 /// Simple etcd status for header display
 #[derive(Debug, Clone, Default)]
 struct EtcdSummary {
-    /// Number of healthy members
-    healthy: usize,
-    /// Total number of members
+    /// Voters that answered the status call; `None` when it failed
+    healthy: Option<usize>,
+    /// Voting members
     total: usize,
-    /// Whether etcd has quorum
-    has_quorum: bool,
+    /// Whether etcd has quorum; `None` when unknown
+    has_quorum: Option<bool>,
 }
 
 /// Which pane is currently focused
@@ -722,13 +722,22 @@ impl ClusterData {
             .iter()
             .filter_map(|m| m.ip_address())
             .collect();
-        let etcd_total = cluster.etcd_members.len();
+        let etcd_members = cluster.etcd_members.clone();
         let etcd_client = client.clone();
         let etcd = async move {
             if cp_ips.is_empty() {
                 return None;
             }
-            etcd_client.etcd_status_for_nodes(&cp_ips).await.ok()
+            // A failed or timed-out call is unknown health, not zero healthy
+            let statuses =
+                tokio::time::timeout(MEMBERS_TIMEOUT, etcd_client.etcd_status_for_nodes(&cp_ips))
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok());
+            Some(talos9s_core::EtcdQuorum::assess(
+                &etcd_members,
+                statuses.as_deref(),
+            ))
         };
 
         // ZFS pool capacity, kubelet versions and LINSTOR nodes from the
@@ -790,12 +799,11 @@ impl ClusterData {
                 }
                 statuses = &mut etcd, if !etcd_done => {
                     etcd_done = true;
-                    if let Some(statuses) = statuses {
-                        let healthy = statuses.len();
+                    if let Some(quorum) = statuses {
                         cluster.etcd_summary = Some(EtcdSummary {
-                            healthy,
-                            total: etcd_total,
-                            has_quorum: healthy > etcd_total / 2,
+                            healthy: quorum.healthy,
+                            total: quorum.voters,
+                            has_quorum: quorum.has_quorum(),
                         });
                     }
                     unpublished = true;
@@ -3942,17 +3950,19 @@ impl ClusterComponent {
 
             // Build etcd status for this cluster
             let etcd_spans: Vec<Span> = if let Some(etcd) = &cluster.etcd_summary {
-                let (indicator, color) = if etcd.has_quorum && etcd.healthy == etcd.total {
-                    ("●", Color::Green)
-                } else if etcd.has_quorum {
-                    ("◐", Color::Yellow)
-                } else {
-                    ("✗", Color::Red)
+                let (indicator, color) = match (etcd.has_quorum, etcd.healthy) {
+                    (Some(true), Some(h)) if h == etcd.total => ("●", Color::Green),
+                    (Some(true), _) => ("◐", Color::Yellow),
+                    (Some(false), _) => ("✗", Color::Red),
+                    (None, _) => ("?", Color::DarkGray),
                 };
+                let healthy = etcd
+                    .healthy
+                    .map_or_else(|| "?".to_string(), |h| h.to_string());
                 vec![
                     Span::styled("  etcd ", Style::default().dim()),
                     Span::styled(
-                        format!("{}/{}", etcd.healthy, etcd.total),
+                        format!("{}/{}", healthy, etcd.total),
                         Style::default().fg(color),
                     ),
                     Span::styled(indicator, Style::default().fg(color)),

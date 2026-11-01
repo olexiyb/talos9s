@@ -6,6 +6,13 @@
 /// Threshold for considering a pod to have "high" restarts
 pub const HIGH_RESTART_THRESHOLD: i32 = 5;
 
+/// Restarts count as "high" only while the last one is this recent: the
+/// count never goes down, so old restarts would flag a pod forever
+pub const RECENT_RESTART_SECS: i64 = 3600;
+
+/// A pod Pending for less than this is being scheduled or pulled, not stuck
+pub const POD_PENDING_GRACE_SECS: i64 = 120;
+
 /// Memory in use (percent) that is a warning / critical. One source for the
 /// dashboard's colors and the diagnostics verdicts, so they never disagree.
 pub const MEMORY_WARN_PERCENT: f64 = 80.0;
