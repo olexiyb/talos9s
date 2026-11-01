@@ -60,6 +60,9 @@ pub enum FocusedPane {
     Services,
 }
 
+/// Narrowest the nodes pane gets, so a short list keeps its look
+const NODES_PANE_MIN_WIDTH: u16 = 30;
+
 /// Navigation menu items for quick screen access
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavMenuItem {
@@ -99,17 +102,17 @@ impl NavMenuItem {
         match self {
             NavMenuItem::Logs => "Logs",
             NavMenuItem::Etcd => "etcd",
-            NavMenuItem::Network => "Net",
-            NavMenuItem::Storage => "Stor",
-            NavMenuItem::Processes => "Proc",
-            NavMenuItem::Diagnostics => "Diag",
-            NavMenuItem::Certs => "Certs",
-            NavMenuItem::Lifecycle => "Life",
-            NavMenuItem::Workloads => "Work",
-            NavMenuItem::Volumes => "Vol",
-            NavMenuItem::Containers => "Ctrs",
-            NavMenuItem::Config => "Config",
-            NavMenuItem::Extensions => "Ext",
+            NavMenuItem::Network => "Network",
+            NavMenuItem::Storage => "Storage",
+            NavMenuItem::Processes => "Processes",
+            NavMenuItem::Diagnostics => "Diagnostics",
+            NavMenuItem::Certs => "Certificates",
+            NavMenuItem::Lifecycle => "Lifecycle",
+            NavMenuItem::Workloads => "Workloads",
+            NavMenuItem::Volumes => "Volumes",
+            NavMenuItem::Containers => "Containers",
+            NavMenuItem::Config => "Machine config",
+            NavMenuItem::Extensions => "Extensions",
         }
     }
 
@@ -2714,9 +2717,15 @@ impl Component for ClusterComponent {
         self.draw_header(frame, layout[0]);
 
         // Two-column layout for main content
+        // The nodes pane is as wide as its content, at most 40%: the details
+        // pane's tables and addresses need the room more
+        let nodes_width = self
+            .nodes_pane_width()
+            .min(layout[1].width * 2 / 5)
+            .max(NODES_PANE_MIN_WIDTH.min(layout[1].width));
         let content_layout = Layout::horizontal([
-            Constraint::Percentage(40), // Nodes pane
-            Constraint::Percentage(60), // Details pane
+            Constraint::Length(nodes_width), // Nodes pane
+            Constraint::Min(0),              // Details pane
         ])
         .split(layout[1]);
 
@@ -3137,6 +3146,20 @@ impl ClusterComponent {
             }
         }
         (lines, row_items)
+    }
+
+    /// Columns the nodes pane needs to show its node list and the menu
+    /// without cutting them: the widest line, borders and a space
+    fn nodes_pane_width(&self) -> u16 {
+        let (lines, _) = self.node_list_lines(None);
+        let list = lines.iter().map(Line::width).max().unwrap_or(0);
+        // " ▸ [m] Machine config"
+        let menu = NavMenuItem::ALL
+            .iter()
+            .map(|item| 3 + item.hotkey().len() + 3 + item.label().len())
+            .max()
+            .unwrap_or(0);
+        (list.max(menu) + 3) as u16
     }
 
     fn draw_nodes_pane(&self, frame: &mut Frame, area: Rect) {
