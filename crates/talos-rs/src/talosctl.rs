@@ -5,6 +5,8 @@
 //! through apid - talosctl connects directly to machined via Unix socket.
 
 use crate::error::TalosError;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 /// Execute a talosctl command asynchronously and return stdout
 async fn exec_talosctl_async(args: &[&str]) -> Result<String, TalosError> {
@@ -179,7 +181,7 @@ pub async fn get_volume_key_types_for_node(
 }
 
 fn parse_key_types(yaml: &str) -> Vec<String> {
-    resource_documents(yaml)
+    resource_documents::<serde_json::Value>(yaml)
         .flat_map(|doc| {
             doc.pointer("/spec/encryption/keys")
                 .and_then(serde_json::Value::as_array)
@@ -625,10 +627,8 @@ pub async fn get_etcd_spec_for_node(
 }
 
 fn parse_etcd_spec_yaml(yaml_str: &str) -> Result<EtcdSpecInfo, TalosError> {
-    let spec = yaml_str
-        .split("\n---")
-        .filter_map(|doc| serde_saphyr::from_str::<serde_json::Value>(doc.trim()).ok())
-        .find_map(|doc| doc.get("spec").cloned())
+    let spec = yaml_specs(yaml_str)
+        .next()
         .ok_or_else(|| TalosError::ConfigInvalid("no EtcdSpec in talosctl output".to_string()))?;
     let addresses = |key: &str| -> Vec<String> {
         spec.get(key)
@@ -666,7 +666,7 @@ pub async fn is_kubespan_enabled_for_node(
 ) -> bool {
     get_resource_yaml(context, node_ip, config_path, &["kubespanconfig"])
         .await
-        .is_ok_and(|output| kubespan_enabled_in(&output))
+        .is_ok_and(|output| parse_kubespan_settings(&output).enabled)
 }
 
 /// KubeSpan settings of a node, from its KubeSpanConfig resource
@@ -788,12 +788,8 @@ pub async fn get_node_network_info(
 
 /// Iterate over the `spec` of each document in multi-document talosctl YAML
 fn yaml_specs(yaml_str: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
-    yaml_str.split("\n---").filter_map(|doc| {
-        serde_saphyr::from_str::<serde_json::Value>(doc.trim())
-            .ok()?
-            .get("spec")
-            .cloned()
-    })
+    resource_documents::<serde_json::Value>(yaml_str)
+        .filter_map(|mut doc| doc.get_mut("spec").map(serde_json::Value::take))
 }
 
 /// Collect a string list field from the first document's spec
@@ -890,11 +886,10 @@ fn parse_connectivity_ready(yaml_str: &str) -> Option<bool> {
     yaml_specs(yaml_str).find_map(|spec| spec.get("connectivityReady").and_then(|v| v.as_bool()))
 }
 
-/// Whether `talosctl get kubespanconfig -o yaml` output shows `enabled: true`
 /// `spec.enabled` and `spec.advertiseKubernetesNetworks` of KubeSpanConfig;
 /// both false when the resource is absent (KubeSpan not configured)
 fn parse_kubespan_settings(output: &str) -> KubeSpanSettings {
-    resource_documents(output)
+    resource_documents::<serde_json::Value>(output)
         .find_map(|doc| {
             let spec = doc.get("spec")?;
             let flag = |key: &str| spec.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -906,222 +901,127 @@ fn parse_kubespan_settings(output: &str) -> KubeSpanSettings {
         .unwrap_or_default()
 }
 
-fn kubespan_enabled_in(output: &str) -> bool {
-    let trimmed = output.trim();
-    !trimmed.is_empty() && trimmed.contains("KubeSpanConfig") && trimmed.contains("enabled: true")
+/// A COSI resource document; only `metadata.id` and `spec` are read
+#[derive(Deserialize)]
+struct Resource<S> {
+    metadata: Option<ResourceMetadata>,
+    spec: Option<S>,
+}
+
+#[derive(Deserialize)]
+struct ResourceMetadata {
+    id: Option<String>,
+}
+
+/// `(metadata.id, spec)` of each resource in `talosctl get … -o yaml`
+/// output. Resources without an id are skipped, and so are documents that
+/// don't fit `S`, so one odd resource doesn't hide the others.
+fn resources<S: DeserializeOwned + Default>(
+    yaml_str: &str,
+) -> impl Iterator<Item = (String, S)> + '_ {
+    resource_documents::<Resource<S>>(yaml_str).filter_map(|doc| {
+        let id = doc.metadata?.id.filter(|id| !id.is_empty())?;
+        Some((id, doc.spec.unwrap_or_default()))
+    })
+}
+
+/// For fields whose shape varies across Talos versions (or isn't what the
+/// name suggests): an unexpected shape reads as absent instead of
+/// dropping the whole document.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+/// `spec` of VolumeStatuses.block.talos.dev
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct VolumeStatusSpec {
+    encryption_provider: Option<String>,
+    phase: Option<String>,
+    pretty_size: Option<String>,
+    /// directory, partition, symlink, …
+    #[serde(rename = "type")]
+    volume_type: Option<String>,
+    filesystem: Option<String>,
+    mount_location: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    mount_spec: Option<MountSpec>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MountSpec {
+    target_path: Option<String>,
 }
 
 /// Parse volume status YAML output from talosctl
 fn parse_volume_status_yaml(yaml_str: &str) -> Result<Vec<VolumeStatus>, TalosError> {
-    let mut volumes = Vec::new();
+    Ok(resources::<VolumeStatusSpec>(yaml_str)
+        .map(|(id, spec)| {
+            // Volumes without a size or filesystem (directories, symlinks)
+            // show their type instead
+            let size = spec
+                .pretty_size
+                .or_else(|| spec.volume_type.clone())
+                .unwrap_or_default();
+            let filesystem = spec.filesystem.or_else(|| spec.volume_type.clone());
+            let mount_location = spec
+                .mount_location
+                .or_else(|| spec.mount_spec.and_then(|m| m.target_path))
+                .or_else(|| id.starts_with('/').then(|| id.clone()));
+            VolumeStatus {
+                encryption_provider: spec.encryption_provider,
+                phase: spec.phase.unwrap_or_else(|| "unknown".to_string()),
+                size,
+                filesystem,
+                mount_location,
+                id,
+            }
+        })
+        .collect())
+}
 
-    // Split by YAML document separator and parse each
-    for doc_str in yaml_str.split("\n---") {
-        let doc_str = doc_str.trim();
-        if doc_str.is_empty() {
-            continue;
-        }
-
-        let doc: serde_json::Value = match serde_saphyr::from_str(doc_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // Get metadata.id
-        let id = doc
-            .get("metadata")
-            .and_then(|m| m.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        // Skip if no id
-        if id.is_empty() {
-            continue;
-        }
-
-        // Get spec fields
-        let spec = doc.get("spec");
-
-        let encryption_provider = spec
-            .and_then(|s| s.get("encryptionProvider"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let phase = spec
-            .and_then(|s| s.get("phase"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        // Try prettySize first, fall back to showing volume type if not available
-        let size = spec
-            .and_then(|s| s.get("prettySize"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // If no size, show the volume type (directory, partition, etc.)
-                spec.and_then(|s| s.get("type"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_default();
-
-        // Try filesystem first, fall back to volume type (directory, partition, symlink, etc.)
-        let filesystem = spec
-            .and_then(|s| s.get("filesystem"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                spec.and_then(|s| s.get("type"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            });
-
-        // Try mountLocation first, then spec.mountSpec.targetPath, then use the id if it's a path
-        let mount_location = spec
-            .and_then(|s| s.get("mountLocation"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                spec.and_then(|s| s.get("mountSpec"))
-                    .and_then(|m| m.get("targetPath"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .or_else(|| {
-                // If id starts with /, it's likely a mount path
-                if id.starts_with('/') {
-                    Some(id.clone())
-                } else {
-                    None
-                }
-            });
-
-        volumes.push(VolumeStatus {
-            id,
-            encryption_provider,
-            phase,
-            size,
-            filesystem,
-            mount_location,
-        });
-    }
-
-    Ok(volumes)
+/// `spec` of Disks.block.talos.dev (snake_case keys, unlike most resources)
+#[derive(Deserialize, Default)]
+struct DiskSpec {
+    dev_path: Option<String>,
+    size: Option<u64>,
+    human_size: Option<String>,
+    pretty_size: Option<String>,
+    model: Option<String>,
+    serial: Option<String>,
+    transport: Option<String>,
+    rotational: Option<bool>,
+    readonly: Option<bool>,
+    cdrom: Option<bool>,
+    wwid: Option<String>,
+    bus_path: Option<String>,
 }
 
 /// Parse disks YAML output from talosctl
 fn parse_disks_yaml(yaml_str: &str) -> Result<Vec<DiskInfo>, TalosError> {
-    let mut disks = Vec::new();
-
-    // Split by YAML document separator and parse each
-    for doc_str in yaml_str.split("\n---") {
-        let doc_str = doc_str.trim();
-        if doc_str.is_empty() {
-            continue;
-        }
-
-        let doc: serde_json::Value = match serde_saphyr::from_str(doc_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // Get metadata.id (e.g., "sda", "nvme0n1")
-        let id = doc
-            .get("metadata")
-            .and_then(|m| m.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        // Skip if no id
-        if id.is_empty() {
-            continue;
-        }
-
-        // Get spec fields
-        let spec = doc.get("spec");
-
-        let dev_path = spec
-            .and_then(|s| s.get("dev_path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let size = spec
-            .and_then(|s| s.get("size"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let size_pretty = spec
-            .and_then(|s| s.get("human_size").or_else(|| s.get("pretty_size")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let model = spec
-            .and_then(|s| s.get("model"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        let serial = spec
-            .and_then(|s| s.get("serial"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        let transport = spec
-            .and_then(|s| s.get("transport"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        let rotational = spec
-            .and_then(|s| s.get("rotational"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let readonly = spec
-            .and_then(|s| s.get("readonly"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let cdrom = spec
-            .and_then(|s| s.get("cdrom"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let wwid = spec
-            .and_then(|s| s.get("wwid"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        let bus_path = spec
-            .and_then(|s| s.get("bus_path"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        disks.push(DiskInfo {
+    let non_empty = |s: Option<String>| s.filter(|s| !s.is_empty());
+    Ok(resources::<DiskSpec>(yaml_str)
+        .map(|(id, spec)| DiskInfo {
             id,
-            dev_path,
-            size,
-            size_pretty,
-            model,
-            serial,
-            transport,
-            rotational,
-            readonly,
-            cdrom,
-            wwid,
-            bus_path,
-        });
-    }
-
-    Ok(disks)
+            dev_path: spec.dev_path.unwrap_or_default(),
+            size: spec.size.unwrap_or(0),
+            size_pretty: spec.human_size.or(spec.pretty_size).unwrap_or_default(),
+            model: non_empty(spec.model),
+            serial: non_empty(spec.serial),
+            transport: non_empty(spec.transport),
+            rotational: spec.rotational.unwrap_or(false),
+            readonly: spec.readonly.unwrap_or(false),
+            cdrom: spec.cdrom.unwrap_or(false),
+            wwid: non_empty(spec.wwid),
+            bus_path: non_empty(spec.bus_path),
+        })
+        .collect())
 }
 
 /// Parse machine config YAML output from talosctl.
@@ -1136,17 +1036,7 @@ fn parse_disks_yaml(yaml_str: &str) -> Result<Vec<DiskInfo>, TalosError> {
 fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosError> {
     let mut fallback: Option<MachineConfigInfo> = None;
 
-    for doc_str in yaml_str.split("\n---") {
-        let doc_str = doc_str.trim();
-        if doc_str.is_empty() {
-            continue;
-        }
-
-        let doc: serde_json::Value = match serde_saphyr::from_str(doc_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
+    for doc in resource_documents::<serde_json::Value>(yaml_str) {
         let metadata = doc.get("metadata");
 
         // `version` is a resource revision — usually a number, occasionally a
@@ -1205,19 +1095,20 @@ fn scalar_to_string(v: &serde_json::Value) -> Option<String> {
 
 /// Top-level documents of `talosctl get … -o yaml` output. Documents nested
 /// in a block scalar (a machine config's) are indented, so they stay whole.
-fn resource_documents(yaml_str: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
+/// A document that doesn't parse as `T` is skipped.
+fn resource_documents<T: DeserializeOwned>(yaml_str: &str) -> impl Iterator<Item = T> + '_ {
     yaml_str
         .split("\n---\n")
         .map(str::trim)
         .filter(|d| !d.is_empty())
-        .filter_map(|d| serde_saphyr::from_str::<serde_json::Value>(d).ok())
+        .filter_map(|d| serde_saphyr::from_str::<T>(d).ok())
 }
 
 /// The `v1alpha1` (active) and `persistent` machine config resources
 fn parse_machine_config_text(yaml_str: &str) -> Result<MachineConfigText, TalosError> {
     let mut active = None;
     let mut persistent = None;
-    for doc in resource_documents(yaml_str) {
+    for doc in resource_documents::<serde_json::Value>(yaml_str) {
         let metadata = doc.get("metadata");
         let field = |key: &str| metadata.and_then(|m| m.get(key)).and_then(scalar_to_string);
         let Some(spec) = doc.get("spec").and_then(|s| s.as_str()) else {
@@ -1245,7 +1136,7 @@ fn parse_machine_config_text(yaml_str: &str) -> Result<MachineConfigText, TalosE
 
 /// ExtensionStatus resources, in the order the node loads them
 fn parse_extensions_yaml(yaml_str: &str) -> Vec<ExtensionInfo> {
-    resource_documents(yaml_str)
+    resource_documents::<serde_json::Value>(yaml_str)
         .filter_map(|doc| {
             let spec = doc.get("spec")?;
             let meta = spec.get("metadata");
@@ -1270,146 +1161,54 @@ fn parse_extensions_yaml(yaml_str: &str) -> Vec<ExtensionInfo> {
         .collect()
 }
 
+/// `spec` of KubeSpanPeerStatuses.kubespan.talos.dev
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct KubeSpanPeerSpec {
+    label: Option<String>,
+    endpoint: Option<String>,
+    state: Option<String>,
+    last_handshake_time: Option<String>,
+    receive_bytes: Option<u64>,
+    transmit_bytes: Option<u64>,
+}
+
 /// Parse KubeSpan peer status YAML output from talosctl
 fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
-    let mut peers = Vec::new();
-
-    for doc_str in yaml_str.split("\n---") {
-        let doc_str = doc_str.trim();
-        if doc_str.is_empty() {
-            continue;
-        }
-
-        let doc: serde_json::Value = match serde_saphyr::from_str(doc_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let id = doc
-            .get("metadata")
-            .and_then(|m| m.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if id.is_empty() {
-            continue;
-        }
-
-        let spec = doc.get("spec");
-
-        let label = spec
-            .and_then(|s| s.get("label"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(&id)
-            .to_string();
-
-        let endpoint = spec
-            .and_then(|s| s.get("endpoint"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let state = spec
-            .and_then(|s| s.get("state"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let last_handshake = spec
-            .and_then(|s| s.get("lastHandshakeTime"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let rx_bytes = spec
-            .and_then(|s| s.get("receiveBytes"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let tx_bytes = spec
-            .and_then(|s| s.get("transmitBytes"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        peers.push(KubeSpanPeerStatus {
+    Ok(resources::<KubeSpanPeerSpec>(yaml_str)
+        .map(|(id, spec)| KubeSpanPeerStatus {
+            label: spec.label.unwrap_or_else(|| id.clone()),
             id,
-            label,
-            endpoint,
-            state,
-            last_handshake,
-            rx_bytes,
-            tx_bytes,
-        });
-    }
+            endpoint: spec.endpoint,
+            state: spec.state.unwrap_or_else(|| "unknown".to_string()),
+            last_handshake: spec.last_handshake_time,
+            rx_bytes: spec.receive_bytes.unwrap_or(0),
+            tx_bytes: spec.transmit_bytes.unwrap_or(0),
+        })
+        .collect())
+}
 
-    Ok(peers)
+/// `spec` of Members.cluster.talos.dev
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MemberSpec {
+    addresses: Option<Vec<String>>,
+    hostname: Option<String>,
+    machine_type: Option<String>,
+    operating_system: Option<String>,
 }
 
 /// Parse discovery members YAML output from talosctl
 fn parse_discovery_members_yaml(yaml_str: &str) -> Result<Vec<DiscoveryMember>, TalosError> {
-    let mut members = Vec::new();
-
-    for doc_str in yaml_str.split("\n---") {
-        let doc_str = doc_str.trim();
-        if doc_str.is_empty() {
-            continue;
-        }
-
-        let doc: serde_json::Value = match serde_saphyr::from_str(doc_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let id = doc
-            .get("metadata")
-            .and_then(|m| m.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if id.is_empty() {
-            continue;
-        }
-
-        let spec = doc.get("spec");
-
-        let addresses = spec
-            .and_then(|s| s.get("addresses"))
-            .and_then(|v| v.as_array())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let hostname = spec
-            .and_then(|s| s.get("hostname"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let machine_type = spec
-            .and_then(|s| s.get("machineType"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let operating_system = spec
-            .and_then(|s| s.get("operatingSystem"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        members.push(DiscoveryMember {
+    Ok(resources::<MemberSpec>(yaml_str)
+        .map(|(id, spec)| DiscoveryMember {
             id,
-            addresses,
-            hostname,
-            machine_type,
-            operating_system,
-        });
-    }
-
-    Ok(members)
+            addresses: spec.addresses.unwrap_or_default(),
+            hostname: spec.hostname.unwrap_or_default(),
+            machine_type: spec.machine_type.unwrap_or_else(|| "unknown".to_string()),
+            operating_system: spec.operating_system.unwrap_or_default(),
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -1635,6 +1434,81 @@ spec:
         assert_eq!(volumes[0].encryption_provider, Some("luks2".to_string()));
         assert_eq!(volumes[1].id, "EPHEMERAL");
         assert_eq!(volumes[1].encryption_provider, None);
+        assert_eq!(volumes[0].phase, "ready");
+        assert_eq!(volumes[0].size, "100 MiB");
+        assert_eq!(volumes[0].filesystem.as_deref(), Some("xfs"));
+        assert_eq!(volumes[0].mount_location.as_deref(), Some("/system/state"));
+    }
+
+    #[test]
+    fn volume_status_fallbacks() {
+        // Directory and symlink volumes have no size, filesystem or
+        // mountLocation; the middle document doesn't fit the spec at all
+        let yaml = "node: 10.5.0.2
+metadata:
+    namespace: runtime
+    type: VolumeStatuses.block.talos.dev
+    id: /var/lib
+    version: 1
+    phase: running
+spec:
+    phase: ready
+    type: directory
+    mountSpec:
+        targetPath: /var/lib
+        selinuxLabel: system_u:object_r:var_lib_t:s0
+---
+node: 10.5.0.2
+metadata:
+    id: BROKEN
+spec:
+    phase: [not, a, string]
+---
+node: 10.5.0.2
+metadata:
+    namespace: runtime
+    type: VolumeStatuses.block.talos.dev
+    id: /var/log/audit
+spec:
+    type: symlink
+    mountSpec: unexpected
+---
+node: 10.5.0.2
+metadata:
+    namespace: runtime
+    type: VolumeStatuses.block.talos.dev
+    id: META
+spec: {}
+";
+        let volumes = parse_volume_status_yaml(yaml).unwrap();
+        let ids: Vec<_> = volumes.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, ["/var/lib", "/var/log/audit", "META"]);
+
+        assert_eq!(volumes[0].size, "directory");
+        assert_eq!(volumes[0].filesystem.as_deref(), Some("directory"));
+        assert_eq!(volumes[0].mount_location.as_deref(), Some("/var/lib"));
+
+        // An odd mountSpec reads as absent: the id, a path, is the mount
+        assert_eq!(volumes[1].phase, "unknown");
+        assert_eq!(volumes[1].mount_location.as_deref(), Some("/var/log/audit"));
+
+        assert_eq!(volumes[2].size, "");
+        assert_eq!(volumes[2].filesystem, None);
+        assert_eq!(volumes[2].mount_location, None);
+    }
+
+    #[test]
+    fn kubespan_enabled_reads_spec() {
+        let config = |enabled: bool| {
+            format!(
+                "node: 10.0.0.1\nmetadata:\n    namespace: config\n    \
+                 type: KubeSpanConfigs.kubespan.talos.dev\n    id: kubespan\n\
+                 spec:\n    enabled: {enabled}\n    forceRouting: true\n"
+            )
+        };
+        assert!(parse_kubespan_settings(&config(true)).enabled);
+        assert!(!parse_kubespan_settings(&config(false)).enabled);
+        assert!(!parse_kubespan_settings("").enabled);
     }
 
     #[test]
@@ -1940,6 +1814,8 @@ spec:
     receiveBytes: 1213241208180
     transmitBytes: 1847078950984
     lastHandshakeTime: 2026-10-26T20:52:13.708617698Z
+    lastUsedEndpoint: 192.0.2.2:51820
+    lastEndpointChange: 2026-10-16T09:19:30Z
 ---
 node: 192.0.2.1
 metadata:
