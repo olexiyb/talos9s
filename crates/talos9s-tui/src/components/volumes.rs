@@ -278,8 +278,6 @@ pub struct VolumesViewState {
 #[derive(Clone)]
 pub struct VolumesComponent {
     state: AsyncState<VolumesData>,
-    /// What the view covers, e.g. the cluster or node name
-    title: String,
     /// Nodes the view is limited to (`None` for the whole cluster)
     scope: Option<HashSet<String>>,
 
@@ -313,12 +311,11 @@ pub struct VolumesComponent {
 
 impl VolumesComponent {
     /// Volumes view titled `title`, limited to volumes on `nodes` when given
-    pub fn new(title: String, nodes: Option<Vec<String>>) -> Self {
+    pub fn new(nodes: Option<Vec<String>>) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         Self {
             state: AsyncState::new(),
-            title,
             scope: nodes.map(|n| n.into_iter().collect()),
             k8s_client: None,
             k8s_source: None,
@@ -1118,11 +1115,8 @@ impl Component for VolumesComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let block = Block::default()
-            .title(format!(" Volumes: {} ", self.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // The workspace frames the view and titles it
+        let inner = area;
         let dim = Style::default().fg(Color::DarkGray);
 
         if self.state.is_loading() && !self.state.has_data() {
@@ -1287,7 +1281,7 @@ mod tests {
             .map(|v| VolumeRow::new(Source::Linstor(v), None))
             .collect();
         rows.push(VolumeRow::new(Source::Zfs(zfs), None));
-        let mut c = VolumesComponent::new("bc".to_string(), None);
+        let mut c = VolumesComponent::new(None);
         let matched = KubeconfigSource::Environment(Some("bc".to_string()));
         c.kubectl = kubectl_for(Some(&matched), Some("bc"));
         c.state.set_data(VolumesData {
@@ -1448,13 +1442,13 @@ mod tests {
         assert_eq!(remembered.selected, Some(selected.clone()));
 
         // A new visit: the selection applies once the first scan lands
-        let mut next = VolumesComponent::new("bc".to_string(), None);
+        let mut next = VolumesComponent::new(None);
         next.set_view_state(remembered);
         crate::components::BackgroundRefresh::adopt_refresh(&mut next, component());
         assert_eq!(next.visible()[next.selected].key(), selected);
 
         // A volume that no longer exists leaves the first row selected
-        let mut gone = VolumesComponent::new("bc".to_string(), None);
+        let mut gone = VolumesComponent::new(None);
         gone.set_view_state(VolumesViewState {
             show_all: true,
             selected: Some(("pvc-deleted".to_string(), 0)),

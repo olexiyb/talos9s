@@ -159,6 +159,8 @@ pub struct App {
     pending_target: Option<(String, Instant)>,
     /// Why the menu view has nothing to show (`View::Hint`)
     hint: Option<String>,
+    /// Title of the view's window: the view and what it shows
+    pane_title: String,
     /// View under an operations overlay, shown again when it closes
     overlay_return: View,
     /// Nodes pane and view areas of the last frame, for the mouse
@@ -258,6 +260,7 @@ impl App {
             applied_target: String::new(),
             pending_target: None,
             hint: None,
+            pane_title: String::new(),
             overlay_return: View::Cluster,
             tree_area: Rect::default(),
             view_area: Rect::default(),
@@ -1057,11 +1060,34 @@ impl App {
         };
         let dashboard = base == View::Cluster;
         let view_focused = self.view_has_focus && !dashboard && !overlay;
-        let (tree, right) =
+        let (tree, view_area) =
             self.cluster
                 .draw_frame(frame, area, self.pane_width, view_focused, dashboard);
         self.tree_area = tree;
-        self.view_area = right;
+        self.view_area = view_area;
+        // Every view sits in a window like the dashboard's: titled with what
+        // it shows, cyan while it has the keyboard
+        let right = if dashboard {
+            view_area
+        } else {
+            let accent = if view_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(accent))
+                .title(format!(" {} ", self.pane_title))
+                .title_style(Style::default().fg(if view_focused {
+                    Color::Cyan
+                } else {
+                    Color::White
+                }));
+            let inner = block.inner(view_area);
+            frame.render_widget(block, view_area);
+            inner
+        };
         macro_rules! draw {
             ($slot:expr) => {
                 if let Some(c) = &mut $slot {
@@ -1072,13 +1098,8 @@ impl App {
         match base {
             View::Cluster => self.cluster.draw_details_pane(frame, right),
             View::Hint => {
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
-                    .title(format!(" {} ", self.pane.label()));
                 let text = Paragraph::new(format!("\n  {}", self.hint.as_deref().unwrap_or("")))
-                    .style(Style::default().fg(Color::DarkGray))
-                    .block(block);
+                    .style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(text, right);
             }
             View::MultiLogs => draw!(self.multi_logs),
@@ -1126,6 +1147,15 @@ impl App {
         self.pane = item;
         self.view = view;
         self.cluster.set_active_menu(item);
+        let cluster_wide = matches!(
+            item,
+            NavMenuItem::Etcd | NavMenuItem::Certs | NavMenuItem::Lifecycle
+        );
+        self.pane_title = format!(
+            "{} · {}",
+            item.label(),
+            self.cluster.target_title(cluster_wide)
+        );
         self.applied_target = self.scope_key(item);
         self.pending_target = None;
         if self.view == View::Cluster {
@@ -1814,7 +1844,7 @@ impl App {
                         .unwrap_or_else(|| "whole cluster".to_string())
                 );
 
-                let mut workloads = WorkloadHealthComponent::new(title, nodes);
+                let mut workloads = WorkloadHealthComponent::new(nodes);
 
                 // The K8s client is created by the first refresh, which runs in
                 // the background; the view shows "Loading workloads..." until
@@ -1835,7 +1865,7 @@ impl App {
                 self.leave_view();
                 tracing::info!("ShowVolumes: '{}'", title);
 
-                let mut volumes = VolumesComponent::new(title, nodes);
+                let mut volumes = VolumesComponent::new(nodes);
                 volumes.set_context(self.cluster.current_context_name().map(str::to_string));
                 if let Some(state) = self.volumes_view_state.clone() {
                     volumes.set_view_state(state);

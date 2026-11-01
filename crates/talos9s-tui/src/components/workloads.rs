@@ -228,8 +228,6 @@ pub struct WorkloadHealthComponent {
     /// client and a control plane node to fetch the kubeconfig from
     k8s_source: Option<(talos_rs::TalosClient, Option<String>)>,
 
-    /// What the view covers, e.g. the cluster or node name
-    title: String,
     /// Nodes the view is limited to (`None` for the whole cluster)
     scope: Option<HashSet<String>>,
 
@@ -249,7 +247,7 @@ pub struct WorkloadHealthComponent {
 
 impl WorkloadHealthComponent {
     /// Workloads view titled `title`, limited to pods on `nodes` when given
-    pub fn new(title: String, nodes: Option<Vec<String>>) -> Self {
+    pub fn new(nodes: Option<Vec<String>>) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
@@ -257,7 +255,6 @@ impl WorkloadHealthComponent {
             state: AsyncState::new(),
             k8s_client: None,
             k8s_source: None,
-            title,
             scope: nodes.map(|n| n.into_iter().collect()),
             selected_namespace: 0,
             selected_item: 0,
@@ -1267,12 +1264,8 @@ impl Component for WorkloadHealthComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        // Draw title
-        let block = Block::default()
-            .title(format!(" Workload Health: {} ", self.title))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // The workspace frames the view and titles it
+        let inner = area;
 
         if self.state.is_loading() && !self.state.has_data() {
             let loading =

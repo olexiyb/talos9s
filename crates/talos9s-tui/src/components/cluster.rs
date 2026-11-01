@@ -2521,6 +2521,23 @@ impl ClusterComponent {
         }
     }
 
+    /// What the selection is, for a view's title: a node, a group or the
+    /// cluster (always the cluster for cluster-wide views)
+    pub fn target_title(&self, cluster_wide: bool) -> String {
+        let cluster = self.cluster_key();
+        if cluster_wide {
+            return cluster;
+        }
+        match &self.selected_item {
+            NodeListItem::ClusterHeader(_) => cluster,
+            NodeListItem::ControlPlaneHeader(_) => format!("{cluster} control plane"),
+            NodeListItem::WorkersHeader(_) => format!("{cluster} workers"),
+            NodeListItem::ControlPlaneNode(..) | NodeListItem::WorkerNode(..) => {
+                self.current_node_name().unwrap_or(cluster)
+            }
+        }
+    }
+
     /// Name of the cluster the selection belongs to
     pub fn cluster_key(&self) -> String {
         let idx = self.selected_cluster_index().unwrap_or(self.active_cluster);
