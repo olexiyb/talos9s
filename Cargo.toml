@@ -67,6 +67,8 @@ arboard = "3"
 kube = { version = "4.2", features = [
     "client",
     "config",
+    # Lists come back gzipped (a 10 MB pod list is 0.6 MB on the wire)
+    "gzip",
     "runtime",
     "rustls-tls",
 ], default-features = false }

@@ -199,7 +199,9 @@ fn pod_is_ready(pod: &Pod) -> bool {
 }
 
 /// Auto-refresh interval in seconds
-const AUTO_REFRESH_INTERVAL_SECS: u64 = 10;
+// Pod problems change slowly, and a refresh downloads every pod of the
+// cluster
+const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
 
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]
@@ -340,22 +342,48 @@ impl WorkloadHealthComponent {
 
         let list_params = ListParams::default();
         let timeout = std::time::Duration::from_secs(15);
+        let started = std::time::Instant::now();
         let fetch_result = tokio::time::timeout(timeout, async {
             tokio::join!(
                 deployments_api.list(&list_params),
                 statefulsets_api.list(&list_params),
                 daemonsets_api.list(&list_params),
-                pods_api.list(&list_params),
-                // Only needed to map a scoped node's pods back to Deployments
+                // Scoped: the API gives each node's pods (a field selector),
+                // instead of every pod of the cluster (10 MB on a busy one)
                 async {
                     match &scope {
-                        Some(_) => replicasets_api.list(&list_params).await.map(Some),
+                        Some(nodes) => {
+                            let per_node = nodes.iter().map(|node| {
+                                let params =
+                                    ListParams::default().fields(&format!("spec.nodeName={node}"));
+                                let api = pods_api.clone();
+                                async move { api.list(&params).await }
+                            });
+                            let mut pods = Vec::new();
+                            for list in futures::future::join_all(per_node).await {
+                                pods.extend(list?.items);
+                            }
+                            Ok(pods)
+                        }
+                        None => pods_api.list(&list_params).await.map(|l| l.items),
+                    }
+                },
+                // Only needed to map a scoped node's pods back to Deployments:
+                // owner references live in metadata, so names only
+                async {
+                    match &scope {
+                        Some(_) => replicasets_api.list_metadata(&list_params).await.map(Some),
                         None => Ok(None),
                     }
                 }
             )
         })
         .await;
+        tracing::debug!(
+            "workloads: Kubernetes lists took {:?} (scope {:?})",
+            started.elapsed(),
+            self.scope.as_ref().map(|n| n.len())
+        );
 
         let (
             deployments_result,
@@ -387,7 +415,7 @@ impl WorkloadHealthComponent {
             e
         })?;
 
-        let mut pods = pods_result.map_err(|e| {
+        let pods = pods_result.map_err(|e| {
             self.set_error(format!("Failed to fetch pods: {}", e));
             e
         })?;
@@ -397,15 +425,9 @@ impl WorkloadHealthComponent {
             e
         })?;
 
-        // Scoped: keep only the pods on the scoped nodes and count, per
-        // workload, how many of them there are ready
-        let placement: Option<HashMap<WorkloadKey, (i32, i32)>> = scope.as_ref().map(|nodes| {
-            pods.items.retain(|p| {
-                p.spec
-                    .as_ref()
-                    .and_then(|s| s.node_name.as_ref())
-                    .is_some_and(|n| nodes.contains(n))
-            });
+        // Scoped: count, per workload, how many of its pods on the scoped
+        // nodes are ready
+        let placement: Option<HashMap<WorkloadKey, (i32, i32)>> = scope.as_ref().map(|_| {
             let rs_owners: HashMap<(String, String), String> = replicasets
                 .into_iter()
                 .flat_map(|list| list.items)
@@ -425,7 +447,7 @@ impl WorkloadHealthComponent {
                 })
                 .collect();
             let mut placement = HashMap::new();
-            for pod in &pods.items {
+            for pod in &pods {
                 if let Some((kind, name)) = pod_owner(pod, &rs_owners) {
                     let ns = pod.metadata.namespace.clone().unwrap_or_default();
                     let entry: &mut (i32, i32) = placement.entry((ns, kind, name)).or_default();
@@ -603,7 +625,7 @@ impl WorkloadHealthComponent {
         }
 
         // Process pods - find problematic ones
-        for pod in pods.items {
+        for pod in pods {
             let ns = pod
                 .metadata
                 .namespace
@@ -1198,7 +1220,7 @@ impl WorkloadHealthComponent {
                 Span::raw(" select  "),
                 Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" expand  "),
-                Span::styled("[q]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" back  "),
             ]
         };
