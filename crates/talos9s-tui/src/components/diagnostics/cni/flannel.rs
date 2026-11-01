@@ -31,7 +31,11 @@ pub async fn run_flannel_checks(
 
     // If we have K8s API info, check Flannel pod health
     if let Some(ref cni_info) = ctx.cni_info {
-        checks.push(check_flannel_pods(cni_info));
+        checks.push(super::check_cni_pods(
+            "flannel_pods",
+            "Flannel Pods",
+            cni_info,
+        ));
     }
 
     // Check CNI health from kubelet logs
@@ -39,39 +43,6 @@ pub async fn run_flannel_checks(
     checks.push(cni_check);
 
     checks
-}
-
-/// Check Flannel pod health from K8s API
-fn check_flannel_pods(
-    cni_info: &crate::components::diagnostics::types::CniInfo,
-) -> DiagnosticCheck {
-    if cni_info.pods.is_empty() {
-        return DiagnosticCheck::warn("flannel_pods", "Flannel Pods", "No pods found")
-            .with_details("Could not find Flannel pods in kube-system namespace.");
-    }
-
-    let healthy = cni_info.are_pods_healthy();
-    let summary = cni_info.pod_health_summary();
-
-    if healthy {
-        DiagnosticCheck::pass("flannel_pods", "Flannel Pods", &summary)
-    } else {
-        // Find unhealthy pods
-        let unhealthy: Vec<_> = cni_info
-            .pods
-            .iter()
-            .filter(|p| p.phase != "Running" || !p.ready)
-            .collect();
-
-        let details = unhealthy
-            .iter()
-            .map(|p| format!("  {} - {} (ready: {})", p.name, p.phase, p.ready))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        DiagnosticCheck::fail("flannel_pods", "Flannel Pods", &summary, None)
-            .with_details(&format!("Unhealthy pods:\n{}", details))
-    }
 }
 
 /// Check if br_netfilter kernel module is loaded

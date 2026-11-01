@@ -468,29 +468,7 @@ pub fn k8s_nodes_to_discovery_members(nodes: Vec<K8sNodeInfo>) -> Vec<DiscoveryM
         .collect()
 }
 
-/// Detected CNI information from K8s
-#[derive(Debug, Clone, Default)]
-pub struct CniInfo {
-    /// Detected CNI type
-    pub cni_type: super::types::CniType,
-    /// CNI pods in kube-system
-    pub pods: Vec<CniPodInfo>,
-}
-
-/// Information about a CNI pod
-#[derive(Debug, Clone)]
-pub struct CniPodInfo {
-    /// Pod name
-    pub name: String,
-    /// Node the pod is running on
-    pub node_name: Option<String>,
-    /// Pod phase (Running, Pending, etc.)
-    pub phase: String,
-    /// Whether pod is ready
-    pub ready: bool,
-    /// Number of restarts
-    pub restart_count: i32,
-}
+use talos9s_core::{CniInfo, CniPodInfo};
 
 /// Detect CNI type by checking pods in kube-system namespace
 pub async fn detect_cni_from_k8s(client: &Client) -> Result<CniInfo, K8sError> {

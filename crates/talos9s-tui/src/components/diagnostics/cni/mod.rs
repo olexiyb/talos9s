@@ -11,7 +11,7 @@ mod flannel;
 pub use flannel::run_flannel_checks;
 
 use super::k8s;
-use super::types::{CniInfo, CniPodInfo, CniType, DiagnosticCheck, DiagnosticContext};
+use super::types::{CniInfo, CniType, DiagnosticCheck, DiagnosticContext};
 use kube::Client;
 use talos_rs::TalosClient;
 
@@ -33,22 +33,7 @@ pub async fn detect_cni_with_client(
                         info.cni_type,
                         info.pods.len()
                     );
-                    // Convert k8s::CniInfo to types::CniInfo
-                    let cni_info = CniInfo {
-                        cni_type: info.cni_type.clone(),
-                        pods: info
-                            .pods
-                            .iter()
-                            .map(|p| CniPodInfo {
-                                name: p.name.clone(),
-                                node_name: p.node_name.clone(),
-                                phase: p.phase.clone(),
-                                ready: p.ready,
-                                restart_count: p.restart_count,
-                            })
-                            .collect(),
-                    };
-                    return (info.cni_type, Some(cni_info));
+                    return (info.cni_type.clone(), Some(info));
                 }
             }
             Err(e) => {
@@ -137,7 +122,7 @@ async fn run_calico_checks(_client: &TalosClient, ctx: &DiagnosticContext) -> Ve
 
     // Check Calico pod health if we have K8s API info
     if let Some(ref cni_info) = ctx.cni_info {
-        checks.push(check_cni_pods("Calico Pods", cni_info));
+        checks.push(check_cni_pods("cni_pods", "Calico Pods", cni_info));
     }
 
     // TODO: Check br_netfilter (depends on Calico datapath mode)
@@ -158,9 +143,11 @@ async fn run_calico_checks(_client: &TalosClient, ctx: &DiagnosticContext) -> Ve
 }
 
 /// Generic helper to check CNI pod health
-fn check_cni_pods(name: &str, cni_info: &CniInfo) -> DiagnosticCheck {
+/// Health of the CNI's pods; `id` is kept per CNI so group views group
+/// the same check across nodes
+pub(super) fn check_cni_pods(id: &str, name: &str, cni_info: &CniInfo) -> DiagnosticCheck {
     if cni_info.pods.is_empty() {
-        return DiagnosticCheck::warn("cni_pods", name, "No pods found")
+        return DiagnosticCheck::warn(id, name, "No pods found")
             .with_details("Could not find CNI pods in kube-system namespace.");
     }
 
@@ -168,7 +155,7 @@ fn check_cni_pods(name: &str, cni_info: &CniInfo) -> DiagnosticCheck {
     let summary = cni_info.pod_health_summary();
 
     if healthy {
-        DiagnosticCheck::pass("cni_pods", name, &summary)
+        DiagnosticCheck::pass(id, name, &summary)
     } else {
         // Find unhealthy pods
         let unhealthy: Vec<_> = cni_info
@@ -183,7 +170,7 @@ fn check_cni_pods(name: &str, cni_info: &CniInfo) -> DiagnosticCheck {
             .collect::<Vec<_>>()
             .join("\n");
 
-        DiagnosticCheck::fail("cni_pods", name, &summary, None)
+        DiagnosticCheck::fail(id, name, &summary, None)
             .with_details(&format!("Unhealthy pods:\n{}", details))
     }
 }
