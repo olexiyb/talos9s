@@ -942,6 +942,11 @@ pub struct ClusterComponent {
     tree_pane: FocusedPane,
     /// Where Esc in the view goes back to, when not just the tree
     back_hint: Option<String>,
+    /// Scroll of the node pane (lines), the node it belongs to, and how far
+    /// it can go (0 when everything fits; set per draw)
+    details_scroll: usize,
+    details_scroll_node: String,
+    details_max_scroll: usize,
     /// Last diagnostics result per (cluster, node), shown on the dashboard
     diagnostics_summaries: HashMap<(String, String), DiagnosticsSummary>,
 }
@@ -961,7 +966,9 @@ struct HitMap {
     details: Rect,
     /// Services list area in the node details (row 0 is its heading) and the
     /// number of services drawn
-    services: Option<(Rect, usize)>,
+    /// Services rows visible on screen, the index of the first of them, and
+    /// how many services there are
+    services: Option<(Rect, usize, usize)>,
 }
 
 fn contains(area: Rect, column: u16, row: u16) -> bool {
@@ -1403,6 +1410,9 @@ impl ClusterComponent {
             view_focused: false,
             tree_pane: FocusedPane::Nodes,
             back_hint: None,
+            details_scroll: 0,
+            details_scroll_node: String::new(),
+            details_max_scroll: 0,
             diagnostics_summaries: HashMap::new(),
         }
     }
@@ -2878,6 +2888,15 @@ impl Component for ClusterComponent {
         match mouse.kind {
             // Wheel scrolls the pane under the pointer
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // A node pane taller than the screen scrolls as a whole
+                if in_details && self.details_max_scroll > 0 {
+                    self.details_scroll = if mouse.kind == MouseEventKind::ScrollUp {
+                        self.details_scroll.saturating_sub(3)
+                    } else {
+                        (self.details_scroll + 3).min(self.details_max_scroll)
+                    };
+                    return Ok(None);
+                }
                 let pane = if in_details {
                     FocusedPane::Services
                 } else if in_menu {
@@ -2941,10 +2960,14 @@ impl Component for ClusterComponent {
                     Ok(None)
                 } else if in_details {
                     self.focused_pane = FocusedPane::Services;
-                    let service = self.hits.borrow().services.and_then(|(area, count)| {
-                        let idx = row.checked_sub(area.y + 1)? as usize;
-                        (contains(area, column, row) && idx < count).then_some(idx)
-                    });
+                    let service = self
+                        .hits
+                        .borrow()
+                        .services
+                        .and_then(|(area, first, count)| {
+                            let idx = row.checked_sub(area.y)? as usize + first;
+                            (contains(area, column, row) && idx < count).then_some(idx)
+                        });
                     if let Some(idx) = service {
                         self.selected_service = idx;
                     }
@@ -4225,7 +4248,7 @@ impl ClusterComponent {
         );
     }
 
-    pub fn draw_details_pane(&self, frame: &mut Frame, area: Rect) {
+    pub fn draw_details_pane(&mut self, frame: &mut Frame, area: Rect) {
         {
             let mut hits = self.hits.borrow_mut();
             hits.details = area;
@@ -4729,22 +4752,20 @@ impl ClusterComponent {
             resource_lines.push(diagnostics_line(summary));
         }
 
-        // Split into resources (sized to its lines plus a spacer) and services
-        let panel_layout = Layout::vertical([
-            Constraint::Length(resource_lines.len() as u16 + 1), // Resources
-            Constraint::Min(4),                                  // Services
-        ])
-        .split(inner);
-
-        frame.render_widget(Paragraph::new(resource_lines), panel_layout[0]);
-
-        // Services section
-        if let Some(services) = self.get_node_services(&node_name) {
+        // Resources, a spacer, then the services: one column that scrolls
+        // (wheel, or to keep the selected service in view) when the pane is
+        // shorter than it
+        let mut lines = resource_lines;
+        lines.push(Line::from(""));
+        let services_heading = lines.len();
+        let services = self.get_node_services(&node_name).cloned();
+        let service_count = services.as_ref().map_or(0, |s| s.len());
+        if let Some(services) = &services {
             let running = services.iter().filter(|s| s.state == "Running").count();
-            let mut svc_lines = vec![Line::from(vec![Span::styled(
+            lines.push(Line::from(vec![Span::styled(
                 format!(" Services ({}/{})", running, services.len()),
                 Style::default().fg(Color::Gray),
-            )])];
+            )]));
 
             for (i, svc) in services.iter().enumerate() {
                 let (health_symbol, health_color) = match svc.is_healthy() {
@@ -4766,18 +4787,56 @@ impl ClusterComponent {
                 };
                 let selector = if is_selected { "▸" } else { " " };
 
-                svc_lines.push(Line::from(vec![
+                lines.push(Line::from(vec![
                     Span::raw(format!(" {}", selector)),
                     Span::styled(health_symbol, Style::default().fg(health_color)),
                     Span::raw(" "),
-                    Span::styled(&svc.id, name_style),
+                    Span::styled(svc.id.clone(), name_style),
                     Span::styled(format!(" ({})", svc.state), Style::default().dim()),
                 ]));
             }
-
-            frame.render_widget(Paragraph::new(svc_lines), panel_layout[1]);
-            self.hits.borrow_mut().services = Some((panel_layout[1], services.len()));
         }
+
+        let height = inner.height as usize;
+        let total = lines.len();
+        if self.details_scroll_node != node_name {
+            self.details_scroll_node = node_name.clone();
+            self.details_scroll = 0;
+        }
+        self.details_max_scroll = total.saturating_sub(height);
+        self.details_scroll = self.details_scroll.min(self.details_max_scroll);
+        // Keyboard selection in the services stays in view
+        if self.focused_pane == FocusedPane::Services && service_count > 0 {
+            let selected_line = services_heading + 1 + self.selected_service;
+            if selected_line < self.details_scroll {
+                self.details_scroll = selected_line;
+            } else if selected_line >= self.details_scroll + height {
+                self.details_scroll = selected_line + 1 - height;
+            }
+        }
+        frame.render_widget(
+            Paragraph::new(lines).scroll((self.details_scroll as u16, 0)),
+            inner,
+        );
+
+        // Where the service rows are on screen (clipped to the pane), for clicks
+        let rows_start = services_heading + 1;
+        let first_visible = rows_start.max(self.details_scroll);
+        let last_visible = (rows_start + service_count).min(self.details_scroll + height);
+        self.hits.borrow_mut().services =
+            (service_count > 0 && first_visible < last_visible).then(|| {
+                let y = inner.y + (first_visible - self.details_scroll) as u16;
+                (
+                    Rect::new(
+                        inner.x,
+                        y,
+                        inner.width,
+                        (last_visible - first_visible) as u16,
+                    ),
+                    first_visible - rows_start,
+                    service_count,
+                )
+            });
     }
 }
 

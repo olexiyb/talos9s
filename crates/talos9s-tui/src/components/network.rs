@@ -1073,21 +1073,6 @@ impl NetworkStatsComponent {
         let auto_indicator = if self.auto_refresh { "" } else { " [AUTO:OFF]" };
 
         // Build tab bar for right side (Connections is a subscreen, not a tab)
-        let tab_ifaces = if self.view_mode == ViewMode::Interfaces {
-            Span::styled("[Interfaces]", Style::default().fg(Color::Cyan))
-        } else if self.view_mode == ViewMode::Connections {
-            // When in Connections subscreen, show Interfaces as the parent
-            Span::styled(" Interfaces>", Style::default().fg(Color::DarkGray))
-        } else {
-            Span::styled(" Interfaces ", Style::default().fg(Color::DarkGray))
-        };
-        // Show "Connections" indicator when in that subscreen
-        let conns_indicator = if self.view_mode == ViewMode::Connections {
-            Span::styled("[Connections]", Style::default().fg(Color::Cyan))
-        } else {
-            Span::raw("")
-        };
-
         let kubespan = self.view_mode == ViewMode::KubeSpan;
         let mut spans = vec![
             Span::styled(
@@ -1104,9 +1089,6 @@ impl NetworkStatsComponent {
                 Span::raw("  "),
                 Span::styled(&device_count, Style::default().fg(Color::DarkGray)),
                 Span::styled(auto_indicator, Style::default().fg(Color::Yellow)),
-                Span::raw("  │ "),
-                tab_ifaces,
-                conns_indicator,
             ]);
         }
 
@@ -1613,8 +1595,6 @@ impl NetworkStatsComponent {
         };
 
         let spans = vec![
-            Span::styled("[Tab]", Style::default().fg(Color::Cyan)),
-            Span::raw(" views  "),
             Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
             Span::raw(" conns  "),
             Span::styled("[c]", Style::default().fg(Color::Cyan)),
