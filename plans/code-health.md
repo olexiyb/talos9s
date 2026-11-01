@@ -1,6 +1,6 @@
 # Plan: code health — correctness fixes, dead code, simplification, tests
 
-Status: phases 1-2 done · Author: Olexiy Buyanskyy · 2026-11-01
+Status: phases 1-3 done · Author: Olexiy Buyanskyy · 2026-11-01
 
 ## Summary
 
@@ -97,6 +97,12 @@ are not stuck; the Lifecycle/node-ops pod count checks init containers.
 | `k8s.rs:631` | `check_pod_health` double-counts multi-container pods, counts any Pending pod | per pod, Pending past a threshold |
 
 ## Phase 3 — crashes and logic bugs
+
+Done (2026-11-01), all items (10 and 13 already in phases 1-2). Item 12:
+KubeSpanPeerStatus has no RTT at all, so the column became the last
+handshake. Also found: wrapping in a pane narrower than the line prefix
+looped forever; the Network view showed control plane ports down on every
+worker; `talos9s_core::truncate_string` now counts chars and is used.
 
 1. **Log timestamp panic** ✔ — `multi_logs.rs:1102` indexes
    `days_in_months[month]` without a range check; `ts[5..7]` byte slicing
