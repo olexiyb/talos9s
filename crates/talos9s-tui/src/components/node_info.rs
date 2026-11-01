@@ -1319,19 +1319,16 @@ impl Component for NodeInfoComponent {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.query().editing {
-            match key.code {
-                KeyCode::Enter => {
+            use crate::ui_ext::{TextEdit, edit_text};
+            match edit_text(&mut self.query_mut().text, &key) {
+                TextEdit::Submit => {
                     self.query_mut().editing = false;
                     if self.tab == NodeInfoTab::Config {
                         self.search_config(true);
                     }
                 }
-                KeyCode::Esc => *self.query_mut() = Query::default(),
-                KeyCode::Backspace => {
-                    self.query_mut().text.pop();
-                }
-                KeyCode::Char(c) => self.query_mut().text.push(c),
-                _ => {}
+                TextEdit::Cancel => *self.query_mut() = Query::default(),
+                TextEdit::Changed | TextEdit::Ignored => {}
             }
             // The list shrinks as the filter narrows
             self.containers_table.select(Some(0));

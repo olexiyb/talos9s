@@ -212,6 +212,38 @@ impl CheckStatusExt for CheckStatus {
     }
 }
 
+/// What a key did to a text field being typed into
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEdit {
+    /// A char was added or removed
+    Changed,
+    /// Enter
+    Submit,
+    /// Esc
+    Cancel,
+    /// Any other key
+    Ignored,
+}
+
+/// Apply a key to `text`: chars append, Backspace deletes, Enter and Esc
+/// are reported for the view to act on
+pub fn edit_text(text: &mut String, key: &crossterm::event::KeyEvent) -> TextEdit {
+    use crossterm::event::KeyCode;
+    match key.code {
+        KeyCode::Char(c) => {
+            text.push(c);
+            TextEdit::Changed
+        }
+        KeyCode::Backspace => {
+            text.pop();
+            TextEdit::Changed
+        }
+        KeyCode::Enter => TextEdit::Submit,
+        KeyCode::Esc => TextEdit::Cancel,
+        _ => TextEdit::Ignored,
+    }
+}
+
 /// A list cursor move
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Move {

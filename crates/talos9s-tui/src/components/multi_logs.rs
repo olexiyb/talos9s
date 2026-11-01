@@ -1771,26 +1771,14 @@ impl Component for MultiLogsComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle search input mode
         if self.search_mode == SearchMode::Input {
-            match key.code {
-                KeyCode::Esc => {
-                    self.clear_search();
+            use crate::ui_ext::{TextEdit, edit_text};
+            match edit_text(&mut self.search_query, &key) {
+                TextEdit::Changed => self.update_matches(),
+                TextEdit::Submit if !self.search_query.is_empty() => {
+                    self.search_mode = SearchMode::Active;
                 }
-                KeyCode::Enter => {
-                    if !self.search_query.is_empty() {
-                        self.search_mode = SearchMode::Active;
-                    } else {
-                        self.clear_search();
-                    }
-                }
-                KeyCode::Backspace => {
-                    self.search_query.pop();
-                    self.update_matches();
-                }
-                KeyCode::Char(c) => {
-                    self.search_query.push(c);
-                    self.update_matches();
-                }
-                _ => {}
+                TextEdit::Submit | TextEdit::Cancel => self.clear_search(),
+                TextEdit::Ignored => {}
             }
             return Ok(None);
         }

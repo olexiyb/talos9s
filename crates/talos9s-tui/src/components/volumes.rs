@@ -1071,17 +1071,14 @@ impl Component for VolumesComponent {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.filter_editing {
-            match key.code {
-                KeyCode::Enter => self.filter_editing = false,
-                KeyCode::Esc => {
+            use crate::ui_ext::{TextEdit, edit_text};
+            match edit_text(&mut self.filter, &key) {
+                TextEdit::Submit => self.filter_editing = false,
+                TextEdit::Cancel => {
                     self.filter.clear();
                     self.filter_editing = false;
                 }
-                KeyCode::Backspace => {
-                    self.filter.pop();
-                }
-                KeyCode::Char(c) => self.filter.push(c),
-                _ => {}
+                TextEdit::Changed | TextEdit::Ignored => {}
             }
             self.clamp_selection();
             return Ok(None);

@@ -1682,48 +1682,27 @@ impl ProcessesComponent {
     }
 
     fn handle_filter_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        match key.code {
-            KeyCode::Esc => {
-                // Clear filter and exit filter mode
+        use crate::ui_ext::{TextEdit, edit_text};
+        match edit_text(&mut self.filter_input, &key) {
+            TextEdit::Cancel => {
                 self.mode = Mode::Normal;
-                self.filter = None;
                 self.filter_input.clear();
+                self.filter = None;
                 self.apply_filter();
                 self.reset_selection();
-                Ok(None)
             }
-            KeyCode::Enter => {
-                // Apply filter and exit filter mode
-                self.mode = Mode::Normal;
-                self.filter = if self.filter_input.is_empty() {
-                    None
-                } else {
-                    Some(self.filter_input.clone())
-                };
+            // Live filter as you type; Enter keeps it and stops typing
+            TextEdit::Changed | TextEdit::Submit => {
+                self.filter = (!self.filter_input.is_empty()).then(|| self.filter_input.clone());
                 self.apply_filter();
-                self.reset_selection();
-                Ok(None)
+                if key.code == KeyCode::Enter {
+                    self.mode = Mode::Normal;
+                    self.reset_selection();
+                }
             }
-            KeyCode::Backspace => {
-                self.filter_input.pop();
-                // Live filter as you type
-                self.filter = if self.filter_input.is_empty() {
-                    None
-                } else {
-                    Some(self.filter_input.clone())
-                };
-                self.apply_filter();
-                Ok(None)
-            }
-            KeyCode::Char(c) => {
-                self.filter_input.push(c);
-                // Live filter as you type
-                self.filter = Some(self.filter_input.clone());
-                self.apply_filter();
-                Ok(None)
-            }
-            _ => Ok(None),
+            TextEdit::Ignored => {}
         }
+        Ok(None)
     }
 }
 
