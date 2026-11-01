@@ -875,6 +875,12 @@ impl App {
     /// Tab / Shift+Tab move into the view instead.
     fn dispatch_tree_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         let pane = self.cluster.focused_pane();
+        // Esc in the dashboard's services list hands the keyboard back to the
+        // tree, as it does in any other view
+        if self.view == View::Cluster && pane == FocusedPane::Services && key.code == KeyCode::Esc {
+            self.cluster.set_focused_pane(FocusedPane::Nodes);
+            return Ok(None);
+        }
         if self.view != View::Cluster {
             // Enter on any tree row (group rows too: Space folds them)
             let into_view = match key.code {
@@ -1029,9 +1035,10 @@ impl App {
             // (the view follows the selection); a menu entry opens its view
             // with the keyboard in it, like Enter; empty space in the pane
             // hands the keyboard to the tree
-            if click && self.view != View::Cluster {
+            if click {
                 match self.cluster.click_target(mouse.column, mouse.row) {
                     ClickTarget::Menu => self.focus_after_show = true,
+                    // The dashboard's services focus is the cluster's own
                     ClickTarget::Row => {}
                     ClickTarget::None => self.view_has_focus = false,
                 }
@@ -1171,7 +1178,11 @@ impl App {
         self.applied_target = self.scope_key(item);
         self.pending_target = None;
         if self.view == View::Cluster {
+            // Opened from the menu: the dashboard's view is its services list
             self.view_has_focus = false;
+            if std::mem::take(&mut self.focus_after_show) {
+                self.cluster.set_focused_pane(FocusedPane::Services);
+            }
         } else {
             if self.cluster.focused_pane() == FocusedPane::Services {
                 self.cluster.set_focused_pane(FocusedPane::Nodes);
@@ -1385,8 +1396,10 @@ impl App {
             Action::ShowDashboard => {
                 if self.view != View::Cluster {
                     self.leave_view();
-                    self.show_in_pane(NavMenuItem::Dashboard, View::Cluster);
                 }
+                // Also when already shown: chosen from the menu, its services
+                // list takes the keyboard
+                self.show_in_pane(NavMenuItem::Dashboard, View::Cluster);
             }
             Action::ShowHint(item, message) => {
                 self.leave_view();
@@ -2227,6 +2240,37 @@ mod tests {
         app.cluster.set_focused_pane(FocusedPane::Menu);
         assert!(app.dispatch_key(key(KeyCode::Tab)).unwrap().is_none());
         assert!(app.view_has_focus);
+    }
+
+    /// Choosing the dashboard from the menu (Enter or a click) puts the
+    /// keyboard in its services list, as other views take it
+    #[tokio::test]
+    async fn dashboard_from_the_menu_takes_the_keyboard() {
+        let mut app = app_with_view(View::Hint);
+        app.cluster.set_focused_pane(FocusedPane::Menu);
+        app.cluster.set_active_menu(NavMenuItem::Dashboard);
+        let action = app.dispatch_key(key(KeyCode::Enter)).unwrap();
+        assert!(matches!(action, Some(Action::ShowDashboard)));
+        app.handle_action(Action::ShowDashboard).await.unwrap();
+        assert_eq!(app.view, View::Cluster);
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Services);
+
+        // Already on the dashboard: the same
+        app.cluster.set_focused_pane(FocusedPane::Menu);
+        let action = app.dispatch_key(key(KeyCode::Enter)).unwrap();
+        assert!(matches!(action, Some(Action::ShowDashboard)));
+        app.handle_action(Action::ShowDashboard).await.unwrap();
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Services);
+
+        // Esc in the services list hands the keyboard back to the tree
+        assert!(app.dispatch_key(key(KeyCode::Esc)).unwrap().is_none());
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Nodes);
+
+        // Esc in the tree (not from the menu) keeps the tree's focus
+        app.cluster.set_focused_pane(FocusedPane::Nodes);
+        app.focus_after_show = false;
+        app.handle_action(Action::ShowDashboard).await.unwrap();
+        assert_eq!(app.cluster.focused_pane(), FocusedPane::Nodes);
     }
 
     /// Esc in the tree returns to the dashboard; a hint shows its reason

@@ -936,6 +936,8 @@ pub struct ClusterComponent {
 /// Where clickable things were drawn on the last frame
 #[derive(Default)]
 struct HitMap {
+    /// The whole nodes pane (tree and menu, with borders)
+    tree: Rect,
     /// Node list area and the item drawn on each of its rows (`None` for
     /// error/warning lines)
     node_list: Rect,
@@ -2687,6 +2689,7 @@ impl ClusterComponent {
             .split(layout[1]);
 
         self.view_focused = view_focused;
+        self.hits.borrow_mut().tree = content[0];
         if nodes_width > 0 {
             self.draw_nodes_pane(frame, content[0]);
         } else {
@@ -2817,12 +2820,17 @@ impl Component for ClusterComponent {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if in_nodes {
-                    self.focused_pane = FocusedPane::Nodes;
                     let item = {
                         let hits = self.hits.borrow();
                         let idx = (row - hits.node_list.y) as usize;
                         hits.node_rows.get(idx).cloned().flatten()
                     };
+                    // A row click keeps the services list focused (showing the
+                    // new node's services), as other views keep the keyboard;
+                    // empty space under the tree focuses the tree
+                    if item.is_none() || self.focused_pane != FocusedPane::Services {
+                        self.focused_pane = FocusedPane::Nodes;
+                    }
                     if let Some(item) = item {
                         let is_header = matches!(
                             item,
@@ -2848,6 +2856,8 @@ impl Component for ClusterComponent {
                         self.selected_menu_item = idx;
                         return self.navigate_to_selected_menu();
                     }
+                    // The separator line
+                    self.focused_pane = FocusedPane::Nodes;
                     Ok(None)
                 } else if in_details {
                     self.focused_pane = FocusedPane::Services;
@@ -2860,6 +2870,10 @@ impl Component for ClusterComponent {
                     }
                     Ok(None)
                 } else {
+                    // The pane's border, title or separator: the tree
+                    if contains(self.hits.borrow().tree, column, row) {
+                        self.focused_pane = FocusedPane::Nodes;
+                    }
                     Ok(None)
                 }
             }
@@ -4915,6 +4929,35 @@ mod tests {
             ClickTarget::None
         );
         assert_eq!(comp.click_target(tree.x, tree.y), ClickTarget::None);
+    }
+
+    /// On the dashboard, clicking another node keeps the services list
+    /// focused; empty space in the pane focuses the tree
+    #[test]
+    fn dashboard_clicks_keep_the_services_focus() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut comp = two_node_cluster();
+        if let Some(c) = comp.clusters.get_mut(0) {
+            c.expanded = true;
+        }
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal.draw(|f| comp.draw(f, f.area()).unwrap()).unwrap();
+        let list = comp.hits.borrow().node_list;
+        let click = |column, row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        comp.set_focused_pane(FocusedPane::Services);
+        comp.handle_mouse_event(click(list.x + 2, list.y)).unwrap();
+        assert_eq!(comp.focused_pane(), FocusedPane::Services);
+
+        comp.handle_mouse_event(click(list.x + 2, list.y + list.height - 1))
+            .unwrap();
+        assert_eq!(comp.focused_pane(), FocusedPane::Nodes);
     }
 
     /// Full when the view keeps 100 columns, compact otherwise; hidden is 0
