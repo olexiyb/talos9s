@@ -2460,7 +2460,7 @@ impl ClusterComponent {
     /// Replace a cluster's data with a refresh's, keeping the UI state
     /// (expand/collapse) the user may have changed while it ran
     fn adopt_cluster(&mut self, idx: usize, mut fresh: ClusterData) -> bool {
-        let Some(current) = self.clusters.get_mut(idx) else {
+        let Some(current) = self.clusters.get(idx) else {
             return false;
         };
         if current.name != fresh.name {
@@ -2469,7 +2469,41 @@ impl ClusterComponent {
         fresh.expanded = current.expanded;
         fresh.controlplane_expanded = current.controlplane_expanded;
         fresh.workers_expanded = current.workers_expanded;
-        *current = fresh;
+        // The tree selects a node by its position in the list: a node added
+        // or dropped by this refresh would move the cursor (and the view
+        // following it) to another node. Keep it on the same name.
+        let selected = match self.selected_item {
+            NodeListItem::ControlPlaneNode(i, _) | NodeListItem::WorkerNode(i, _) if i == idx => {
+                self.current_node_name()
+            }
+            _ => None,
+        };
+        if let Some(current) = self.clusters.get_mut(idx) {
+            *current = fresh;
+        }
+        if let Some(name) = selected {
+            self.reselect_node(idx, &name);
+        }
+        true
+    }
+
+    /// Point the selection at `name` in cluster `idx`, as a control plane
+    /// or worker node, without unfolding anything. `false` when it isn't
+    /// listed.
+    fn reselect_node(&mut self, idx: usize, name: &str) -> bool {
+        let cp = self
+            .controlplane_nodes_for(idx)
+            .iter()
+            .position(|(_, v)| v.node == name);
+        let workers = self
+            .worker_nodes_for(idx)
+            .iter()
+            .position(|(_, v)| v.node == name);
+        self.selected_item = match (cp, workers) {
+            (Some(i), _) => NodeListItem::ControlPlaneNode(idx, i),
+            (None, Some(i)) => NodeListItem::WorkerNode(idx, i),
+            _ => return false,
+        };
         true
     }
 
@@ -3223,19 +3257,10 @@ impl ClusterComponent {
     /// a group view), unfolding its group; false when it isn't listed
     pub fn select_node(&mut self, name: &str) -> bool {
         let idx = self.active_cluster;
-        let cp = self
-            .controlplane_nodes_for(idx)
-            .iter()
-            .position(|(_, v)| v.node == name);
-        let workers = self
-            .worker_nodes_for(idx)
-            .iter()
-            .position(|(_, v)| v.node == name);
-        let (item, cp_group) = match (cp, workers) {
-            (Some(i), _) => (NodeListItem::ControlPlaneNode(idx, i), true),
-            (None, Some(i)) => (NodeListItem::WorkerNode(idx, i), false),
-            _ => return false,
-        };
+        if !self.reselect_node(idx, name) {
+            return false;
+        }
+        let cp_group = matches!(self.selected_item, NodeListItem::ControlPlaneNode(..));
         if let Some(cluster) = self.clusters.get_mut(idx) {
             cluster.expanded = true;
             if cp_group {
@@ -3244,7 +3269,6 @@ impl ClusterComponent {
                 cluster.workers_expanded = true;
             }
         }
-        self.selected_item = item;
         true
     }
 
@@ -3760,11 +3784,10 @@ impl Component for ClusterComponent {
                                     .get(&hostname)
                                     .cloned()
                                     .unwrap_or_else(|| hostname.clone());
-                                // Check if node has etcd service (controlplane)
-                                let is_controlplane = self
-                                    .get_node_services_for(cluster_idx, &hostname)
-                                    .map(|s| s.iter().any(|svc| svc.id == "etcd"))
-                                    .unwrap_or(false);
+                                // The tree's role (discovery, then etcd members),
+                                // not "runs etcd now": an offline control plane
+                                // node runs nothing
+                                let is_controlplane = cluster.is_controlplane(&hostname);
                                 (hostname, ip, is_controlplane)
                             })
                             .collect()
@@ -5800,6 +5823,34 @@ mod tests {
             ..Default::default()
         });
         comp
+    }
+
+    /// A refresh that adds or drops a node keeps the cursor on the node it
+    /// was on, not on the same row
+    #[test]
+    fn selection_stays_on_the_node_across_refreshes() {
+        let mut comp = ClusterComponent::default();
+        let workers = |names: &[&str]| ClusterData {
+            name: "test".to_string(),
+            versions: names.iter().map(|n| ver(n)).collect(),
+            discovery_members: names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| member(n, &format!("10.0.0.{}", i + 1), "worker"))
+                .collect(),
+            ..Default::default()
+        };
+        comp.clusters.push(workers(&["w1", "w2", "w3"]));
+        assert!(comp.select_node("w2"));
+        assert_eq!(comp.current_node_name().as_deref(), Some("w2"));
+
+        // w1 is gone: w2 moved up a row
+        assert!(comp.adopt_cluster(0, workers(&["w2", "w3"])));
+        assert_eq!(comp.current_node_name().as_deref(), Some("w2"));
+
+        // A new node in front of it
+        assert!(comp.adopt_cluster(0, workers(&["w0", "w2", "w3"])));
+        assert_eq!(comp.current_node_name().as_deref(), Some("w2"));
     }
 
     /// The workspace follows the selection by these keys, and node-only views
