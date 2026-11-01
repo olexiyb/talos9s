@@ -765,55 +765,28 @@ impl App {
     /// Apply what the last run left in the state file; the menu entry it
     /// showed, for the caller to open
     fn restore_state(&mut self) -> Option<NavMenuItem> {
-        use crate::components::{network, processes, volumes};
+        use crate::components::{network, volumes};
         use crate::state::{LOG_LEVELS, by_name};
         let state = crate::state::load(self.state_path.as_deref()?);
         self.cluster.apply_saved(&state);
-        self.pane_width = by_name(
-            &[PaneWidth::Full, PaneWidth::Compact, PaneWidth::Hidden],
-            state.pane_width.as_deref(),
-        );
+        self.pane_width = by_name(state.pane_width.as_deref());
         if let Some(levels) = state.log_levels.as_ref().filter(|l| !l.is_empty()) {
             self.log_level_filter = LOG_LEVELS.map(|l| levels.iter().any(|x| x == l));
         }
         if state.volumes.show_all.is_some() || state.volumes.type_filter.is_some() {
             self.volumes_view_state = Some(volumes::VolumesViewState {
                 show_all: state.volumes.show_all.unwrap_or(true),
-                type_filter: by_name(
-                    &[
-                        volumes::TypeFilter::All,
-                        volumes::TypeFilter::Linstor,
-                        volumes::TypeFilter::Zfs,
-                    ],
-                    state.volumes.type_filter.as_deref(),
-                )
-                .unwrap_or_default(),
+                type_filter: by_name(state.volumes.type_filter.as_deref()).unwrap_or_default(),
                 ..Default::default()
             });
         }
-        self.processes_sort = by_name(
-            &[
-                processes::SortBy::CpuPercent,
-                processes::SortBy::CpuTime,
-                processes::SortBy::Mem,
-            ],
-            state.processes_sort.as_deref(),
-        )
-        .unwrap_or_default();
+        self.processes_sort = by_name(state.processes_sort.as_deref()).unwrap_or_default();
         self.network_settings = network::NetworkSettings {
-            sort_by: by_name(
-                &[network::SortBy::Traffic, network::SortBy::Errors],
-                state.network.sort.as_deref(),
-            )
-            .unwrap_or_default(),
-            conn_sort_by: by_name(
-                &[network::ConnSortBy::State, network::ConnSortBy::Port],
-                state.network.connections_sort.as_deref(),
-            )
-            .unwrap_or_default(),
+            sort_by: by_name(state.network.sort.as_deref()).unwrap_or_default(),
+            conn_sort_by: by_name(state.network.connections_sort.as_deref()).unwrap_or_default(),
             listening_only: state.network.listening_only.unwrap_or(false),
         };
-        let item = by_name(&NavMenuItem::ALL, state.view.as_deref());
+        let item = by_name(state.view.as_deref());
         self.update = state.update.clone();
         self.cluster
             .set_newer_version(self.update.newer().map(str::to_string));
@@ -914,10 +887,7 @@ impl App {
             let focus = self.saved_state.focus.clone();
             // The keyboard goes back where it was: the view once it shows,
             // or the tree's side
-            match crate::state::by_name(
-                &[FocusedPane::Nodes, FocusedPane::Menu, FocusedPane::Services],
-                focus.as_deref(),
-            ) {
+            match crate::state::by_name(focus.as_deref()) {
                 Some(pane) => self.cluster.set_focused_pane(pane),
                 None => self.focus_after_show = focus.as_deref() == Some("view"),
             }

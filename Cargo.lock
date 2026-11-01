@@ -3343,6 +3343,7 @@ dependencies = [
  "serde",
  "serde-saphyr 2.0.0",
  "serde_json",
+ "strum",
  "talos-rs",
  "talos9s-core",
  "tempfile",

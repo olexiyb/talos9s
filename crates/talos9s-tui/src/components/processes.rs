@@ -32,7 +32,7 @@ const NODE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_SAMPLE_GAP: Duration = Duration::from_secs(1);
 
 /// Sort order for process list
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::IntoStaticStr)]
 pub enum SortBy {
     #[default]
     CpuPercent,

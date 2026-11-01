@@ -69,7 +69,7 @@ struct EtcdSummary {
 }
 
 /// Which pane is currently focused
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::IntoStaticStr)]
 pub enum FocusedPane {
     #[default]
     Nodes,
@@ -96,7 +96,7 @@ pub enum ClickTarget {
 }
 
 /// Width of the nodes pane on the left of the workspace
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
 pub enum PaneWidth {
     /// Sized to the node list and menu
     Full,
@@ -113,7 +113,7 @@ const COMPACT_PANE_MAX_WIDTH: u16 = 22;
 const VIEW_MIN_WIDTH: u16 = 100;
 
 /// Navigation menu items for quick screen access
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString, strum::IntoStaticStr)]
 pub enum NavMenuItem {
     Dashboard,
     Logs,

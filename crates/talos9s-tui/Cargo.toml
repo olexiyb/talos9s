@@ -32,6 +32,9 @@ tracing.workspace = true
 # Clipboard
 arboard.workspace = true
 
+# Enum names in the state file (already in the build through ratatui)
+strum = { version = "0.28", features = ["derive"] }
+
 # Kubernetes client
 kube.workspace = true
 k8s-openapi.workspace = true

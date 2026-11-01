@@ -156,7 +156,7 @@ const KUBESPAN_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from
 type KubeSpanFetch = (Option<bool>, Result<Vec<KubeSpanPeerStatus>, String>);
 
 /// Sort order for device list
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::IntoStaticStr)]
 pub enum SortBy {
     #[default]
     Traffic, // rx_bytes + tx_bytes descending
@@ -201,7 +201,7 @@ pub struct NetworkSettings {
 }
 
 /// Sort order for connection list
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::IntoStaticStr)]
 pub enum ConnSortBy {
     #[default]
     State, // Sort by connection state

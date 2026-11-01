@@ -223,7 +223,7 @@ fn orphan_remedy(
 }
 
 /// Which kind of volume the list shows
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::IntoStaticStr)]
 pub enum TypeFilter {
     #[default]
     All,

@@ -103,15 +103,16 @@ pub struct NetworkSettings {
 /// Log level names in the logs view's panel order
 pub const LOG_LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "other"];
 
-/// The variant of `all` whose `Debug` name is `name`
-pub fn by_name<T: std::fmt::Debug + Copy>(all: &[T], name: Option<&str>) -> Option<T> {
-    let name = name?;
-    all.iter().copied().find(|v| format!("{v:?}") == name)
+/// The variant named `name` (its Rust name, as `name_of` stores it); none
+/// for a name this version doesn't have
+pub fn by_name<T: std::str::FromStr>(name: Option<&str>) -> Option<T> {
+    name?.parse().ok()
 }
 
-/// `Debug` name of an enum value, as stored
-pub fn name_of<T: std::fmt::Debug>(value: T) -> String {
-    format!("{value:?}")
+/// Name of an enum value, as stored: the variant's Rust name
+pub fn name_of<T: Into<&'static str>>(value: T) -> String {
+    let name: &'static str = value.into();
+    name.to_string()
 }
 
 /// `~/.talos9s/state.yaml`, or none without a home directory
@@ -169,16 +170,23 @@ mod tests {
         assert_eq!(load(&path), UiState::default());
         let _ = std::fs::remove_dir_all(dir);
 
-        #[derive(Debug, Clone, Copy, PartialEq)]
+        #[derive(Debug, Clone, Copy, PartialEq, strum::EnumString, strum::IntoStaticStr)]
         enum Mode {
             Fast,
             Slow,
         }
-        assert_eq!(
-            by_name(&[Mode::Fast, Mode::Slow], Some("Slow")),
-            Some(Mode::Slow)
-        );
-        assert_eq!(by_name(&[Mode::Fast, Mode::Slow], Some("Gone")), None);
+        assert_eq!(by_name(Some("Slow")), Some(Mode::Slow));
+        assert_eq!(by_name::<Mode>(Some("Gone")), None);
         assert_eq!(name_of(Mode::Fast), "Fast");
+    }
+
+    /// The names in existing state files keep meaning the same menu entry
+    #[test]
+    fn menu_names_round_trip() {
+        use crate::components::cluster::NavMenuItem;
+        for item in NavMenuItem::ALL {
+            assert_eq!(by_name(Some(&name_of(item))), Some(item));
+            assert_eq!(name_of(item), format!("{item:?}"));
+        }
     }
 }
