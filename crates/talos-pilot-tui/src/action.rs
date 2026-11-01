@@ -66,6 +66,9 @@ pub enum Action {
         Vec<crate::components::GroupNode>,
         Option<String>,
     ),
+    /// Containers, machine config or extensions of a node: (hostname,
+    /// address, tab to open)
+    ShowNodeInfo(String, String, crate::components::NodeInfoTab),
     /// Show node operations overlay: (hostname, address, is_controlplane)
     ShowNodeOperations(String, String, bool),
     /// Show rolling operations overlay with node list: Vec<(hostname, address, is_controlplane)>

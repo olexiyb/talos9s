@@ -75,6 +75,7 @@ pub enum OperationState {
 pub enum OperationType {
     Drain,
     Reboot,
+    Shutdown,
 }
 
 impl OperationType {
@@ -82,6 +83,7 @@ impl OperationType {
         match self {
             OperationType::Drain => "Drain",
             OperationType::Reboot => "Reboot",
+            OperationType::Shutdown => "Shutdown",
         }
     }
 }
@@ -215,8 +217,10 @@ async fn run_drain_operation(
     }
 }
 
-/// Run reboot operation in background (cordon, drain, reboot)
+/// Run a reboot or shutdown in background (cordon, drain, then reboot and
+/// wait for the node, or power it off)
 async fn run_reboot_operation(
+    op: OperationType,
     progress: Arc<Mutex<OperationProgress>>,
     hostname: String,
     address: String,
@@ -230,10 +234,18 @@ async fn run_reboot_operation(
     };
     use talos_rs::RebootMode;
 
-    audit_start("REBOOT", &hostname, "Starting reboot operation");
+    let shutdown = op == OperationType::Shutdown;
+    let tag = op.name().to_uppercase();
+    let tag = tag.as_str();
+    let name = op.name();
+    audit_start(
+        tag,
+        &hostname,
+        &format!("Starting {} operation", name.to_lowercase()),
+    );
 
     let Some(k8s) = k8s_client else {
-        audit_failure("REBOOT", &hostname, "No K8s client available");
+        audit_failure(tag, &hostname, "No K8s client available");
         return OperationResult {
             success: false,
             message: "No K8s client available".to_string(),
@@ -241,7 +253,7 @@ async fn run_reboot_operation(
     };
 
     let Some(client) = talos_client else {
-        audit_failure("REBOOT", &hostname, "No Talos client available");
+        audit_failure(tag, &hostname, "No Talos client available");
         return OperationResult {
             success: false,
             message: "No Talos client available".to_string(),
@@ -298,10 +310,10 @@ async fn run_reboot_operation(
             let _ = uncordon_node(&k8s, &hostname).await;
 
             let msg = format!(
-                "Reboot aborted - drain failed (node uncordoned): {}",
+                "{name} aborted - drain failed (node uncordoned): {}",
                 result.failed_pods.join(", ")
             );
-            audit_failure("REBOOT", &hostname, &msg);
+            audit_failure(tag, &hostname, &msg);
             return OperationResult {
                 success: false,
                 message: msg,
@@ -315,8 +327,8 @@ async fn run_reboot_operation(
             }
             let _ = uncordon_node(&k8s, &hostname).await;
 
-            let msg = format!("Reboot aborted - drain failed (node uncordoned): {}", e);
-            audit_failure("REBOOT", &hostname, &msg);
+            let msg = format!("{name} aborted - drain failed (node uncordoned): {}", e);
+            audit_failure(tag, &hostname, &msg);
             return OperationResult {
                 success: false,
                 message: msg,
@@ -325,24 +337,30 @@ async fn run_reboot_operation(
         _ => {}
     }
 
-    // Step 3: Reboot the node via Talos API
+    // Step 3: Reboot or shut down the node via Talos API
     {
         let mut p = progress.lock().unwrap();
-        p.message = "Sending reboot command...".to_string();
+        p.message = format!("Sending {} command...", name.to_lowercase());
     }
 
     let node_client = client.with_node(&address);
-    match node_client.reboot(RebootMode::Default).await {
+    // Already drained: Talos' own cordon and drain before a shutdown is a no-op
+    let request = if shutdown {
+        node_client.shutdown(false).await
+    } else {
+        node_client.reboot(RebootMode::Default).await
+    };
+    match request {
         Ok(result) if !result.success => {
             // Reboot request failed - uncordon
             {
                 let mut p = progress.lock().unwrap();
-                p.message = "Reboot failed, uncordoning node...".to_string();
+                p.message = format!("{name} failed, uncordoning node...");
             }
             let _ = uncordon_node(&k8s, &hostname).await;
 
-            let msg = "Reboot request failed (node uncordoned)".to_string();
-            audit_failure("REBOOT", &hostname, &msg);
+            let msg = format!("{name} request failed (node uncordoned)");
+            audit_failure(tag, &hostname, &msg);
             return OperationResult {
                 success: false,
                 message: msg,
@@ -352,18 +370,32 @@ async fn run_reboot_operation(
             // Reboot failed - uncordon the node
             {
                 let mut p = progress.lock().unwrap();
-                p.message = "Reboot failed, uncordoning node...".to_string();
+                p.message = format!("{name} failed, uncordoning node...");
             }
             let _ = uncordon_node(&k8s, &hostname).await;
 
-            let msg = format!("Failed to reboot (node uncordoned): {}", e);
-            audit_failure("REBOOT", &hostname, &msg);
+            let msg = format!("Failed to {} (node uncordoned): {}", name.to_lowercase(), e);
+            audit_failure(tag, &hostname, &msg);
             return OperationResult {
                 success: false,
                 message: msg,
             };
         }
         _ => {}
+    }
+
+    // A powered-off node stays cordoned: Talos uncordons on boot only a node
+    // it cordoned itself
+    if shutdown {
+        let msg = format!(
+            "Shutdown requested; {hostname} stays cordoned: after powering it on, \
+             kubectl uncordon {hostname}"
+        );
+        audit_success(tag, &hostname, &msg);
+        return OperationResult {
+            success: true,
+            message: msg,
+        };
     }
 
     // Step 4: Wait for node to come back (if configured)
@@ -798,8 +830,9 @@ impl NodeOperationsComponent {
                 OperationType::Drain => {
                     run_drain_operation(progress, hostname, k8s_client, drain_options).await
                 }
-                OperationType::Reboot => {
+                OperationType::Reboot | OperationType::Shutdown => {
                     run_reboot_operation(
+                        op_type,
                         progress,
                         hostname,
                         address,
@@ -951,7 +984,12 @@ impl NodeOperationsComponent {
     /// Draw confirmation dialog
     fn draw_confirmation_dialog(&self, frame: &mut Frame, area: Rect, op_type: OperationType) {
         let overlay_width = 50.min(area.width.saturating_sub(4));
-        let overlay_height = 10.min(area.height.saturating_sub(4));
+        let height = if op_type == OperationType::Shutdown {
+            13
+        } else {
+            10
+        };
+        let overlay_height = height.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(overlay_width)) / 2;
         let y = (area.height.saturating_sub(overlay_height)) / 2;
         let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
@@ -963,7 +1001,7 @@ impl NodeOperationsComponent {
 
         let op_name = op_type.name();
         let warning_color = match op_type {
-            OperationType::Reboot => Color::Red,
+            OperationType::Reboot | OperationType::Shutdown => Color::Red,
             OperationType::Drain => Color::Yellow,
         };
 
@@ -992,6 +1030,21 @@ impl NodeOperationsComponent {
                     "    3. Reboot via Talos API",
                     Style::default().fg(Color::DarkGray),
                 )]));
+            }
+            OperationType::Shutdown => {
+                lines.push(Line::from(vec![Span::raw("  This will:")]));
+                for step in [
+                    "    1. Cordon the node",
+                    "    2. Drain all pods",
+                    "    3. Power it off via Talos API",
+                    "  It stays off and cordoned until",
+                    "  powered on and uncordoned by hand",
+                ] {
+                    lines.push(Line::from(vec![Span::styled(
+                        step,
+                        Style::default().fg(Color::DarkGray),
+                    )]));
+                }
             }
             OperationType::Drain => {
                 lines.push(Line::from(vec![Span::raw("  This will:")]));
@@ -1134,7 +1187,7 @@ impl NodeOperationsComponent {
     fn draw_ready_overlay(&self, frame: &mut Frame, area: Rect) {
         // Calculate centered overlay position
         let overlay_width = 50.min(area.width.saturating_sub(4));
-        let overlay_height = 18.min(area.height.saturating_sub(4));
+        let overlay_height = 19.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(overlay_width)) / 2;
         let y = (area.height.saturating_sub(overlay_height)) / 2;
 
@@ -1315,6 +1368,20 @@ impl NodeOperationsComponent {
             Span::styled(" [d] Drain only", drain_style),
         ]));
 
+        // Shutdown: as safe as a reboot, but the node doesn't come back
+        let shutdown_style = if self.selected_op == 2 {
+            Style::default()
+                .fg(reboot_color)
+                .add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().fg(reboot_color)
+        };
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(reboot_ind, Style::default().fg(reboot_color)),
+            Span::styled(" [s] Shutdown (with drain)", shutdown_style),
+        ]));
+
         // Footer
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
@@ -1347,7 +1414,7 @@ impl Component for NodeOperationsComponent {
                         Ok(None)
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if self.selected_op < 1 {
+                        if self.selected_op < 2 {
                             self.selected_op += 1;
                         }
                         Ok(None)
@@ -1376,6 +1443,15 @@ impl Component for NodeOperationsComponent {
                                     OperationState::Confirming(OperationType::Drain);
                                 Ok(None)
                             }
+                            2 => {
+                                if reboot_unsafe {
+                                    tracing::warn!("Shutdown blocked due to unsafe status");
+                                } else {
+                                    self.operation_state =
+                                        OperationState::Confirming(OperationType::Shutdown);
+                                }
+                                Ok(None)
+                            }
                             _ => Ok(None),
                         }
                     }
@@ -1397,6 +1473,20 @@ impl Component for NodeOperationsComponent {
                     }
                     KeyCode::Char('d') => {
                         self.operation_state = OperationState::Confirming(OperationType::Drain);
+                        Ok(None)
+                    }
+                    KeyCode::Char('s') => {
+                        // Same safety as a reboot: etcd quorum and PDBs
+                        let unsafe_now = self
+                            .data()
+                            .map(|d| matches!(d.reboot_safety, SafetyStatus::Unsafe(_)))
+                            .unwrap_or(true);
+                        if unsafe_now {
+                            tracing::warn!("Shutdown blocked due to unsafe status");
+                        } else {
+                            self.operation_state =
+                                OperationState::Confirming(OperationType::Shutdown);
+                        }
                         Ok(None)
                     }
                     _ => Ok(None),
@@ -1495,6 +1585,41 @@ mod tests {
         }
         // Must not have spawned a background task.
         assert!(comp.operation_task.is_none());
+    }
+
+    /// A shutdown needs the Kubernetes client too (cordon and drain first),
+    /// and is only offered under the same safety as a reboot
+    #[test]
+    fn shutdown_drains_first_and_follows_reboot_safety() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut comp =
+            NodeOperationsComponent::new("node1".to_string(), "10.0.0.1:50000".to_string(), true);
+        comp.k8s_error = Some("no kubeconfig".to_string());
+        comp.start_operation(OperationType::Shutdown);
+        match &comp.operation_state {
+            OperationState::Completed(OperationType::Shutdown, false, msg) => {
+                assert!(msg.contains("Cannot shutdown"), "msg: {msg}");
+            }
+            other => panic!("expected a failed shutdown, got {other:?}"),
+        }
+        assert!(comp.operation_task.is_none());
+
+        // Unknown safety (nothing loaded yet) blocks it
+        let mut comp =
+            NodeOperationsComponent::new("node1".to_string(), "10.0.0.1:50000".to_string(), true);
+        let s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        comp.handle_key_event(s).unwrap();
+        assert_eq!(comp.operation_state, OperationState::Ready);
+        comp.state.set_data(NodeOperationsData {
+            reboot_safety: SafetyStatus::Safe,
+            ..Default::default()
+        });
+        comp.handle_key_event(s).unwrap();
+        assert_eq!(
+            comp.operation_state,
+            OperationState::Confirming(OperationType::Shutdown)
+        );
     }
 
     /// With no captured error, still fail fast with an actionable default reason

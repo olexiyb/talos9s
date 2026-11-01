@@ -6,9 +6,9 @@ use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
 use crate::components::{
     ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, GroupComponent,
-    LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeOperationsComponent,
-    ProcessesComponent, RollingOperationsComponent, SecurityComponent, StorageComponent,
-    VolumesComponent, WorkloadHealthComponent,
+    LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeInfoComponent,
+    NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent, SecurityComponent,
+    StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
 use crate::tui::{self, Tui};
 use color_eyre::Result;
@@ -26,6 +26,7 @@ enum RefreshJob {
     Lifecycle(JoinHandle<LifecycleComponent>),
     Workloads(JoinHandle<WorkloadHealthComponent>),
     Storage(JoinHandle<StorageComponent>),
+    NodeInfo(JoinHandle<NodeInfoComponent>),
     Processes(JoinHandle<ProcessesComponent>),
     Etcd(JoinHandle<EtcdComponent>),
     Volumes(JoinHandle<VolumesComponent>),
@@ -40,6 +41,7 @@ impl RefreshJob {
             RefreshJob::Lifecycle(h) => h.is_finished(),
             RefreshJob::Workloads(h) => h.is_finished(),
             RefreshJob::Storage(h) => h.is_finished(),
+            RefreshJob::NodeInfo(h) => h.is_finished(),
             RefreshJob::Processes(h) => h.is_finished(),
             RefreshJob::Etcd(h) => h.is_finished(),
             RefreshJob::Volumes(h) => h.is_finished(),
@@ -54,6 +56,7 @@ impl RefreshJob {
             RefreshJob::Lifecycle(h) => h.abort(),
             RefreshJob::Workloads(h) => h.abort(),
             RefreshJob::Storage(h) => h.abort(),
+            RefreshJob::NodeInfo(h) => h.abort(),
             RefreshJob::Processes(h) => h.abort(),
             RefreshJob::Etcd(h) => h.abort(),
             RefreshJob::Volumes(h) => h.abort(),
@@ -98,6 +101,7 @@ enum View {
     Workloads,
     Volumes,
     Storage,
+    NodeInfo,
     NodeOperations,
     RollingOperations,
     Group,
@@ -139,6 +143,8 @@ pub struct App {
     volumes: Option<VolumesComponent>,
     /// Storage component (created when viewing disks/volumes)
     storage: Option<StorageComponent>,
+    /// Containers, machine config and extensions of a node
+    node_info: Option<NodeInfoComponent>,
     /// Node operations component (overlay for node operations)
     node_operations: Option<NodeOperationsComponent>,
     /// Rolling operations component (overlay for multi-node operations)
@@ -208,6 +214,7 @@ impl App {
             workloads: None,
             volumes: None,
             storage: None,
+            node_info: None,
             node_operations: None,
             rolling_operations: None,
             group: None,
@@ -649,6 +656,11 @@ impl App {
                             let _ = storage.draw(frame, area);
                         }
                     }
+                    View::NodeInfo => {
+                        if let Some(node_info) = &mut self.node_info {
+                            let _ = node_info.draw(frame, area);
+                        }
+                    }
                     View::NodeOperations => {
                         // Draw cluster in background, then overlay
                         let _ = self.cluster.draw(frame, area);
@@ -770,6 +782,7 @@ impl App {
             RefreshJob::Lifecycle(h) => finish!(self.lifecycle, h),
             RefreshJob::Workloads(h) => finish!(self.workloads, h),
             RefreshJob::Storage(h) => finish!(self.storage, h),
+            RefreshJob::NodeInfo(h) => finish!(self.node_info, h),
             RefreshJob::Processes(h) => finish!(self.processes, h),
             RefreshJob::Etcd(h) => finish!(self.etcd, h),
             RefreshJob::Volumes(h) => finish!(self.volumes, h),
@@ -876,6 +889,13 @@ impl App {
                     None
                 }
             }
+            View::NodeInfo => {
+                if let Some(node_info) = &mut self.node_info {
+                    node_info.handle_key_event(key)?
+                } else {
+                    None
+                }
+            }
             View::NodeOperations => {
                 if let Some(node_ops) = &mut self.node_operations {
                     node_ops.handle_key_event(key)?
@@ -900,12 +920,17 @@ impl App {
         })
     }
 
-    /// Route a mouse event: the cluster view handles clicks and the wheel
-    /// itself; other views get the wheel as Up/Down key presses so lists and
+    /// Route a mouse event: the cluster and node info views handle clicks
+    /// and the wheel themselves; other views get the wheel as Up/Down key presses so lists and
     /// logs scroll without per-component mouse code.
     fn dispatch_mouse(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         if self.view == View::Cluster {
             return self.cluster.handle_mouse_event(mouse);
+        }
+        if self.view == View::NodeInfo
+            && let Some(node_info) = &mut self.node_info
+        {
+            return node_info.handle_mouse_event(mouse);
         }
         let code = match mouse.kind {
             MouseEventKind::ScrollUp => KeyCode::Up,
@@ -958,6 +983,9 @@ impl App {
                     }
                     View::Storage => {
                         self.storage = None;
+                    }
+                    View::NodeInfo => {
+                        self.node_info = None;
                     }
                     View::NodeOperations => {
                         self.node_operations = None;
@@ -1070,6 +1098,13 @@ impl App {
                     View::Storage => {
                         if let Some(storage) = &mut self.storage
                             && let Some(next_action) = storage.update(Action::Tick)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::NodeInfo => {
+                        if let Some(node_info) = &mut self.node_info
+                            && let Some(next_action) = node_info.update(Action::Tick)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }
@@ -1192,6 +1227,15 @@ impl App {
                             && let Some(storage) = &self.storage
                         {
                             self.refresh_job = Some(RefreshJob::Storage(spawn_refresh!(storage)));
+                        }
+                    }
+                    View::NodeInfo => {
+                        // talosctl subprocesses: refresh off the event loop
+                        if self.refresh_job.is_none()
+                            && let Some(node_info) = &self.node_info
+                        {
+                            self.refresh_job =
+                                Some(RefreshJob::NodeInfo(spawn_refresh!(node_info)));
                         }
                     }
                     View::NodeOperations => {
@@ -1524,6 +1568,21 @@ impl App {
                 self.storage = Some(storage);
                 self.view = View::Storage;
             }
+            Action::ShowNodeInfo(hostname, address, tab) => {
+                self.cancel_refresh_job();
+                let context = self.cluster.current_context_name().map(|s| s.to_string());
+                let config_path = self.cluster.config_path().map(|s| s.to_string());
+                let mut node_info =
+                    NodeInfoComponent::new(hostname, address.clone(), context, config_path, tab);
+                if let Some(client) = self.cluster.client() {
+                    node_info.set_client(client.with_node(&address));
+                    self.refresh_job = Some(RefreshJob::NodeInfo(spawn_refresh!(node_info)));
+                } else {
+                    node_info.set_error("No Talos client configured".to_string());
+                }
+                self.node_info = Some(node_info);
+                self.view = View::NodeInfo;
+            }
             Action::ShowNodeOperations(hostname, address, is_controlplane) => {
                 // Show node operations overlay
                 tracing::info!("Viewing node operations for: {} ({})", hostname, address);
@@ -1671,6 +1730,13 @@ impl App {
                     View::Storage => {
                         if let Some(storage) = &mut self.storage
                             && let Some(next_action) = storage.update(action)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::NodeInfo => {
+                        if let Some(node_info) = &mut self.node_info
+                            && let Some(next_action) = node_info.update(action)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }

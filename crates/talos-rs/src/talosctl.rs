@@ -100,6 +100,30 @@ pub struct MachineConfigInfo {
     pub machine_type: Option<String>,
 }
 
+/// A node's machine config documents, as text
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MachineConfigText {
+    /// The config in effect (`v1alpha1` resource)
+    pub active: String,
+    /// Its resource version and last update
+    pub version: String,
+    pub updated: Option<String>,
+    /// The config saved for the next boot (`persistent` resource) differs:
+    /// a change was staged and waits for a reboot
+    pub staged_differs: bool,
+}
+
+/// A system extension installed on a node (ExtensionStatus resource)
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ExtensionInfo {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub description: String,
+    /// Image file in the node's extensions directory, e.g. `0.sqsh`
+    pub image: String,
+}
+
 /// KubeSpan peer status from KubeSpanPeerStatus resource
 #[derive(Debug, Clone, PartialEq)]
 pub struct KubeSpanPeerStatus {
@@ -749,6 +773,8 @@ pub struct TailscaleLink {
 
 /// Upper bound for each per-node `talosctl get` (see [`get_resource_yaml`])
 const NODE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Upper bound for reading the full machine config
+const MACHINE_CONFIG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Run `talosctl [--context c] get <resource> [id] -o yaml` against one node,
 /// with a timeout.
@@ -757,6 +783,17 @@ const NODE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// talosctl goes through the *current* context's endpoint, which for a node in
 /// another cluster hangs ~20s on apid's proxy dial before failing.
 async fn get_resource_yaml(
+    context: Option<&str>,
+    node_ip: &str,
+    config_path: Option<&str>,
+    resource: &[&str],
+) -> Result<String, TalosError> {
+    get_resource_yaml_within(NODE_QUERY_TIMEOUT, context, node_ip, config_path, resource).await
+}
+
+/// [`get_resource_yaml`] with its own time limit, for large resources
+async fn get_resource_yaml_within(
+    timeout: std::time::Duration,
     context: Option<&str>,
     node_ip: &str,
     config_path: Option<&str>,
@@ -773,13 +810,13 @@ async fn get_resource_yaml(
     args.extend_from_slice(resource);
     args.extend_from_slice(&["-o", "yaml"]);
 
-    tokio::time::timeout(NODE_QUERY_TIMEOUT, exec_talosctl_async(&args))
+    tokio::time::timeout(timeout, exec_talosctl_async(&args))
         .await
         .map_err(|_| {
             TalosError::Connection(format!(
                 "talosctl get {} timed out after {}s",
                 resource.join(" "),
-                NODE_QUERY_TIMEOUT.as_secs()
+                timeout.as_secs()
             ))
         })?
 }
@@ -856,6 +893,39 @@ pub async fn get_machine_config_for_node(
 ) -> Result<MachineConfigInfo, TalosError> {
     let output = get_resource_yaml(context, node_ip, config_path, &["machineconfig"]).await?;
     parse_machine_config_yaml(&output)
+}
+
+/// The node's machine config as text (it holds secrets: mask before
+/// showing it)
+///
+/// Executes: `talosctl -n <node> get machineconfig -o yaml`
+pub async fn get_machine_config_text_for_node(
+    context: Option<&str>,
+    node_ip: &str,
+    config_path: Option<&str>,
+) -> Result<MachineConfigText, TalosError> {
+    // Megabytes with inline manifests (a CNI's), and twice: active and stored
+    let output = get_resource_yaml_within(
+        MACHINE_CONFIG_TIMEOUT,
+        context,
+        node_ip,
+        config_path,
+        &["machineconfig"],
+    )
+    .await?;
+    parse_machine_config_text(&output)
+}
+
+/// System extensions installed on the node
+///
+/// Executes: `talosctl -n <node> get extensions -o yaml`
+pub async fn get_extensions_for_node(
+    context: Option<&str>,
+    node_ip: &str,
+    config_path: Option<&str>,
+) -> Result<Vec<ExtensionInfo>, TalosError> {
+    let output = get_resource_yaml(context, node_ip, config_path, &["extensions"]).await?;
+    Ok(parse_extensions_yaml(&output))
 }
 
 /// Get the node's addresses, gateways, DNS servers and connectivity status
@@ -1345,6 +1415,73 @@ fn scalar_to_string(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Top-level documents of `talosctl get … -o yaml` output. Documents nested
+/// in a block scalar (a machine config's) are indented, so they stay whole.
+fn resource_documents(yaml_str: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
+    yaml_str
+        .split("\n---\n")
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .filter_map(|d| serde_saphyr::from_str::<serde_json::Value>(d).ok())
+}
+
+/// The `v1alpha1` (active) and `persistent` machine config resources
+fn parse_machine_config_text(yaml_str: &str) -> Result<MachineConfigText, TalosError> {
+    let mut active = None;
+    let mut persistent = None;
+    for doc in resource_documents(yaml_str) {
+        let metadata = doc.get("metadata");
+        let field = |key: &str| metadata.and_then(|m| m.get(key)).and_then(scalar_to_string);
+        let Some(spec) = doc.get("spec").and_then(|s| s.as_str()) else {
+            continue;
+        };
+        match field("id").as_deref() {
+            Some("v1alpha1") => {
+                active = Some(MachineConfigText {
+                    active: spec.to_string(),
+                    version: field("version").unwrap_or_default(),
+                    updated: field("updated"),
+                    staged_differs: false,
+                })
+            }
+            Some("persistent") => persistent = Some(spec.to_string()),
+            _ => {}
+        }
+    }
+    let mut config = active.ok_or_else(|| {
+        TalosError::ConfigInvalid("no v1alpha1 machine config in the output".into())
+    })?;
+    config.staged_differs = persistent.is_some_and(|p| p != config.active);
+    Ok(config)
+}
+
+/// ExtensionStatus resources, in the order the node loads them
+fn parse_extensions_yaml(yaml_str: &str) -> Vec<ExtensionInfo> {
+    resource_documents(yaml_str)
+        .filter_map(|doc| {
+            let spec = doc.get("spec")?;
+            let meta = spec.get("metadata");
+            let field = |key: &str| {
+                meta.and_then(|m| m.get(key))
+                    .and_then(scalar_to_string)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default()
+            };
+            Some(ExtensionInfo {
+                name: field("name"),
+                version: field("version"),
+                author: field("author"),
+                description: field("description"),
+                image: spec
+                    .get("image")
+                    .and_then(scalar_to_string)
+                    .unwrap_or_default(),
+            })
+        })
+        .filter(|e| !e.name.is_empty())
+        .collect()
+}
+
 /// Parse KubeSpan peer status YAML output from talosctl
 fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
     let mut peers = Vec::new();
@@ -1606,6 +1743,92 @@ fn parse_duration_to_ms(s: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    /// `talosctl get machineconfig -o yaml`: the stored config first, then
+    /// the active one, each a multi-document config in a block scalar
+    fn machine_config_output(persistent_hostname: &str) -> String {
+        let config = |hostname: &str| {
+            format!(
+                "    version: v1alpha1\n    machine:\n        type: controlplane\n    \
+                 ---\n    apiVersion: v1alpha1\n    kind: HostnameConfig\n    \
+                 hostname: {hostname}\n"
+            )
+        };
+        format!(
+            "node: 10.0.0.1\nmetadata:\n    namespace: config\n    \
+             type: MachineConfigs.config.talos.dev\n    id: persistent\n    version: 3\n\
+             spec: |\n{}---\nnode: 10.0.0.1\nmetadata:\n    namespace: config\n    \
+             type: MachineConfigs.config.talos.dev\n    id: v1alpha1\n    version: 4\n    \
+             updated: 2026-10-31T07:25:48Z\nspec: |\n{}",
+            config(persistent_hostname),
+            config("bc1")
+        )
+    }
+
+    #[test]
+    fn parses_active_machine_config_and_staged_change() {
+        let config = super::parse_machine_config_text(&machine_config_output("bc1")).unwrap();
+        assert_eq!(config.version, "4");
+        assert_eq!(config.updated.as_deref(), Some("2026-10-31T07:25:48Z"));
+        assert!(config.active.starts_with("version: v1alpha1\n"));
+        // The nested document separator stays inside the config
+        assert!(
+            config
+                .active
+                .contains("\n---\napiVersion: v1alpha1\nkind: HostnameConfig")
+        );
+        assert!(!config.staged_differs);
+
+        let staged = super::parse_machine_config_text(&machine_config_output("bc9")).unwrap();
+        assert!(staged.staged_differs);
+        assert!(super::parse_machine_config_text("").is_err());
+    }
+
+    #[test]
+    fn parses_extensions() {
+        let yaml = "node: 10.0.0.1
+metadata:
+    namespace: runtime
+    type: ExtensionStatuses.runtime.talos.dev
+    id: 0
+spec:
+    image: 0.sqsh
+    metadata:
+        name: drbd
+        version: 9.2.14-v1.11.5
+        author: Sidero Labs
+        description: |
+            This system extension provides DRBD kernel modules.
+        compatibility:
+            talos:
+                version: '>= v1.11.0'
+---
+node: 10.0.0.1
+metadata:
+    namespace: runtime
+    type: ExtensionStatuses.runtime.talos.dev
+    id: 1
+spec:
+    image: 1.sqsh
+    metadata:
+        name: zfs
+        version: 2.4.4-v1.14.5
+        author: Aenix, Enix
+        description: ZFS
+";
+        let extensions = super::parse_extensions_yaml(yaml);
+        assert_eq!(extensions.len(), 2);
+        assert_eq!(extensions[0].name, "drbd");
+        assert_eq!(extensions[0].version, "9.2.14-v1.11.5");
+        assert_eq!(extensions[0].author, "Sidero Labs");
+        assert_eq!(
+            extensions[0].description,
+            "This system extension provides DRBD kernel modules."
+        );
+        assert_eq!(extensions[0].image, "0.sqsh");
+        assert_eq!(extensions[1].name, "zfs");
+        assert!(super::parse_extensions_yaml("").is_empty());
+    }
+
     #[test]
     fn parses_etcd_spec() {
         let yaml = "node: 10.22.1.3

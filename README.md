@@ -64,6 +64,7 @@ Use **talos-pilot** for "why won't my node join the cluster?"
 | **Processes View** | htop-like process list with tree view, CPU/MEM sorting |
 | **Network Stats** | Interface traffic, connections, KubeSpan peers, packet capture |
 | **Storage/Disks** | Disk list with size, transport, serial, system disk indicators |
+| **Node Info** | `C`, `m`, `x` on a node: its containers (Talos system services and Kubernetes containers, filterable), its machine config read-only with secrets masked and searchable, flagging a staged change that waits for a reboot, and its installed system extensions |
 | **Group Views** | `n`, `s`, `d` on a cluster, control plane or workers row: every node's interfaces with RX/TX rates, disks and Talos volumes, or diagnostics as a node × category grid with each warning listed once with its nodes. Virtual devices are hidden until `a`; `Enter` opens the node |
 | **etcd Status** | Quorum health, member list, alarms, leader tracking, peer/client and listen addresses (running vs config), live etcd log of the selected member |
 | **Workload Health** | K8s deployments, statefulsets, pod issues by namespace |
@@ -84,6 +85,7 @@ Use **talos-pilot** for "why won't my node join the cluster?"
 |---------|-------------|
 | **Node Drain** | PDB-aware with configurable timeouts |
 | **Node Reboot** | Post-reboot verification, auto-uncordon |
+| **Node Shutdown** | Cordon, drain, power off; the node stays cordoned until uncordoned by hand |
 | **Rolling Operations** | Sequential multi-node with progress tracking |
 | **Audit Logging** | All operations logged to `~/.talos-pilot/audit.log` |
 
@@ -262,6 +264,9 @@ Once complete, you can manage the cluster using standard talos-pilot commands.
 | `w` | Workloads | K8s deployment health |
 | `y` | Lifecycle | Version status, alerts |
 | `d` | Diagnostics | System health checks |
+| `C` | Containers | System and Kubernetes containers of a node |
+| `m` | Config | Machine config of a node, secrets masked |
+| `x` | Extensions | System extensions installed on a node |
 | `o` | Operations | Single node operations |
 | `O` | Rolling | Multi-node rolling operations |
 

@@ -1645,6 +1645,89 @@ impl TalosClient {
             success: msg.is_some(),
         })
     }
+
+    /// Shut the node down (power off). Talos cordons and drains the node
+    /// itself first, unless `force`.
+    pub async fn shutdown(&self, force: bool) -> Result<RebootResult, TalosError> {
+        use crate::proto::machine::ShutdownRequest;
+
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(ShutdownRequest { force }));
+        let response = client.shutdown(request).await?;
+        let msg = response.into_inner().messages.into_iter().next();
+
+        Ok(RebootResult {
+            node: msg
+                .as_ref()
+                .and_then(|m| m.metadata.as_ref())
+                .map(|m| m.hostname.clone())
+                .unwrap_or_else(|| self.nodes.first().cloned().unwrap_or_default()),
+            success: msg.is_some(),
+        })
+    }
+
+    /// Containers on the node: Talos system services (`system` namespace,
+    /// containerd) or Kubernetes pods and their containers (`k8s.io`, CRI)
+    pub async fn containers(&self, kind: ContainerKind) -> Result<Vec<ContainerInfo>, TalosError> {
+        use crate::proto::common::ContainerDriver;
+        use crate::proto::machine::ContainersRequest;
+
+        let (namespace, driver) = match kind {
+            ContainerKind::System => ("system", ContainerDriver::Containerd),
+            ContainerKind::Kubernetes => ("k8s.io", ContainerDriver::Cri),
+        };
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(ContainersRequest {
+            namespace: namespace.to_string(),
+            driver: driver as i32,
+        }));
+        let response = client.containers(request).await?;
+
+        Ok(response
+            .into_inner()
+            .messages
+            .into_iter()
+            .flat_map(|m| m.containers)
+            .map(|c| ContainerInfo {
+                kind,
+                // A CRI pod sandbox has the pod's ID
+                sandbox: kind == ContainerKind::Kubernetes && c.id == c.pod_id,
+                id: c.id,
+                name: c.name,
+                pod: c.pod_id,
+                image: c.image,
+                pid: c.pid,
+                status: c.status,
+            })
+            .collect())
+    }
+}
+
+/// Which containers to list
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerKind {
+    /// Talos system services and extension services
+    System,
+    /// Kubernetes pods (sandboxes) and their containers
+    Kubernetes,
+}
+
+/// A container on a node
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerInfo {
+    pub kind: ContainerKind,
+    /// e.g. `apid`, or `namespace/pod:container:id` for a pod's container
+    pub id: String,
+    /// Container name (the pod name for a sandbox)
+    pub name: String,
+    /// `namespace/pod` of a Kubernetes container; empty for system ones
+    pub pod: String,
+    /// A pod sandbox (pause container) rather than one of its containers
+    pub sandbox: bool,
+    pub image: String,
+    pub pid: u32,
+    /// e.g. `RUNNING`, `CONTAINER_RUNNING`, `CONTAINER_EXITED`, `SANDBOX_READY`
+    pub status: String,
 }
 
 /// Reboot mode
@@ -1657,12 +1740,12 @@ pub enum RebootMode {
     Powercycle,
 }
 
-/// Result of a reboot operation
+/// Result of a reboot or shutdown request
 #[derive(Debug, Clone)]
 pub struct RebootResult {
-    /// Node that was rebooted
+    /// Node that was rebooted or shut down
     pub node: String,
-    /// Whether the reboot was initiated successfully
+    /// Whether the node accepted the request
     pub success: bool,
 }
 
