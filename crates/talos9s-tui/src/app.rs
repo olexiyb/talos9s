@@ -5,6 +5,7 @@ use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth, TreeSelection};
 use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
+use crate::components::workloads;
 use crate::components::{
     ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, GroupComponent,
     LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeInfoComponent,
@@ -641,6 +642,7 @@ impl App {
         if let Some(levels) = state.log_levels.as_ref().filter(|l| !l.is_empty()) {
             self.settings.log_levels = LOG_LEVELS.map(|l| levels.iter().any(|x| x == l));
         }
+        self.settings.log_wrap = state.log_wrap.unwrap_or(false);
         if state.volumes.show_all.is_some() || state.volumes.type_filter.is_some() {
             self.settings.volumes = Some(volumes::VolumesViewState {
                 show_all: state.volumes.show_all.unwrap_or(true),
@@ -655,6 +657,10 @@ impl App {
             listening_only: state.network.listening_only.unwrap_or(false),
         };
         self.settings.storage_show_all = state.storage.show_all.unwrap_or(false);
+        self.settings.workloads = workloads::WorkloadsSettings {
+            show_healthy: state.workloads.show_healthy.unwrap_or(false),
+            by_namespace: state.workloads.by_namespace.unwrap_or(false),
+        };
         let item = by_name(state.view.as_deref());
         self.update = state.update.clone();
         self.cluster
@@ -679,10 +685,12 @@ impl App {
         }
         let ViewSettings {
             log_levels: levels,
+            log_wrap,
             volumes,
             processes_sort,
             network,
             storage_show_all,
+            workloads,
         } = settings;
         crate::state::UiState {
             // Nothing listed yet (no talosconfig): keep the remembered one
@@ -699,6 +707,7 @@ impl App {
             pane_width: self.pane_width.map(name_of),
             tree,
             auto_refresh: Some(self.cluster.auto_refresh()),
+            log_wrap: Some(log_wrap),
             log_levels: Some(
                 LOG_LEVELS
                     .iter()
@@ -719,6 +728,10 @@ impl App {
             },
             storage: crate::state::StorageSettings {
                 show_all: Some(storage_show_all),
+            },
+            workloads: crate::state::WorkloadsSettings {
+                show_healthy: Some(workloads.show_healthy),
+                by_namespace: Some(workloads.by_namespace),
             },
             update: self.update.clone(),
         }
@@ -1590,6 +1603,7 @@ impl App {
                 let mut multi_logs =
                     MultiLogsComponent::new(title, subtitle, nodes, &active_services, all_services);
                 multi_logs.set_level_filter(self.settings.log_levels);
+                multi_logs.set_wrap(self.settings.log_wrap);
 
                 // Each stream targets its node through the cluster's client and
                 // starts with the last `tail_lines` lines, so there is no
@@ -1770,6 +1784,8 @@ impl App {
                 );
 
                 let mut workloads = WorkloadHealthComponent::new(nodes);
+                workloads.set_settings(self.settings.workloads);
+                workloads.set_log_wrap(self.settings.log_wrap);
 
                 // The K8s client is created by the first refresh, which runs in
                 // the background; the view shows "Loading workloads..." until
@@ -2204,6 +2220,58 @@ mod tests {
         let mut p = ProcessesComponent::new("bc1".to_string(), Vec::new());
         p.set_sort_by(sort);
         ViewComponent::Processes(Box::new(p))
+    }
+
+    /// `A` and `S` in the workloads view are remembered for the next view
+    /// and run
+    #[tokio::test]
+    async fn workloads_settings_are_kept_and_saved() {
+        let mut app = app_with_view(View::Cluster);
+        let mut w = WorkloadHealthComponent::new(None);
+        let settings = workloads::WorkloadsSettings {
+            show_healthy: true,
+            by_namespace: true,
+        };
+        w.set_settings(settings);
+        app.show_component(
+            NavMenuItem::Workloads,
+            ViewComponent::Workloads(Box::new(w)),
+            false,
+        );
+        app.leave_view();
+        assert_eq!(app.settings.workloads, settings);
+        let saved = app.current_state().workloads;
+        assert_eq!(saved.show_healthy, Some(true));
+        assert_eq!(saved.by_namespace, Some(true));
+    }
+
+    /// `w` in the logs is remembered for the next logs view and run, one
+    /// setting for the Logs view and the Workloads view's logs
+    #[tokio::test]
+    async fn log_wrap_is_kept_and_saved() {
+        let mut app = app_with_view(View::Cluster);
+        let mut logs =
+            MultiLogsComponent::new(String::new(), String::new(), Vec::new(), &[], Vec::new());
+        logs.set_wrap(true);
+        app.show_component(
+            NavMenuItem::Logs,
+            ViewComponent::MultiLogs(Box::new(logs)),
+            false,
+        );
+        app.leave_view();
+        assert!(app.settings.log_wrap);
+        assert_eq!(app.current_state().log_wrap, Some(true));
+        // One setting: the Workloads view's logs change it too
+        let mut w = WorkloadHealthComponent::new(None);
+        w.set_log_wrap(false);
+        app.show_component(
+            NavMenuItem::Workloads,
+            ViewComponent::Workloads(Box::new(w)),
+            false,
+        );
+        app.leave_view();
+        assert!(!app.settings.log_wrap);
+        assert_eq!(app.current_state().log_wrap, Some(false));
     }
 
     /// `A` in the disks view is remembered for the next view and run

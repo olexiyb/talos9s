@@ -50,6 +50,26 @@ pub const SYN_SENT_WARN: usize = 50;
 /// A pod Pending for less than this is being scheduled or pulled, not stuck
 pub const POD_PENDING_GRACE_SECS: i64 = 120;
 
+/// Upper bound for the Workloads view's lists, fetched together (every pod of
+/// a busy cluster is several MB)
+pub const WORKLOADS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Upper bound for the events of the Workloads view's failing pods, read
+/// after the lists; without them the view still shows everything else
+pub const WORKLOADS_EVENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// At most this many failing pods get their events read, one request each
+pub const WORKLOAD_EVENTS_MAX: usize = 20;
+
+/// Containers whose logs the Workloads view reads at once, one request each
+pub const POD_LOG_SOURCES_MAX: usize = 12;
+
+/// Log lines read in all, shared among the containers read
+pub const POD_LOG_TOTAL_LINES: i64 = 1000;
+
+/// How often the logs are read again while they follow the end
+pub const POD_LOG_FOLLOW_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Upper bound for one Kubernetes API request made through `kube_list`;
 /// kube-rs otherwise waits minutes on a dead API server
 pub const K8S_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);

@@ -32,9 +32,11 @@ pub mod formatting;
 pub mod indicators;
 pub mod logparse;
 pub mod network;
+pub mod pod_logs;
 pub mod selection;
 pub mod stats;
 pub mod version;
+pub mod workloads;
 
 // Re-export commonly used items at crate root
 pub use async_state::*;

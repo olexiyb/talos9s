@@ -1,11 +1,14 @@
-//! Workload Health component
+//! Workloads view
 //!
-//! Displays health status of Kubernetes workloads across all namespaces:
-//! - Deployments, StatefulSets, DaemonSets
-//! - Pods in problematic states (CrashLoopBackOff, ImagePullBackOff, Pending)
-//! - Health classification per namespace
+//! What is broken among the cluster's Deployments, StatefulSets, DaemonSets
+//! and pods, in one list, worst first: each workload with its problem pods
+//! under it, and the nodes its pods that aren't ready are on. `A` shows the
+//! healthy ones too, `S` puts the rows in namespace sections, `/` filters.
 //!
-//! Philosophy: Show actual K8s API state. Group by namespace with issues first.
+//! Health comes from the objects' status; the classification, the mapping of
+//! pods to workloads and the rows are in `talos9s_core::workloads`. Each list
+//! is read on its own: one that fails (RBAC, say) is reported in the summary
+//! and the rest of the view works.
 //!
 //! The view can be scoped to a set of nodes (a node, or a cluster's control
 //! plane / workers): it then lists only the workloads with pods on those nodes,
@@ -13,11 +16,12 @@
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::components::pod_logs::LogPane;
 use crate::ui_ext::HealthIndicatorExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{ContainerStatus, Event, Pod};
 use kube::{
     Client,
     api::{Api, ListParams},
@@ -30,210 +34,239 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 use std::collections::{HashMap, HashSet};
-use talos9s_core::constants::{
-    HIGH_RESTART_THRESHOLD, POD_PENDING_GRACE_SECS, RECENT_RESTART_SECS,
+use talos9s_core::workloads::{
+    ContainerFacts, EventFacts, ListOptions, ListRow, PodFacts, PodNodes, PodWorkload, ProblemPod,
+    ReplicaSetOwners, Summary, WorkloadHealth, WorkloadInfo, WorkloadKey, WorkloadKind,
+    classify_workload, focus_rows, latest_event, place_pods, pod_commands, pod_workload,
+    workload_command, workload_pods,
 };
-use talos9s_core::{AsyncState, HasHealth, HealthIndicator};
+use talos9s_core::{AsyncState, HasHealth};
 
-/// Health state of a workload or pod
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HealthState {
-    /// Critical failure - needs immediate attention
-    Failing,
-    /// Degraded - partially working
-    Degraded,
-    /// Pending - waiting for something
-    Pending,
-    /// Healthy - all good
-    Healthy,
-}
-
-impl HasHealth for HealthState {
-    fn health(&self) -> HealthIndicator {
-        match self {
-            HealthState::Failing => HealthIndicator::Error,
-            HealthState::Degraded => HealthIndicator::Warning,
-            HealthState::Pending => HealthIndicator::Pending,
-            HealthState::Healthy => HealthIndicator::Healthy,
-        }
-    }
-}
-
-impl HealthState {
-    pub fn indicator(&self) -> (&'static str, Color) {
-        self.health().symbol_and_color()
-    }
-
-    pub fn color(&self) -> Color {
-        self.health().color()
-    }
-}
-
-/// Problematic state reason for pods
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PodIssue {
-    CrashLoopBackOff,
-    ImagePullBackOff,
-    ErrImagePull,
-    Pending,
-    OOMKilled,
-    Error,
-    HighRestarts(i32),
-    Unknown(String),
-}
-
-impl PodIssue {
-    pub fn display(&self) -> &str {
-        match self {
-            PodIssue::CrashLoopBackOff => "CrashLoopBackOff",
-            PodIssue::ImagePullBackOff => "ImagePullBackOff",
-            PodIssue::ErrImagePull => "ErrImagePull",
-            PodIssue::Pending => "Pending",
-            PodIssue::OOMKilled => "OOMKilled",
-            PodIssue::Error => "Error",
-            PodIssue::HighRestarts(_) => "High Restarts",
-            PodIssue::Unknown(_) => "Unknown",
-        }
-    }
-
-    pub fn severity(&self) -> HealthState {
-        match self {
-            PodIssue::CrashLoopBackOff => HealthState::Failing,
-            PodIssue::ImagePullBackOff => HealthState::Failing,
-            PodIssue::ErrImagePull => HealthState::Failing,
-            PodIssue::OOMKilled => HealthState::Failing,
-            PodIssue::Error => HealthState::Failing,
-            PodIssue::Pending => HealthState::Pending,
-            PodIssue::HighRestarts(_) => HealthState::Degraded,
-            PodIssue::Unknown(_) => HealthState::Degraded,
-        }
-    }
-}
-
-/// Information about a workload (Deployment, StatefulSet, or DaemonSet)
-#[derive(Debug, Clone)]
-pub struct WorkloadInfo {
-    pub name: String,
-    pub namespace: String,
-    pub kind: WorkloadKind,
-    pub ready: i32,
-    pub desired: i32,
-    pub health: HealthState,
-    pub issues: Vec<String>,
-    /// Ready / total pods on the scoped nodes (`None` for the whole cluster)
-    pub here: Option<(i32, i32)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WorkloadKind {
-    Deployment,
-    StatefulSet,
-    DaemonSet,
-}
-
-impl WorkloadKind {
-    pub fn display(&self) -> &'static str {
-        match self {
-            WorkloadKind::Deployment => "Deploy",
-            WorkloadKind::StatefulSet => "StatefulSet",
-            WorkloadKind::DaemonSet => "DaemonSet",
-        }
-    }
-}
-
-/// Information about a problematic pod
-#[derive(Debug, Clone)]
-pub struct PodInfo {
-    pub name: String,
-    pub namespace: String,
-    pub node: Option<String>,
-    pub phase: String,
-    pub restarts: i32,
-    pub issue: Option<PodIssue>,
-    pub age: String,
-}
-
-/// Summary of a namespace's health
-#[derive(Debug, Clone)]
-pub struct NamespaceSummary {
-    pub name: String,
-    pub health: HealthState,
-    pub workloads: Vec<WorkloadInfo>,
-    pub problem_pods: Vec<PodInfo>,
-    pub total_workloads: usize,
-    pub healthy_workloads: usize,
-}
-
-/// The summary of namespace `ns`, created empty on first use
-fn namespace<'a>(
-    map: &'a mut HashMap<String, NamespaceSummary>,
-    ns: &str,
-) -> &'a mut NamespaceSummary {
-    map.entry(ns.to_string())
-        .or_insert_with(|| NamespaceSummary {
-            name: ns.to_string(),
-            health: HealthState::Healthy,
-            workloads: Vec::new(),
-            problem_pods: Vec::new(),
-            total_workloads: 0,
-            healthy_workloads: 0,
-        })
-}
-
-/// A workload's namespace, kind and name
-type WorkloadKey = (String, WorkloadKind, String);
-
-/// Workload that controls a pod, found through its controller owner reference
-/// (a ReplicaSet resolves to its Deployment via `rs_owners`)
-fn pod_owner(
-    pod: &Pod,
-    rs_owners: &HashMap<(String, String), String>,
-) -> Option<(WorkloadKind, String)> {
-    let owners = pod.metadata.owner_references.as_ref()?;
-    let owner = owners
-        .iter()
-        .find(|o| o.controller == Some(true))
-        .or_else(|| owners.first())?;
-    match owner.kind.as_str() {
-        "StatefulSet" => Some((WorkloadKind::StatefulSet, owner.name.clone())),
-        "DaemonSet" => Some((WorkloadKind::DaemonSet, owner.name.clone())),
-        "ReplicaSet" => {
-            let ns = pod.metadata.namespace.clone().unwrap_or_default();
-            rs_owners
-                .get(&(ns, owner.name.clone()))
-                .map(|deploy| (WorkloadKind::Deployment, deploy.clone()))
-        }
-        _ => None,
-    }
-}
-
-/// Whether a pod's `Ready` condition is true
-fn pod_is_ready(pod: &Pod) -> bool {
-    pod.status
-        .as_ref()
-        .and_then(|s| s.conditions.as_ref())
-        .is_some_and(|cs| cs.iter().any(|c| c.type_ == "Ready" && c.status == "True"))
-}
-
-/// Auto-refresh interval in seconds
+/// Auto-refresh interval
 // Pod problems change slowly, and a refresh downloads every pod of the
 // cluster
 const AUTO_REFRESH_INTERVAL: std::time::Duration =
     talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
+/// Width of the NODES column
+const NODES_WIDTH: u16 = 16;
+
+/// Below this height the list takes the whole view, without the detail pane
+const DETAIL_MIN_HEIGHT: u16 = 16;
+
+/// The view's toggles that carry over to the next one and are saved
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkloadsSettings {
+    /// Healthy workloads too (`A`)
+    pub show_healthy: bool,
+    /// Namespace sections (`S`)
+    pub by_namespace: bool,
+}
+
+/// Identity of a row, to keep it selected when a refresh moves it
+fn row_id(row: &ListRow) -> Option<String> {
+    match row {
+        ListRow::Namespace(_) => None,
+        ListRow::Workload(w) => Some(format!("{}/{:?}/{}", w.namespace, w.kind, w.name)),
+        ListRow::Pod { pod, .. } => Some(format!("{}/pod/{}", pod.namespace, pod.name)),
+        ListRow::Member(pod) => Some(format!("{}/pod/{}", pod.namespace, pod.name)),
+        ListRow::Container { pod, container } => Some(format!(
+            "{}/pod/{}/{}",
+            pod.namespace, pod.name, container.name
+        )),
+    }
+}
+
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]
 pub struct WorkloadsData {
-    /// Namespace summaries (sorted: issues first)
-    pub namespaces: Vec<NamespaceSummary>,
+    pub workloads: Vec<WorkloadInfo>,
+    /// Pods with an issue
+    pub pods: Vec<ProblemPod>,
+    /// Lists that couldn't be read, e.g. `StatefulSets: forbidden`
+    pub errors: Vec<String>,
+    /// Kinds whose list couldn't be read (`?` in the summary)
+    pub unavailable: Vec<WorkloadKind>,
+    /// Every pod read (`None` when the pods couldn't be), for the detail pane
+    pub all_pods: Option<Vec<PodFacts>>,
+    pub rs_owners: Option<ReplicaSetOwners>,
+    /// Each workload's conditions that aren't true: `Available: False (…)`
+    pub conditions: HashMap<WorkloadKey, Vec<String>>,
+    /// The latest event of each failing pod, by (namespace, pod)
+    pub events: HashMap<(String, String), EventFacts>,
+}
 
-    /// Global summary counts
-    pub total_deployments: usize,
-    pub total_statefulsets: usize,
-    pub total_daemonsets: usize,
-    pub total_pods_healthy: usize,
-    pub total_pods_degraded: usize,
-    pub total_pods_failing: usize,
+/// A Deployment's conditions that aren't true, as `Type: Reason`
+fn false_conditions(d: &Deployment) -> Vec<String> {
+    d.status
+        .as_ref()
+        .and_then(|s| s.conditions.as_deref())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| {
+            let status = c.status.as_deref().filter(|s| *s != "True")?;
+            let type_ = c.type_.as_deref().unwrap_or("?");
+            Some(match &c.reason {
+                Some(reason) => format!("{type_}: {status} ({reason})"),
+                None => format!("{type_}: {status}"),
+            })
+        })
+        .collect()
+}
+
+/// The facts of a Kubernetes event
+fn event_facts(e: &Event) -> EventFacts {
+    EventFacts {
+        time: e
+            .last_timestamp
+            .as_ref()
+            .map(|t| t.0.as_second())
+            .or_else(|| e.event_time.as_ref().map(|t| t.0.as_second())),
+        reason: e.reason.clone().unwrap_or_default(),
+        message: e.message.clone().unwrap_or_default(),
+    }
+}
+
+/// The latest event of each of `pods` (namespace, name, uid), at most
+/// `WORKLOAD_EVENTS_MAX`, concurrently, within `WORKLOADS_EVENTS_TIMEOUT`.
+/// Events only explain a failure the status already shows: any that can't
+/// be read are left out.
+async fn latest_events(
+    client: &Client,
+    pods: Vec<(String, String, String)>,
+) -> HashMap<(String, String), EventFacts> {
+    let requests = pods
+        .into_iter()
+        .take(talos9s_core::constants::WORKLOAD_EVENTS_MAX)
+        .map(|(namespace, name, uid)| {
+            let api: Api<Event> = Api::namespaced(client.clone(), &namespace);
+            async move {
+                let params = ListParams::default().fields(&format!("involvedObject.uid={uid}"));
+                let list = api.list(&params).await.ok()?;
+                let events: Vec<EventFacts> = list.items.iter().map(event_facts).collect();
+                Some(((namespace, name), latest_event(&events)?.clone()))
+            }
+        });
+    tokio::time::timeout(
+        talos9s_core::constants::WORKLOADS_EVENTS_TIMEOUT,
+        futures::future::join_all(requests),
+    )
+    .await
+    .map(|found| found.into_iter().flatten().collect())
+    .unwrap_or_default()
+}
+
+/// The facts the view needs from a Kubernetes pod
+fn pod_facts(pod: &Pod) -> PodFacts {
+    let container = |c: &ContainerStatus| {
+        let state = c.state.as_ref();
+        ContainerFacts {
+            name: c.name.clone(),
+            ready: c.ready,
+            restarts: c.restart_count,
+            waiting_reason: state
+                .and_then(|s| s.waiting.as_ref())
+                .and_then(|w| w.reason.clone()),
+            terminated: state
+                .and_then(|s| s.terminated.as_ref())
+                .map(|t| (t.exit_code, t.reason.clone())),
+            last_finished: c
+                .last_state
+                .as_ref()
+                .and_then(|s| s.terminated.as_ref())
+                .and_then(|t| t.finished_at.as_ref())
+                .map(|t| t.0.as_second()),
+            last_terminated: c
+                .last_state
+                .as_ref()
+                .and_then(|s| s.terminated.as_ref())
+                .map(|t| (t.exit_code, t.reason.clone())),
+        }
+    };
+    let status = pod.status.as_ref();
+    let owners = pod.metadata.owner_references.as_deref().unwrap_or_default();
+    let owner = owners
+        .iter()
+        .find(|o| o.controller == Some(true))
+        .or_else(|| owners.first())
+        .map(|o| (o.kind.clone(), o.name.clone()));
+    PodFacts {
+        namespace: pod
+            .metadata
+            .namespace
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+        name: pod
+            .metadata
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
+        node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),
+        // No status at all: nothing to judge. A status without a phase
+        // still has container states to look at.
+        phase: status.map(|s| s.phase.clone().unwrap_or_else(|| "Unknown".to_string())),
+        created: pod
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .map(|t| t.0.as_second()),
+        ready: status
+            .and_then(|s| s.conditions.as_ref())
+            .is_some_and(|cs| cs.iter().any(|c| c.type_ == "Ready" && c.status == "True")),
+        owner,
+        job_owned: owners.iter().any(|o| o.kind == "Job"),
+        init_containers: status
+            .and_then(|s| s.init_container_statuses.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .map(container)
+            .collect(),
+        containers: status
+            .and_then(|s| s.container_statuses.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .map(container)
+            .collect(),
+    }
+}
+
+/// Deployment of each ReplicaSet, from their owner references
+fn replicaset_owners(
+    replicasets: impl IntoIterator<Item = kube::core::PartialObjectMeta<ReplicaSet>>,
+) -> ReplicaSetOwners {
+    replicasets
+        .into_iter()
+        .filter_map(|rs| {
+            let deploy = rs
+                .metadata
+                .owner_references
+                .as_ref()?
+                .iter()
+                .find(|o| o.kind == "Deployment")?
+                .name
+                .clone();
+            Some(((rs.metadata.namespace?, rs.metadata.name?), deploy))
+        })
+        .collect()
+}
+
+/// A workload's namespace, name and replica counts as read from its object
+struct Counted {
+    namespace: String,
+    name: String,
+    kind: WorkloadKind,
+    ready: i32,
+    desired: i32,
+    available: i32,
+}
+
+fn ns_name(meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> (String, String) {
+    (
+        meta.namespace
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+        meta.name.clone().unwrap_or_else(|| "unknown".to_string()),
+    )
 }
 
 /// Workload Health Component
@@ -251,42 +284,84 @@ pub struct WorkloadHealthComponent {
     /// Nodes the view is limited to (`None` for the whole cluster)
     scope: Option<HashSet<String>>,
 
-    /// Selected namespace index
-    selected_namespace: usize,
-    /// Selected item within namespace (for drill-down)
-    selected_item: usize,
-    /// Whether we're in drill-down mode
-    drill_down: bool,
-
-    /// Table state for rendering
+    /// Selected row among the selectable ones (headings aren't)
+    selected: usize,
+    /// The selected row's identity, kept across refreshes
+    selected_id: Option<String>,
     table_state: TableState,
     /// Where the rows were drawn, for clicks
     rows: crate::ui_ext::RowHits,
-    drill_rows: crate::ui_ext::RowHits,
+
+    /// Healthy workloads too (`A`), namespace sections (`S`), filter (`/`)
+    options: ListOptions,
+    /// The filter being typed, while `filtering`
+    filter_input: String,
+    filtering: bool,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
+    /// The focused view's logs wrap (`w`), for the next one
+    log_wrap: bool,
+
+    /// The focused view (Enter): one workload, its pods and their logs
+    focus: Option<Focus>,
+}
+
+/// One workload (or a pod of none) with its pods, the containers of the
+/// expanded ones, and the logs of the selected row
+#[derive(Clone)]
+struct Focus {
+    workload: Option<WorkloadKey>,
+    /// A pod of no listed workload: only it
+    pod: Option<(String, String)>,
+    /// Pods whose containers are listed under them
+    expanded: HashSet<String>,
+    logs: LogPane,
+    /// The list's selection to go back to
+    back: (usize, Option<String>),
 }
 
 impl WorkloadHealthComponent {
-    /// Workloads view titled `title`, limited to pods on `nodes` when given
+    /// Workloads view, limited to pods on `nodes` when given
     pub fn new(nodes: Option<Vec<String>>) -> Self {
-        let mut table_state = TableState::default();
-        table_state.select(Some(0));
-
         Self {
             state: AsyncState::new(),
             k8s_client: None,
             k8s_source: None,
             scope: nodes.map(|n| n.into_iter().collect()),
-            selected_namespace: 0,
-            selected_item: 0,
-            drill_down: false,
-            table_state,
+            selected: 0,
+            selected_id: None,
+            table_state: TableState::default(),
             rows: Default::default(),
-            drill_rows: Default::default(),
+            options: ListOptions::default(),
+            filter_input: String::new(),
+            filtering: false,
             auto_refresh: true,
+            focus: None,
+            log_wrap: false,
         }
+    }
+
+    pub fn settings(&self) -> WorkloadsSettings {
+        WorkloadsSettings {
+            show_healthy: self.options.show_healthy,
+            by_namespace: self.options.by_namespace,
+        }
+    }
+
+    /// Logs wrap (`w`), shared with the Logs view: the open logs' own, else
+    /// the last ones'
+    pub fn log_wrap(&self) -> bool {
+        self.focus.as_ref().map_or(self.log_wrap, |f| f.logs.wrap())
+    }
+
+    pub fn set_log_wrap(&mut self, wrap: bool) {
+        self.log_wrap = wrap;
+    }
+
+    pub fn set_settings(&mut self, settings: WorkloadsSettings) {
+        self.options.show_healthy = settings.show_healthy;
+        self.options.by_namespace = settings.by_namespace;
     }
 
     /// Access loaded data immutably
@@ -339,7 +414,6 @@ impl WorkloadHealthComponent {
 
         self.state.start_loading();
 
-        // Fetch all workloads in parallel
         let deployments_api: Api<Deployment> = Api::all(client.clone());
         let statefulsets_api: Api<StatefulSet> = Api::all(client.clone());
         let daemonsets_api: Api<DaemonSet> = Api::all(client.clone());
@@ -348,9 +422,9 @@ impl WorkloadHealthComponent {
         let scope = self.scope.clone();
 
         let list_params = ListParams::default();
-        let timeout = std::time::Duration::from_secs(15);
+        let timeout = talos9s_core::constants::WORKLOADS_FETCH_TIMEOUT;
         let started = std::time::Instant::now();
-        let fetch_result = tokio::time::timeout(timeout, async {
+        let fetched = tokio::time::timeout(timeout, async {
             tokio::join!(
                 deployments_api.list(&list_params),
                 statefulsets_api.list(&list_params),
@@ -375,792 +449,1025 @@ impl WorkloadHealthComponent {
                         None => pods_api.list(&list_params).await.map(|l| l.items),
                     }
                 },
-                // Only needed to map a scoped node's pods back to Deployments:
-                // owner references live in metadata, so names only
-                async {
-                    match &scope {
-                        Some(_) => replicasets_api.list_metadata(&list_params).await.map(Some),
-                        None => Ok(None),
-                    }
-                }
+                // Ties a Deployment's pods to it: owner references live in
+                // metadata, so names only
+                replicasets_api.list_metadata(&list_params),
             )
         })
         .await;
         tracing::debug!(
             "workloads: Kubernetes lists took {:?} (scope {:?})",
             started.elapsed(),
-            self.scope.as_ref().map(std::collections::HashSet::len)
+            self.scope.as_ref().map(HashSet::len)
         );
-
-        let (
-            deployments_result,
-            statefulsets_result,
-            daemonsets_result,
-            pods_result,
-            replicasets_result,
-        ) = match fetch_result {
-            Ok(results) => results,
-            Err(_) => {
-                self.set_error(format!("Request timed out after {}s", timeout.as_secs()));
-                return Ok(());
-            }
+        let Ok((deployments, statefulsets, daemonsets, pods, replicasets)) = fetched else {
+            self.set_error(format!("Request timed out after {}s", timeout.as_secs()));
+            return Ok(());
         };
 
-        // Process results
-        let deployments = deployments_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch deployments: {e}"));
-            e
-        })?;
-
-        let statefulsets = statefulsets_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch statefulsets: {e}"));
-            e
-        })?;
-
-        let daemonsets = daemonsets_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch daemonsets: {e}"));
-            e
-        })?;
-
-        let pods = pods_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch pods: {e}"));
-            e
-        })?;
-
-        let replicasets = replicasets_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch replicasets: {e}"));
-            e
-        })?;
-
-        // Scoped: count, per workload, how many of its pods on the scoped
-        // nodes are ready
-        let placement: Option<HashMap<WorkloadKey, (i32, i32)>> = scope.as_ref().map(|_| {
-            let rs_owners: HashMap<(String, String), String> = replicasets
-                .into_iter()
-                .flat_map(|list| list.items)
-                .filter_map(|rs| {
-                    let deploy = rs
-                        .metadata
-                        .owner_references
-                        .as_ref()?
-                        .iter()
-                        .find(|o| o.kind == "Deployment")?
-                        .name
-                        .clone();
-                    Some(((rs.metadata.namespace.clone()?, rs.metadata.name?), deploy))
-                })
-                .collect();
-            let mut placement = HashMap::new();
-            for pod in &pods {
-                if let Some((kind, name)) = pod_owner(pod, &rs_owners) {
-                    let ns = pod.metadata.namespace.clone().unwrap_or_default();
-                    let entry: &mut (i32, i32) = placement.entry((ns, kind, name)).or_default();
-                    entry.0 += i32::from(pod_is_ready(pod));
-                    entry.1 += 1;
+        let mut errors = Vec::new();
+        let mut unavailable = Vec::new();
+        let mut counted = Vec::new();
+        let mut conditions = HashMap::new();
+        match deployments {
+            Ok(list) => {
+                for d in &list.items {
+                    let (namespace, name) = ns_name(&d.metadata);
+                    let not_true = false_conditions(d);
+                    if !not_true.is_empty() {
+                        conditions.insert(
+                            (namespace.clone(), WorkloadKind::Deployment, name.clone()),
+                            not_true,
+                        );
+                    }
+                    let r = crate::components::diagnostics::k8s::DeploymentReplicas::of(d);
+                    counted.push(Counted {
+                        namespace,
+                        name,
+                        kind: WorkloadKind::Deployment,
+                        ready: r.ready,
+                        desired: r.desired,
+                        available: r.available,
+                    });
                 }
             }
-            placement
-        });
-        // Pods of a workload on the scoped nodes; `Some(None)` drops the
-        // workload from a scoped view
-        let here = |ns: &str, kind: WorkloadKind, name: &str| -> Option<Option<(i32, i32)>> {
-            match &placement {
-                None => Some(None),
-                Some(p) => p
-                    .get(&(ns.to_string(), kind, name.to_string()))
-                    .map(|c| Some(*c)),
+            Err(e) => {
+                errors.push(format!("Deployments: {e}"));
+                unavailable.push(WorkloadKind::Deployment);
+            }
+        }
+        match statefulsets {
+            Ok(list) => {
+                for sts in &list.items {
+                    let (namespace, name) = ns_name(&sts.metadata);
+                    let ready = sts
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.ready_replicas)
+                        .unwrap_or(0);
+                    // The spec's (status counts surge pods), unset meaning 1
+                    let desired = sts.spec.replicas.unwrap_or(1);
+                    counted.push(Counted {
+                        namespace,
+                        name,
+                        kind: WorkloadKind::StatefulSet,
+                        ready,
+                        desired,
+                        available: ready,
+                    });
+                }
+            }
+            Err(e) => {
+                errors.push(format!("StatefulSets: {e}"));
+                unavailable.push(WorkloadKind::StatefulSet);
+            }
+        }
+        match daemonsets {
+            Ok(list) => {
+                for ds in &list.items {
+                    let (namespace, name) = ns_name(&ds.metadata);
+                    let status = ds.status.as_ref();
+                    let ready = status.map_or(0, |s| s.number_ready);
+                    // One per node it's scheduled on
+                    let desired = status.map_or(0, |s| s.desired_number_scheduled);
+                    counted.push(Counted {
+                        namespace,
+                        name,
+                        kind: WorkloadKind::DaemonSet,
+                        ready,
+                        desired,
+                        available: ready,
+                    });
+                }
+            }
+            Err(e) => {
+                errors.push(format!("DaemonSets: {e}"));
+                unavailable.push(WorkloadKind::DaemonSet);
+            }
+        }
+        // UIDs, to read a failing pod's events
+        let mut uids = HashMap::new();
+        let pods: Option<Vec<PodFacts>> = match pods {
+            Ok(pods) => Some(
+                pods.iter()
+                    .map(|p| {
+                        let facts = pod_facts(p);
+                        if let Some(uid) = &p.metadata.uid {
+                            uids.insert((facts.namespace.clone(), facts.name.clone()), uid.clone());
+                        }
+                        facts
+                    })
+                    .collect(),
+            ),
+            Err(e) => {
+                errors.push(format!("Pods: {e}"));
+                None
+            }
+        };
+        let rs_owners: Option<ReplicaSetOwners> = match replicasets {
+            Ok(list) => Some(replicaset_owners(list.items)),
+            Err(e) => {
+                errors.push(format!("ReplicaSets: {e} (Deployments' pods unknown)"));
+                None
             }
         };
 
-        // Build namespace map
-        let mut ns_map: HashMap<String, NamespaceSummary> = HashMap::new();
-
-        // Track counts locally
-        let mut total_deployments = 0usize;
-        let mut total_statefulsets = 0usize;
-        let mut total_daemonsets = 0usize;
-        let mut total_pods_healthy = 0usize;
-        let mut total_pods_degraded = 0usize;
-        let mut total_pods_failing = 0usize;
-
-        // (namespace, name, kind, ready, desired, available) per workload.
-        // Desired is the spec's (status counts surge pods mid-rollout),
-        // unset meaning 1; a DaemonSet wants one per scheduled node.
-        let ns_name = |meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta| {
-            (
-                meta.namespace
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string()),
-                meta.name.clone().unwrap_or_else(|| "unknown".to_string()),
-            )
-        };
-        let mut found = Vec::new();
-        for d in &deployments.items {
-            let (ns, name) = ns_name(&d.metadata);
-            let r = crate::components::diagnostics::k8s::DeploymentReplicas::of(d);
-            found.push((
-                ns,
-                name,
-                WorkloadKind::Deployment,
-                r.ready,
-                r.desired,
-                r.available,
-            ));
+        // Nothing readable: an error for the whole view
+        if counted.is_empty() && pods.is_none() && !errors.is_empty() {
+            self.set_error(errors.join("; "));
+            return Ok(());
         }
-        for sts in &statefulsets.items {
-            let (ns, name) = ns_name(&sts.metadata);
-            let ready = sts
-                .status
-                .as_ref()
-                .and_then(|s| s.ready_replicas)
-                .unwrap_or(0);
-            let desired = sts.spec.replicas.unwrap_or(1);
-            found.push((ns, name, WorkloadKind::StatefulSet, ready, desired, ready));
-        }
-        for ds in &daemonsets.items {
-            let (ns, name) = ns_name(&ds.metadata);
-            let status = ds.status.as_ref();
-            let ready = status.map(|s| s.number_ready).unwrap_or(0);
-            let desired = status.map(|s| s.desired_number_scheduled).unwrap_or(0);
-            found.push((ns, name, WorkloadKind::DaemonSet, ready, desired, ready));
+        // A scoped view needs the pods to tell which workloads are there
+        if scope.is_some() && pods.is_none() {
+            self.set_error(errors.join("; "));
+            return Ok(());
         }
 
-        for (ns, name, kind, ready, desired, available) in found {
-            let Some(here) = here(&ns, kind, &name) else {
-                continue;
+        let placement = pods.as_deref().map(|p| place_pods(p, rs_owners.as_ref()));
+        let mut workloads = Vec::new();
+        for c in counted {
+            let key = (c.namespace.clone(), c.kind, c.name.clone());
+            let placed = placement.as_ref().and_then(|p| p.get(&key));
+            // Scoped: only the workloads with pods on those nodes (a
+            // Deployment's are unknown without ReplicaSets: left out)
+            let here = match (&scope, placed) {
+                (None, _) => None,
+                (Some(_), Some(p)) => Some((p.ready, p.total)),
+                (Some(_), None) => continue,
             };
-            match kind {
-                WorkloadKind::Deployment => total_deployments += 1,
-                WorkloadKind::StatefulSet => total_statefulsets += 1,
-                WorkloadKind::DaemonSet => total_daemonsets += 1,
-            }
-            let (health, issues) = Self::classify_workload_health(ready, desired, available);
-            namespace(&mut ns_map, &ns).workloads.push(WorkloadInfo {
-                name,
-                namespace: ns,
-                kind,
-                ready,
-                desired,
-                health,
-                issues,
+            let pod_nodes = if placement.is_none()
+                || (c.kind == WorkloadKind::Deployment && rs_owners.is_none())
+            {
+                PodNodes::Unknown
+            } else {
+                PodNodes::from_placement(placed)
+            };
+            workloads.push(WorkloadInfo {
+                health: classify_workload(c.ready, c.desired, c.available),
+                namespace: c.namespace,
+                name: c.name,
+                kind: c.kind,
+                ready: c.ready,
+                desired: c.desired,
+                available: c.available,
                 here,
+                pod_nodes,
             });
         }
 
-        // Process pods - find problematic ones
         let now = chrono::Utc::now().timestamp();
-        for pod in pods {
-            let ns = pod
-                .metadata
-                .namespace
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let name = pod
-                .metadata
-                .name
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let status = pod.status.as_ref();
-            let phase = status
-                .and_then(|s| s.phase.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-
-            let node = pod.spec.as_ref().and_then(|s| s.node_name.clone());
-
-            // Calculate restarts and detect issues
-            let (restarts, issue) = Self::analyze_pod(&pod, now);
-
-            // Calculate age
-            let age = pod
-                .metadata
-                .creation_timestamp
-                .as_ref()
-                .and_then(|ts| chrono::DateTime::from_timestamp(ts.0.as_second(), 0))
-                .map(|ts| talos9s_core::format_duration_human(chrono::Utc::now() - ts))
-                .unwrap_or_else(|| "?".to_string());
-
-            // Track global counts
-            match &issue {
-                Some(i) => match i.severity() {
-                    HealthState::Failing => total_pods_failing += 1,
-                    HealthState::Degraded | HealthState::Pending => total_pods_degraded += 1,
-                    HealthState::Healthy => total_pods_healthy += 1,
-                },
-                None => {
-                    if phase == "Running" || phase == "Succeeded" {
-                        total_pods_healthy += 1;
-                    }
-                }
-            }
-
-            // Only add to namespace if there's an issue
-            if issue.is_some() {
-                let pod_info = PodInfo {
-                    name,
-                    namespace: ns.clone(),
-                    node,
-                    phase,
-                    restarts,
-                    issue,
-                    age,
+        let problem_pods: Vec<ProblemPod> = pods
+            .iter()
+            .flatten()
+            .cloned()
+            .filter_map(|pod| {
+                let issue = pod.issue(now)?;
+                let workload = match pod_workload(&pod, rs_owners.as_ref()) {
+                    PodWorkload::Known(kind, name) => Some((pod.namespace.clone(), kind, name)),
+                    PodWorkload::UnknownDeployment | PodWorkload::None => None,
                 };
+                Some(ProblemPod {
+                    restarts: pod.restarts(),
+                    containers_ready: pod.containers_ready(),
+                    age_secs: pod.created.map(|c| now - c),
+                    namespace: pod.namespace,
+                    name: pod.name,
+                    node: pod.node,
+                    workload,
+                    issue,
+                })
+            })
+            .collect();
 
-                namespace(&mut ns_map, &ns).problem_pods.push(pod_info);
-            }
-        }
-
-        // Calculate namespace health and counts
-        for summary in ns_map.values_mut() {
-            summary.total_workloads = summary.workloads.len();
-            summary.healthy_workloads = summary
-                .workloads
-                .iter()
-                .filter(|w| w.health == HealthState::Healthy)
-                .count();
-
-            // Namespace health is the worst of its workloads/pods
-            let worst_workload = summary
-                .workloads
-                .iter()
-                .map(|w| w.health)
-                .min()
-                .unwrap_or(HealthState::Healthy);
-
-            let worst_pod = summary
-                .problem_pods
-                .iter()
-                .filter_map(|p| p.issue.as_ref())
-                .map(PodIssue::severity)
-                .min()
-                .unwrap_or(HealthState::Healthy);
-
-            summary.health = worst_workload.min(worst_pod);
-        }
-
-        // Convert to vec and sort (issues first, then alphabetically)
-        let mut namespaces: Vec<NamespaceSummary> = ns_map.into_values().collect();
-        namespaces.sort_by(|a, b| {
-            // Sort by health (worst first), then by name
-            a.health.cmp(&b.health).then_with(|| a.name.cmp(&b.name))
-        });
-
-        // Build and set data
-        let data = WorkloadsData {
-            namespaces,
-            total_deployments,
-            total_statefulsets,
-            total_daemonsets,
-            total_pods_healthy,
-            total_pods_degraded,
-            total_pods_failing,
-        };
-
-        let ns_count = data.namespaces.len();
-        self.state.set_data(data);
-
-        // Reset selection if needed
-        if let Some(d) = self.data()
-            && !d.namespaces.is_empty()
-            && self.selected_namespace >= d.namespaces.len()
-        {
-            self.selected_namespace = 0;
-        }
-        self.table_state.select(Some(self.selected_namespace));
+        // The worst first, so the cap drops the least interesting
+        let mut failing: Vec<&ProblemPod> = problem_pods.iter().collect();
+        failing.sort_by_key(|p| p.issue.severity());
+        let wanted = failing
+            .iter()
+            .filter_map(|p| {
+                let key = (p.namespace.clone(), p.name.clone());
+                let uid = uids.get(&key)?.clone();
+                Some((key.0, key.1, uid))
+            })
+            .collect();
+        let events = latest_events(client, wanted).await;
 
         tracing::info!(
-            "Loaded {} namespaces, {} deployments, {} statefulsets, {} daemonsets",
-            ns_count,
-            total_deployments,
-            total_statefulsets,
-            total_daemonsets
+            "Loaded {} workloads ({} lists failed)",
+            workloads.len(),
+            errors.len()
         );
-
+        self.state.set_data(WorkloadsData {
+            workloads,
+            pods: problem_pods,
+            errors,
+            unavailable,
+            all_pods: pods,
+            rs_owners,
+            conditions,
+            events,
+        });
+        self.clamp_selection();
         Ok(())
     }
 
-    /// Classify workload health based on ready/desired counts
-    fn classify_workload_health(
-        ready: i32,
-        desired: i32,
-        available: i32,
-    ) -> (HealthState, Vec<String>) {
-        let mut issues = Vec::new();
-
-        if desired == 0 {
-            return (HealthState::Healthy, issues); // Scaled to 0 is intentional
-        }
-
-        // More than desired happens mid-rollout (surge pods)
-        if ready >= desired && available >= desired {
-            return (HealthState::Healthy, issues);
-        }
-
-        if ready == 0 {
-            issues.push(format!("No pods ready (0/{desired})"));
-            return (HealthState::Failing, issues);
-        }
-
-        if ready < desired {
-            issues.push(format!("Partial: {ready}/{desired} ready"));
-            return (HealthState::Degraded, issues);
-        }
-
-        (HealthState::Healthy, issues)
-    }
-
-    /// Analyze a pod for issues; `now` is seconds since the epoch
-    fn analyze_pod(pod: &Pod, now: i64) -> (i32, Option<PodIssue>) {
-        let status = match &pod.status {
-            Some(s) => s,
-            None => return (0, None),
-        };
-
-        let phase = status.phase.as_deref().unwrap_or("Unknown");
-
-        // A Job retries with new pods; its failed or finished pods stay
-        // behind and say nothing about the Job now
-        let job_owned = pod
-            .metadata
-            .owner_references
-            .as_ref()
-            .is_some_and(|refs| refs.iter().any(|r| r.kind == "Job"));
-        if job_owned && matches!(phase, "Failed" | "Succeeded") {
-            return (0, None);
-        }
-
-        let containers = status.container_statuses.as_deref().unwrap_or_default();
-        let restarts: i32 = containers.iter().map(|c| c.restart_count).sum();
-
-        // Init containers first: while one is stuck the app containers
-        // haven't started
-        let init = status
-            .init_container_statuses
-            .as_deref()
-            .unwrap_or_default();
-        for cs in init.iter().chain(containers) {
-            let Some(state) = &cs.state else { continue };
-            if let Some(waiting) = &state.waiting {
-                match waiting.reason.as_deref() {
-                    Some("CrashLoopBackOff") => {
-                        return (restarts, Some(PodIssue::CrashLoopBackOff));
+    /// The list's rows for the current options
+    fn list_rows(&self) -> Vec<ListRow<'_>> {
+        self.data().map_or_else(Vec::new, |d| {
+            let Some(focus) = &self.focus else {
+                return talos9s_core::workloads::list_rows(&d.workloads, &d.pods, &self.options);
+            };
+            let all = d.all_pods.as_deref().unwrap_or_default();
+            let workload = focus
+                .workload
+                .as_ref()
+                .and_then(|key| d.workloads.iter().find(|w| w.key() == *key));
+            let pods: Vec<&PodFacts> = match (&focus.workload, &focus.pod) {
+                (Some(key), _) => {
+                    let known = !(key.1 == WorkloadKind::Deployment && d.rs_owners.is_none());
+                    if known {
+                        workload_pods(all, d.rs_owners.as_ref(), key)
+                    } else {
+                        Vec::new()
                     }
-                    Some("ImagePullBackOff") => {
-                        return (restarts, Some(PodIssue::ImagePullBackOff));
-                    }
-                    Some("ErrImagePull") => return (restarts, Some(PodIssue::ErrImagePull)),
-                    _ => {}
                 }
-            }
-            // A finished init container is terminated by design
-            if let Some(terminated) = &state.terminated
-                && terminated.exit_code != 0
-            {
-                match terminated.reason.as_deref() {
-                    Some("OOMKilled") => return (restarts, Some(PodIssue::OOMKilled)),
-                    Some("Error") => return (restarts, Some(PodIssue::Error)),
-                    _ => {}
-                }
-            }
-        }
-
-        let age = pod
-            .metadata
-            .creation_timestamp
-            .as_ref()
-            .map(|ts| now - ts.0.as_second());
-        if phase == "Pending" && age.is_none_or(|a| a >= POD_PENDING_GRACE_SECS) {
-            return (restarts, Some(PodIssue::Pending));
-        }
-
-        if phase == "Failed" {
-            return (restarts, Some(PodIssue::Error));
-        }
-
-        let last_restart = containers
-            .iter()
-            .filter_map(|c| {
-                c.last_state
-                    .as_ref()?
-                    .terminated
-                    .as_ref()?
-                    .finished_at
-                    .as_ref()
-            })
-            .map(|t| t.0.as_second())
-            .max();
-        if restarts >= HIGH_RESTART_THRESHOLD
-            && last_restart.is_some_and(|t| now - t < RECENT_RESTART_SECS)
-        {
-            return (restarts, Some(PodIssue::HighRestarts(restarts)));
-        }
-
-        (restarts, None)
+                (None, Some((ns, name))) => all
+                    .iter()
+                    .filter(|p| p.namespace == *ns && p.name == *name)
+                    .collect(),
+                (None, None) => Vec::new(),
+            };
+            focus_rows(workload, &pods, &focus.expanded)
+        })
     }
 
-    /// Move the selection among namespaces, or among the drilled-down
-    /// namespace's workloads and problem pods
-    fn move_selection(&mut self, step: crate::ui_ext::Move) {
-        use crate::ui_ext::moved;
-        if self.drill_down {
-            let total = self
-                .data()
-                .and_then(|d| d.namespaces.get(self.selected_namespace))
-                .map_or(0, |ns| ns.workloads.len() + ns.problem_pods.len());
-            if let Some(i) = moved(self.selected_item, total, step) {
-                self.selected_item = i;
-            }
-        } else {
-            let ns_count = self.data().map_or(0, |d| d.namespaces.len());
-            if let Some(i) = moved(self.selected_namespace, ns_count, step) {
-                self.selected_namespace = i;
-                self.table_state.select(Some(i));
-            }
-        }
-    }
-
-    /// Enter drill-down mode for selected namespace
-    fn enter_drill_down(&mut self) {
-        let has_namespaces = self
-            .data()
-            .map(|d| !d.namespaces.is_empty())
-            .unwrap_or(false);
-        if has_namespaces {
-            self.drill_down = true;
-            self.selected_item = 0;
-        }
-    }
-
-    /// Exit drill-down mode
-    fn exit_drill_down(&mut self) {
-        self.drill_down = false;
-        self.selected_item = 0;
-    }
-
-    /// Draw the summary header
-    fn draw_summary(&self, frame: &mut Frame, area: Rect) {
-        let Some(data) = self.data() else {
-            return;
-        };
-
-        let healthy_color = if data.total_pods_failing == 0 && data.total_pods_degraded == 0 {
-            Color::Green
-        } else {
-            Color::White
-        };
-
-        let scope = match &self.scope {
-            Some(nodes) if nodes.len() == 1 => "On this node: ".to_string(),
-            Some(nodes) => format!("On {} nodes: ", nodes.len()),
-            None => "Summary: ".to_string(),
-        };
-        let line = Line::from(vec![
-            Span::raw(scope),
-            Span::styled(
-                format!("{}", data.total_deployments),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Deployments, "),
-            Span::styled(
-                format!("{}", data.total_statefulsets),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" StatefulSets, "),
-            Span::styled(
-                format!("{}", data.total_daemonsets),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" DaemonSets    "),
-            Span::styled(
-                format!("● {}", data.total_pods_healthy),
-                Style::default().fg(healthy_color),
-            ),
-            Span::raw(" healthy  "),
-            if data.total_pods_degraded > 0 {
-                Span::styled(
-                    format!("◐ {}", data.total_pods_degraded),
-                    Style::default().fg(Color::Yellow),
-                )
-            } else {
-                Span::raw("")
-            },
-            if data.total_pods_degraded > 0 {
-                Span::raw(" degraded  ")
-            } else {
-                Span::raw("")
-            },
-            if data.total_pods_failing > 0 {
-                Span::styled(
-                    format!("✗ {}", data.total_pods_failing),
-                    Style::default().fg(Color::Red),
-                )
-            } else {
-                Span::raw("")
-            },
-            if data.total_pods_failing > 0 {
-                Span::raw(" failing")
-            } else {
-                Span::raw("")
-            },
-        ]);
-
-        let para = Paragraph::new(line).block(Block::default().borders(Borders::BOTTOM));
-        frame.render_widget(para, area);
-    }
-
-    /// Collect namespace row data for rendering
-    fn collect_namespace_rows(&self) -> Vec<(String, String, String, String, Color)> {
-        let Some(data) = self.data() else {
-            return Vec::new();
-        };
-        data.namespaces
-            .iter()
-            .map(|ns| {
-                let (indicator, color) = ns.health.indicator();
-                let issues_count = ns.problem_pods.len()
-                    + ns.workloads
-                        .iter()
-                        .filter(|w| w.health != HealthState::Healthy)
-                        .count();
-                let issue_text = if issues_count > 0 {
-                    format!("{issues_count} issues")
-                } else {
-                    "healthy".to_string()
-                };
-                (
-                    format!("{indicator} "),
-                    ns.name.clone(),
-                    format!("{} workloads", ns.total_workloads),
-                    issue_text,
-                    color,
-                )
-            })
+    /// Rows that can be selected (all but namespace headings), as indexes
+    /// into the rows
+    fn selectable(rows: &[ListRow]) -> Vec<usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, r)| !matches!(r, ListRow::Namespace(_)))
+            .map(|(i, _)| i)
             .collect()
     }
 
-    /// Draw the namespace list
-    fn draw_namespace_list(&mut self, frame: &mut Frame, area: Rect) {
-        let row_data = self.collect_namespace_rows();
-        let rows: Vec<Row> = row_data
-            .into_iter()
-            .map(|(indicator, name, workloads, issue_text, color)| {
-                Row::new(vec![
-                    Cell::from(indicator).style(Style::default().fg(color)),
-                    Cell::from(name),
-                    Cell::from(workloads),
-                    Cell::from(issue_text).style(Style::default().fg(color)),
-                ])
-            })
-            .collect();
-
-        let widths = [
-            Constraint::Length(3),
-            Constraint::Percentage(40),
-            Constraint::Length(15),
-            Constraint::Percentage(30),
-        ];
-
-        let header = Row::new(vec![
-            Cell::from(""),
-            Cell::from("NAMESPACE"),
-            Cell::from("WORKLOADS"),
-            Cell::from("STATUS"),
-        ])
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .bottom_margin(1);
-
-        let row_count = rows.len();
-        let table = Table::new(rows, widths)
-            .header(header)
-            .row_highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("> ");
-
-        frame.render_stateful_widget(table, area, &mut self.table_state);
-        self.rows =
-            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
+    /// After a refresh: the same row selected where it moved to, or the
+    /// same position when it's gone
+    fn clamp_selection(&mut self) {
+        let rows = self.list_rows();
+        let selectable = Self::selectable(&rows);
+        let found = self.selected_id.as_ref().and_then(|id| {
+            selectable
+                .iter()
+                .position(|&r| rows.get(r).and_then(row_id).as_ref() == Some(id))
+        });
+        let selected = found.unwrap_or(self.selected.min(selectable.len().saturating_sub(1)));
+        self.select(selected);
     }
 
-    /// Collect drill-down row data for the selected namespace
-    #[allow(clippy::type_complexity)]
-    fn collect_drill_down_data(
-        &self,
-    ) -> Option<(
-        String,
-        Vec<(String, String, String, String, String, String, Color)>,
-    )> {
-        let data = self.data()?;
-        let ns = data.namespaces.get(self.selected_namespace)?;
-        let title = format!(" {} ", ns.name);
-
-        let mut rows = Vec::new();
-
-        // Add workloads
-        for workload in &ns.workloads {
-            let (indicator, color) = workload.health.indicator();
-            let status = match workload.here {
-                Some((ready, total)) => format!(
-                    "{}/{} ready ({}/{} here)",
-                    workload.ready, workload.desired, ready, total
-                ),
-                None => format!("{}/{} ready", workload.ready, workload.desired),
-            };
-            let issue_text = if workload.issues.is_empty() {
-                String::new()
-            } else {
-                workload.issues.join(", ")
-            };
-            rows.push((
-                format!("{indicator} "),
-                workload.name.clone(),
-                workload.kind.display().to_string(),
-                status,
-                String::new(),
-                issue_text,
-                color,
-            ));
-        }
-
-        // Add problem pods
-        for pod in &ns.problem_pods {
-            let issue = pod.issue.as_ref();
-            let (indicator, color) = issue
-                .map(|i| i.severity().indicator())
-                .unwrap_or(("?", Color::DarkGray));
-            let issue_text = issue
-                .map(PodIssue::display)
-                .unwrap_or("Unknown")
-                .to_string();
-            rows.push((
-                format!("{indicator} "),
-                pod.name.clone(),
-                "Pod".to_string(),
-                format!("{} restarts", pod.restarts),
-                pod.node.clone().unwrap_or_else(|| "-".to_string()),
-                issue_text,
-                color,
-            ));
-        }
-
-        Some((title, rows))
+    fn select(&mut self, i: usize) {
+        let rows = self.list_rows();
+        let id = Self::selectable(&rows)
+            .get(i)
+            .and_then(|&r| rows.get(r))
+            .and_then(row_id);
+        self.selected = i;
+        self.selected_id = id;
     }
 
-    /// Draw the drill-down view for a namespace
-    fn draw_drill_down(&mut self, frame: &mut Frame, area: Rect) {
-        let Some((title, row_data)) = self.collect_drill_down_data() else {
-            return;
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        let count = Self::selectable(&self.list_rows()).len();
+        if let Some(i) = crate::ui_ext::moved(self.selected, count, step) {
+            self.select(i);
+        }
+    }
+
+    /// Options changed: the list is different, start at its top
+    fn options_changed(&mut self) {
+        self.select(0);
+        *self.table_state.offset_mut() = 0;
+    }
+
+    /// The summary line, and the lists that couldn't be read below it
+    fn summary_lines(&self) -> Vec<Line<'static>> {
+        let Some(data) = self.data() else {
+            return Vec::new();
         };
+        let summary = Summary::of(&data.workloads, &data.pods);
+        let scope = match &self.scope {
+            Some(nodes) if nodes.len() == 1 => "On this node: ".to_string(),
+            Some(nodes) => format!("On {} nodes: ", nodes.len()),
+            None => String::new(),
+        };
+        let mut spans = vec![Span::styled(scope, Style::default().dim())];
+        for (kind, (healthy, total)) in WorkloadKind::ALL.iter().zip(summary.kinds) {
+            if !spans.is_empty() && spans.len() > 1 {
+                spans.push(Span::styled(" · ", Style::default().dim()));
+            }
+            let (count, color) = if data.unavailable.contains(kind) {
+                ("?".to_string(), Color::DarkGray)
+            } else if healthy == total {
+                (format!("{healthy}/{total}"), Color::Green)
+            } else {
+                (format!("{healthy}/{total}"), Color::Yellow)
+            };
+            spans.push(Span::raw(format!("{} ", kind.plural())));
+            spans.push(Span::styled(
+                count,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+        spans.push(Span::styled(" · ", Style::default().dim()));
+        if summary.pods_failing + summary.pods_degraded == 0 {
+            spans.push(Span::styled(
+                "no pod problems",
+                Style::default().fg(Color::Green),
+            ));
+        } else {
+            if summary.pods_failing > 0 {
+                spans.push(Span::styled(
+                    format!("{} pods failing", summary.pods_failing),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+            if summary.pods_degraded > 0 {
+                if summary.pods_failing > 0 {
+                    spans.push(Span::raw(", "));
+                }
+                spans.push(Span::styled(
+                    format!("{} degraded or pending", summary.pods_degraded),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+        }
+        let mut lines = vec![Line::from(spans)];
+        lines.extend(data.errors.iter().map(|e| {
+            Line::from(Span::styled(
+                format!("Couldn't read {e}"),
+                Style::default().fg(Color::Yellow),
+            ))
+        }));
+        lines
+    }
 
-        // Build rows from collected data
-        let rows: Vec<Row> = row_data
-            .into_iter()
-            .map(|(indicator, name, kind, status, node, issue_text, color)| {
+    fn draw_filter_bar(&self, frame: &mut Frame, area: Rect) {
+        let mut spans = vec![
+            Span::styled("Filter: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(if self.filtering {
+                self.filter_input.clone()
+            } else {
+                self.options.filter.clone().unwrap_or_default()
+            }),
+        ];
+        if self.filtering {
+            spans.push(Span::styled("█", Style::default().fg(Color::Cyan)));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    /// A row of the table for `row`
+    fn table_row(&self, row: &ListRow) -> Row<'static> {
+        let dim = Style::default().dim();
+        match row {
+            ListRow::Namespace(ns) => Row::new(vec![
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(ns.to_string()).style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            ListRow::Workload(w) => {
+                let (symbol, color) = w.health.health().symbol_and_color();
+                let ready = match w.here {
+                    Some((ready, total)) => {
+                        format!("{}/{} ({ready}/{total} here)", w.ready, w.desired)
+                    }
+                    None => format!("{}/{}", w.ready, w.desired),
+                };
+                // Where it fails in its color, else where it runs, dim
+                let failing = w.health != WorkloadHealth::Healthy;
+                let nodes = Cell::from(w.pod_nodes.label(failing, usize::from(NODES_WIDTH))).style(
+                    if failing {
+                        Style::default().fg(color)
+                    } else {
+                        dim
+                    },
+                );
                 Row::new(vec![
-                    Cell::from(indicator).style(Style::default().fg(color)),
-                    Cell::from(name),
-                    Cell::from(kind),
-                    Cell::from(status),
-                    Cell::from(node),
-                    Cell::from(issue_text).style(Style::default().fg(color)),
+                    Cell::from(symbol).style(Style::default().fg(color)),
+                    Cell::from(w.kind.display()),
+                    Cell::from(w.namespace.clone()).style(dim),
+                    Cell::from(w.name.clone()),
+                    Cell::from(ready),
+                    nodes,
+                    Cell::from(w.issue_text()).style(Style::default().fg(color)),
                 ])
-            })
-            .collect();
+            }
+            ListRow::Container { pod, container: c } => {
+                let state = c
+                    .waiting_reason
+                    .clone()
+                    .or_else(|| {
+                        c.terminated
+                            .as_ref()
+                            .map(|(code, r)| r.clone().unwrap_or_else(|| format!("Exit {code}")))
+                    })
+                    .unwrap_or_else(|| {
+                        if c.ready {
+                            "Ready".into()
+                        } else {
+                            "Not ready".into()
+                        }
+                    });
+                let color = if c.ready { Color::Green } else { Color::Yellow };
+                Row::new(vec![
+                    Cell::from("·").style(Style::default().fg(color)),
+                    Cell::from("Ctr"),
+                    Cell::from(pod.namespace.clone()).style(dim),
+                    Cell::from(format!("    └ {}", c.name)),
+                    Cell::from(if c.ready { "1/1" } else { "0/1" }),
+                    Cell::from(""),
+                    Cell::from(format!("{state} · restarts {}", c.restarts)).style(if c.ready {
+                        dim
+                    } else {
+                        Style::default().fg(color)
+                    }),
+                ])
+            }
+            ListRow::Member(pod) => {
+                let now = chrono::Utc::now().timestamp();
+                let (status, color) = Self::pod_status(pod, now);
+                let (ready, total) = pod.containers_ready();
+                let issue = pod.issue(now);
+                Row::new(vec![
+                    Cell::from("●").style(Style::default().fg(color)),
+                    Cell::from("Pod"),
+                    Cell::from(pod.namespace.clone()).style(dim),
+                    Cell::from(format!("└ {}", pod.name)),
+                    Cell::from(format!("{ready}/{total}")),
+                    Cell::from(pod.node.clone().unwrap_or_else(|| "-".to_string())),
+                    Cell::from(status).style(if issue.is_some() {
+                        Style::default().fg(color)
+                    } else {
+                        dim
+                    }),
+                ])
+            }
+            ListRow::Pod { pod, nested } => {
+                let (symbol, color) = pod.issue.severity().health().symbol_and_color();
+                let name = if *nested {
+                    format!("└ {}", pod.name)
+                } else {
+                    pod.name.clone()
+                };
+                let (ready, total) = pod.containers_ready;
+                Row::new(vec![
+                    Cell::from(symbol).style(Style::default().fg(color)),
+                    Cell::from("Pod"),
+                    Cell::from(pod.namespace.clone()).style(dim),
+                    Cell::from(name),
+                    Cell::from(format!("{ready}/{total}")),
+                    Cell::from(pod.node.clone().unwrap_or_else(|| "-".to_string())),
+                    Cell::from(pod.issue_text()).style(Style::default().fg(color)),
+                ])
+            }
+        }
+    }
 
-        let status_width = if self.scope.is_some() { 26 } else { 15 };
+    fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
+        let rows = self.list_rows();
+        let selectable = Self::selectable(&rows);
+        let table_rows: Vec<Row> = rows.iter().map(|r| self.table_row(r)).collect();
+        let namespace_width = rows
+            .iter()
+            .filter_map(|r| match r {
+                ListRow::Workload(w) => Some(w.namespace.chars().count()),
+                ListRow::Pod { pod, .. } => Some(pod.namespace.chars().count()),
+                ListRow::Member(pod) | ListRow::Container { pod, .. } => {
+                    Some(pod.namespace.chars().count())
+                }
+                ListRow::Namespace(_) => None,
+            })
+            .max()
+            .unwrap_or(9)
+            .clamp(9, 20);
+        let ready_width = if self.scope.is_some() { 22 } else { 7 };
         let widths = [
-            Constraint::Length(3),
-            Constraint::Percentage(35),
-            Constraint::Length(12),
-            Constraint::Length(status_width),
-            Constraint::Length(16),
+            Constraint::Length(1),
+            Constraint::Length(6),
+            Constraint::Length(talos9s_core::convert::to_u16(namespace_width)),
+            Constraint::Fill(2),
+            Constraint::Length(ready_width),
+            Constraint::Length(NODES_WIDTH),
             Constraint::Fill(1),
         ];
-
         let header = Row::new(vec![
             Cell::from(""),
-            Cell::from("NAME"),
             Cell::from("KIND"),
-            Cell::from("STATUS"),
-            Cell::from("NODE"),
+            Cell::from("NAMESPACE"),
+            Cell::from("NAME"),
+            Cell::from("READY"),
+            Cell::from("NODES"),
             Cell::from("ISSUE"),
         ])
         .style(Style::default().add_modifier(Modifier::DIM))
         .bottom_margin(1);
 
-        let mut drill_table_state = TableState::default();
-        if self.drill_down {
-            drill_table_state.select(Some(self.selected_item));
-        }
-
-        let row_count = rows.len();
-        let table = Table::new(rows, widths)
+        let row_count = table_rows.len();
+        self.table_state
+            .select(selectable.get(self.selected).copied());
+        let table = Table::new(table_rows, widths)
             .header(header)
-            .block(Block::default().title(title).borders(Borders::ALL))
             .row_highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("> ");
-
-        frame.render_stateful_widget(table, area, &mut drill_table_state);
-        self.drill_rows =
-            crate::ui_ext::RowHits::new(area, true, 2, drill_table_state.offset(), row_count);
+            );
+        frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
     }
 
-    /// Draw the footer with keybindings
+    /// The selected row's details and the commands `y` copies
+    fn detail(&self) -> Option<(Vec<Line<'static>>, Vec<String>)> {
+        let data = self.data()?;
+        let rows = self.list_rows();
+        let row = Self::selectable(&rows)
+            .get(self.selected)
+            .and_then(|&r| rows.get(r))?;
+        let now = chrono::Utc::now().timestamp();
+        let dim = Style::default().dim();
+        let mut lines = Vec::new();
+        match row {
+            ListRow::Namespace(_) => None,
+            ListRow::Workload(w) => {
+                let key = w.key();
+                let (_, color) = w.health.health().symbol_and_color();
+                let mut head = vec![
+                    Span::styled(
+                        format!("{} {}/{}", w.kind.display(), w.namespace, w.name),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" · {}/{} ready", w.ready, w.desired),
+                        Style::default().fg(color),
+                    ),
+                ];
+                for c in data.conditions.get(&key).into_iter().flatten() {
+                    head.push(Span::styled(" · ", dim));
+                    head.push(Span::styled(c.clone(), Style::default().fg(Color::Yellow)));
+                }
+                lines.push(Line::from(head));
+                let known = !(w.kind == WorkloadKind::Deployment && data.rs_owners.is_none());
+                let count = data
+                    .all_pods
+                    .as_deref()
+                    .filter(|_| known)
+                    .map(|all| workload_pods(all, data.rs_owners.as_ref(), &key).len());
+                lines.push(match count {
+                    Some(n) => Line::from(vec![
+                        Span::styled(format!("  {n} pods  "), dim),
+                        Span::styled("<Enter>", crate::ui_ext::KEY),
+                        Span::styled(" shows them and their logs", dim),
+                    ]),
+                    None => Line::from(Span::styled("  Its pods are unknown", dim)),
+                });
+                Some((lines, vec![workload_command(w.kind, &w.namespace, &w.name)]))
+            }
+            ListRow::Pod { pod, .. } => {
+                let (_, color) = pod.issue.severity().health().symbol_and_color();
+                let facts = Self::find_pod(data, &pod.namespace, &pod.name);
+                Some(self.pod_detail(
+                    &pod.namespace,
+                    &pod.name,
+                    pod.node.as_deref(),
+                    (pod.issue_text(), color),
+                    facts,
+                ))
+            }
+            ListRow::Container { .. } => None,
+            ListRow::Member(pod) => Some(self.pod_detail(
+                &pod.namespace,
+                &pod.name,
+                pod.node.as_deref(),
+                Self::pod_status(pod, now),
+                Some(pod),
+            )),
+        }
+    }
+
+    fn find_pod<'d>(data: &'d WorkloadsData, namespace: &str, name: &str) -> Option<&'d PodFacts> {
+        data.all_pods
+            .iter()
+            .flatten()
+            .find(|p| p.namespace == namespace && p.name == name)
+    }
+
+    /// A pod's issue, else what it's doing, and its color
+    fn pod_status(pod: &PodFacts, now: i64) -> (String, Color) {
+        match pod.issue(now) {
+            Some(issue) => (
+                pod.state_text(),
+                issue.severity().health().symbol_and_color().1,
+            ),
+            None if pod.ready || pod.phase.as_deref() == Some("Succeeded") => {
+                (pod.state_text(), Color::Green)
+            }
+            None => (pod.state_text(), Color::Yellow),
+        }
+    }
+
+    /// A pod's lines in the detail pane: containers, last terminations, its
+    /// latest event; and its commands
+    fn pod_detail(
+        &self,
+        namespace: &str,
+        name: &str,
+        node: Option<&str>,
+        (status, color): (String, Color),
+        facts: Option<&PodFacts>,
+    ) -> (Vec<Line<'static>>, Vec<String>) {
+        let dim = Style::default().dim();
+        let now = chrono::Utc::now().timestamp();
+        let mut lines = vec![Line::from(vec![
+            Span::styled(
+                format!("Pod {namespace}/{name}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {status}"), Style::default().fg(color)),
+            Span::styled(
+                format!(" · node {}", node.unwrap_or("- (not scheduled)")),
+                dim,
+            ),
+        ])];
+        if let Some(facts) = facts {
+            for c in facts.init_containers.iter().chain(&facts.containers) {
+                let state = c
+                    .waiting_reason
+                    .clone()
+                    .or_else(|| {
+                        c.terminated
+                            .as_ref()
+                            .map(|(code, r)| r.clone().unwrap_or_else(|| format!("Exit {code}")))
+                    })
+                    .unwrap_or_else(|| {
+                        if c.ready {
+                            "Ready".into()
+                        } else {
+                            "Not ready".into()
+                        }
+                    });
+                let style = if c.ready || matches!(c.terminated, Some((0, _))) {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(color)
+                };
+                lines.push(Line::from(vec![
+                    Span::raw(format!("  {}  ", c.name)),
+                    Span::styled(state, style),
+                    Span::styled(format!("  restarts {}", c.restarts), dim),
+                ]));
+            }
+            for t in facts.last_terminations(now) {
+                lines.push(Line::from(Span::styled(format!("  Last: {t}"), dim)));
+            }
+        }
+        if let Some(event) = self
+            .data()
+            .and_then(|d| d.events.get(&(namespace.to_string(), name.to_string())))
+        {
+            lines.push(Line::from(vec![
+                Span::styled("  Event: ", dim),
+                Span::raw(event.text()),
+            ]));
+        }
+        let restarted = facts.is_some_and(|f| f.restarts() > 0);
+        (lines, pod_commands(namespace, name, restarted))
+    }
+
+    /// The selected row, as an index into the rows
+    fn selected_row(&self) -> Option<usize> {
+        Self::selectable(&self.list_rows())
+            .get(self.selected)
+            .copied()
+    }
+
+    /// Enter on the list: focus the selected workload (or the workload of a
+    /// selected pod, or the pod alone), with that row selected
+    fn open_focus(&mut self) {
+        let Some(data) = self.data() else { return };
+        let rows = self.list_rows();
+        let Some(row) = self.selected_row().and_then(|r| rows.get(r)) else {
+            return;
+        };
+        let listed = |key: &WorkloadKey| data.workloads.iter().any(|w| w.key() == *key);
+        let (workload, pod) = match row {
+            ListRow::Workload(w) => (Some(w.key()), None),
+            ListRow::Pod { pod, .. } => match &pod.workload {
+                Some(key) if listed(key) => (Some(key.clone()), None),
+                _ => (None, Some((pod.namespace.clone(), pod.name.clone()))),
+            },
+            _ => return,
+        };
+        let id = row_id(row);
+        let mut logs = LogPane::default();
+        logs.set_wrap(self.log_wrap);
+        self.focus = Some(Focus {
+            workload,
+            pod,
+            expanded: HashSet::new(),
+            logs,
+            back: (self.selected, self.selected_id.clone()),
+        });
+        // The row Enter was on: the workload, or the pod
+        self.selected = 0;
+        self.selected_id = id;
+        self.clamp_selection();
+        *self.table_state.offset_mut() = 0;
+        self.sync_logs();
+    }
+
+    /// Back to the list, where it was
+    fn close_focus(&mut self) {
+        if let Some(focus) = self.focus.take() {
+            self.log_wrap = focus.logs.wrap();
+            (self.selected, self.selected_id) = focus.back;
+            self.clamp_selection();
+        }
+    }
+
+    /// Point the logs at the selected row: all pods of the workload, all
+    /// containers of a pod, or one container
+    fn sync_logs(&mut self) {
+        use talos9s_core::pod_logs::log_sources;
+        let rows = self.list_rows();
+        let Some(row) = self.selected_row().and_then(|r| rows.get(r)) else {
+            return;
+        };
+        let (title, sources, command) = match row {
+            ListRow::Workload(w) => {
+                let pods: Vec<&PodFacts> = rows
+                    .iter()
+                    .filter_map(|r| match r {
+                        ListRow::Member(p) => Some(*p),
+                        _ => None,
+                    })
+                    .collect();
+                (
+                    format!("{}/{} · {} pods", w.kind.resource(), w.name, pods.len()),
+                    log_sources(&pods, None),
+                    format!(
+                        "kubectl -n {} logs {}/{} --all-pods --all-containers --prefix",
+                        w.namespace,
+                        w.kind.resource(),
+                        w.name
+                    ),
+                )
+            }
+            ListRow::Member(pod) => (
+                pod.name.clone(),
+                log_sources(&[pod], None),
+                format!(
+                    "kubectl -n {} logs {} --all-containers --prefix",
+                    pod.namespace, pod.name
+                ),
+            ),
+            ListRow::Container { pod, container } => (
+                format!("{} · {}", pod.name, container.name),
+                log_sources(&[pod], Some(&container.name)),
+                format!(
+                    "kubectl -n {} logs {} -c {}",
+                    pod.namespace, pod.name, container.name
+                ),
+            ),
+            _ => return,
+        };
+        drop(rows);
+        if let Some(focus) = &mut self.focus {
+            focus.logs.set_sources(title, sources, command);
+        }
+    }
+
+    /// Keys of the focused view
+    fn handle_focus_key(&mut self, key: KeyEvent) -> Option<Action> {
+        use crate::ui_ext::Move;
+        let client = self.k8s_client.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.close_focus();
+                return None;
+            }
+            // A pod's containers under it, or folded
+            KeyCode::Enter => {
+                let rows = self.list_rows();
+                let pod = match self.selected_row().and_then(|r| rows.get(r)) {
+                    Some(ListRow::Member(p) | ListRow::Container { pod: p, .. }) => {
+                        Some((p.name.clone(), row_id(&ListRow::Member(p))))
+                    }
+                    _ => None,
+                };
+                drop(rows);
+                if let Some((name, id)) = pod
+                    && let Some(focus) = &mut self.focus
+                {
+                    if !focus.expanded.remove(&name) {
+                        focus.expanded.insert(name);
+                    }
+                    self.selected_id = id;
+                    self.clamp_selection();
+                }
+            }
+            KeyCode::Char('y') => {
+                if let Some(focus) = &self.focus {
+                    crate::clipboard::copy_to_clipboard(focus.logs.command());
+                }
+            }
+            KeyCode::Char('a') => self.auto_refresh = !self.auto_refresh,
+            _ => match Move::from_key(&key) {
+                Some(step @ (Move::Prev | Move::Next)) => self.move_selection(step),
+                _ => {
+                    if let Some(focus) = &mut self.focus {
+                        focus.logs.handle_key(&key, client.as_ref());
+                    }
+                }
+            },
+        }
+        self.sync_logs();
+        None
+    }
+
+    fn focus_key_hints(&self) -> Line<'static> {
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
+        let previous = self.focus.as_ref().is_some_and(|f| f.logs.previous());
+        Line::from(vec![
+            key("<Enter>"),
+            Span::raw(" containers  "),
+            key("<p>"),
+            Span::raw(if previous {
+                " current run  "
+            } else {
+                " previous run  "
+            }),
+            key("<w>"),
+            Span::raw(" wrap  "),
+            key("<PgUp/PgDn/g/G>"),
+            Span::raw(" scroll  "),
+            key("<y>"),
+            Span::raw(" copy  "),
+            key("<r>"),
+            Span::raw(" reload"),
+        ])
+    }
+
+    fn draw_focus(&mut self, frame: &mut Frame, area: Rect) {
+        let rows = talos9s_core::convert::to_u16(self.list_rows().len());
+        // The list as tall as its rows (header included), at most a third
+        let list_height = rows.saturating_add(2).min(area.height / 3).max(4);
+        let [list, logs] =
+            Layout::vertical([Constraint::Length(list_height), Constraint::Fill(1)]).areas(area);
+        self.draw_list(frame, list);
+        if let Some(focus) = &mut self.focus {
+            focus.logs.draw(frame, logs);
+        }
+    }
+
+    /// Copy the selected row's commands
+    fn copy_commands(&self) {
+        if let Some((_, commands)) = self.detail() {
+            crate::clipboard::copy_lines(&commands);
+        }
+    }
+
+    fn draw_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        mut lines: Vec<Line<'static>>,
+        commands: &[String],
+    ) {
+        let dim = Style::default().dim();
+        // The commands go last, so they stay visible when the pods don't fit
+        let mut tail = vec![Line::from(vec![
+            Span::styled("<y>", crate::ui_ext::KEY),
+            Span::styled(" copies: ", dim),
+            Span::styled(commands.join("  ·  "), dim),
+        ])];
+        let room = usize::from(area.height.saturating_sub(1));
+        if lines.len() + tail.len() > room {
+            lines.truncate(room.saturating_sub(tail.len()));
+        }
+        lines.append(&mut tail);
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::TOP)),
+            area,
+        );
+    }
+
+    /// Shown instead of an empty table
+    fn empty_message(&self) -> Line<'static> {
+        let total = self.data().map_or(0, |d| d.workloads.len());
+        if let Some(filter) = &self.options.filter {
+            Line::from(Span::styled(
+                format!("Nothing matches \"{filter}\""),
+                Style::default().fg(Color::DarkGray),
+            ))
+        } else if total > 0 && !self.options.show_healthy {
+            Line::from(vec![
+                Span::styled(
+                    format!("All {total} workloads healthy  "),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled("<A>", crate::ui_ext::KEY),
+                Span::styled(" shows them", Style::default().fg(Color::DarkGray)),
+            ])
+        } else if self.scope.is_some() {
+            Line::from(Span::styled(
+                "No workloads on these nodes",
+                Style::default().fg(Color::DarkGray),
+            ))
+        } else {
+            Line::from(Span::styled(
+                "No workloads found",
+                Style::default().fg(Color::DarkGray),
+            ))
+        }
+    }
+
     fn key_hints_line(&self) -> Line<'static> {
-        let auto_status = if self.auto_refresh {
-            Span::styled("ON ", Style::default().fg(Color::Green))
-        } else {
-            Span::styled("OFF", Style::default().fg(Color::DarkGray))
-        };
-
-        let nav_keys = if self.drill_down {
-            vec![
-                Span::styled("<j/k>", crate::ui_ext::KEY),
-                Span::raw(" select  "),
-                Span::styled("<g/G>", crate::ui_ext::KEY),
-                Span::raw(" top/bottom  "),
-                Span::styled("<Esc/q>", crate::ui_ext::KEY),
-                Span::raw(" back  "),
-            ]
-        } else {
-            vec![
-                Span::styled("<j/k>", crate::ui_ext::KEY),
-                Span::raw(" select  "),
-                Span::styled("<g/G>", crate::ui_ext::KEY),
-                Span::raw(" top/bottom  "),
+        if self.focus.is_some() {
+            return self.focus_key_hints();
+        }
+        if self.filtering {
+            return Line::from(vec![
                 Span::styled("<Enter>", crate::ui_ext::KEY),
-                Span::raw(" expand  "),
-            ]
+                Span::raw(" keep filter  "),
+                Span::styled("<Esc>", crate::ui_ext::KEY),
+                Span::raw(" clear"),
+            ]);
+        }
+        let on_off = |on: bool| {
+            if on {
+                Span::styled("ON ", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("OFF", Style::default().fg(Color::DarkGray))
+            }
         };
-
-        let mut spans = nav_keys;
-        spans.extend(vec![
-            Span::styled("<r>", crate::ui_ext::KEY),
-            Span::raw(" refresh  "),
+        // No `<j/k>` or `<r>`: they move and refresh in every view, and the
+        // line must fit 85 columns
+        Line::from(vec![
+            Span::styled("</>", crate::ui_ext::KEY),
+            Span::raw(" filter  "),
+            Span::styled("<A>", crate::ui_ext::KEY),
+            Span::raw(" healthy:"),
+            on_off(self.options.show_healthy),
+            Span::raw(" "),
+            Span::styled("<S>", crate::ui_ext::KEY),
+            Span::raw(" ns:"),
+            on_off(self.options.by_namespace),
+            Span::raw(" "),
+            Span::styled("<Enter>", crate::ui_ext::KEY),
+            Span::raw(" pods+logs  "),
+            Span::styled("<y>", crate::ui_ext::KEY),
+            Span::raw(" copy  "),
             Span::styled("<a>", crate::ui_ext::KEY),
             Span::raw(" auto:"),
-            auto_status,
-        ]);
+            on_off(self.auto_refresh),
+        ])
+    }
 
-        Line::from(spans)
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        use crate::ui_ext::{TextEdit, edit_text};
+        match edit_text(&mut self.filter_input, &key) {
+            TextEdit::Cancel => {
+                self.filtering = false;
+                self.filter_input.clear();
+                self.options.filter = None;
+                self.options_changed();
+            }
+            // Live filter as you type; Enter keeps it and stops typing
+            TextEdit::Changed | TextEdit::Submit => {
+                self.options.filter =
+                    (!self.filter_input.is_empty()).then(|| self.filter_input.clone());
+                self.options_changed();
+                if key.code == KeyCode::Enter {
+                    self.filtering = false;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
 impl Component for WorkloadHealthComponent {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        if self.drill_down {
-            if let Some(i) = self.drill_rows.clicked(&mouse) {
-                self.selected_item = i;
-            }
-        } else if let Some(i) = self.rows.clicked(&mouse) {
-            self.selected_namespace = i;
-            self.table_state.select(Some(i));
+        if let Some(row) = self.rows.clicked(&mouse)
+            && let Some(i) = Self::selectable(&self.list_rows())
+                .iter()
+                .position(|&r| r == row)
+        {
+            self.select(i);
         }
         Ok(None)
     }
@@ -1169,27 +1476,56 @@ impl Component for WorkloadHealthComponent {
         Some(self.key_hints_line())
     }
 
+    fn captures_text(&self) -> bool {
+        self.filtering
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        if self.filtering {
+            self.handle_filter_key(key);
+            return Ok(None);
+        }
+        if self.focus.is_some() {
+            return Ok(self.handle_focus_key(key));
+        }
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                if self.drill_down {
-                    self.exit_drill_down();
-                    Ok(None)
-                } else {
-                    Ok(Some(Action::Back))
-                }
+            // A kept filter goes first, then back to the tree
+            KeyCode::Esc if self.options.filter.is_some() => {
+                self.options.filter = None;
+                self.filter_input.clear();
+                self.options_changed();
+                Ok(None)
             }
+            KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
             _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
                 self.move_selection(step);
                 Ok(None)
             }
-            KeyCode::Enter => {
-                if !self.drill_down {
-                    self.enter_drill_down();
-                }
+            KeyCode::Char('/') => {
+                self.filtering = true;
+                self.filter_input = self.options.filter.clone().unwrap_or_default();
+                Ok(None)
+            }
+            KeyCode::Char('A') => {
+                self.options.show_healthy = !self.options.show_healthy;
+                self.options_changed();
+                Ok(None)
+            }
+            KeyCode::Char('S') => {
+                self.options.by_namespace = !self.options.by_namespace;
+                self.options_changed();
                 Ok(None)
             }
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+            // One workload with its pods and their logs
+            KeyCode::Enter => {
+                self.open_focus();
+                Ok(None)
+            }
+            KeyCode::Char('y') => {
+                self.copy_commands();
+                Ok(None)
+            }
             KeyCode::Char('a') => {
                 self.auto_refresh = !self.auto_refresh;
                 Ok(None)
@@ -1199,25 +1535,25 @@ impl Component for WorkloadHealthComponent {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        if let Action::Tick = action {
-            // Check for auto-refresh
-            if self
+        if let Action::Tick = action
+            && let Some(focus) = &mut self.focus
+        {
+            focus.logs.tick(self.k8s_client.as_ref());
+        }
+        if let Action::Tick = action
+            && self
                 .state
                 .should_auto_refresh(self.auto_refresh, AUTO_REFRESH_INTERVAL)
-            {
-                return Ok(Some(Action::Refresh));
-            }
+        {
+            return Ok(Some(Action::Refresh));
         }
         Ok(None)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        // The workspace frames the view and titles it
-        let inner = area;
-
         if crate::ui_ext::draw_load_gate(
             frame,
-            inner,
+            area,
             self.state.is_loading() && !self.state.has_data(),
             self.state.error(),
             "Loading workloads...",
@@ -1225,36 +1561,47 @@ impl Component for WorkloadHealthComponent {
             return Ok(());
         }
 
-        let has_namespaces = self
-            .data()
-            .map(|d| !d.namespaces.is_empty())
-            .unwrap_or(false);
-        if !has_namespaces {
-            let message = if self.scope.is_some() {
-                "No workloads on these nodes"
-            } else {
-                "No workloads found"
-            };
-            let empty = Paragraph::new(message).style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(empty, inner);
+        let summary = self.summary_lines();
+        let show_filter = self.filtering || self.options.filter.is_some();
+        let [summary_area, filter_area, content] = Layout::vertical([
+            // The summary and a border below it
+            Constraint::Length(talos9s_core::convert::to_u16(summary.len()).saturating_add(1)),
+            Constraint::Length(u16::from(show_filter)),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        frame.render_widget(
+            Paragraph::new(summary).block(Block::default().borders(Borders::BOTTOM)),
+            summary_area,
+        );
+        if show_filter {
+            self.draw_filter_bar(frame, filter_area);
+        }
+
+        if self.focus.is_some() {
+            self.draw_focus(frame, content);
             return Ok(());
         }
-
-        // Layout
-        let [summary, content] = Layout::vertical([
-            Constraint::Length(2), // Summary
-            Constraint::Fill(1),   // Content (list or drill-down)
-        ])
-        .areas(inner);
-
-        self.draw_summary(frame, summary);
-
-        if self.drill_down {
-            self.draw_drill_down(frame, content);
-        } else {
-            self.draw_namespace_list(frame, content);
+        if self.list_rows().is_empty() {
+            frame.render_widget(Paragraph::new(self.empty_message()), content);
+            self.rows = Default::default();
+            return Ok(());
         }
-
+        // The detail pane takes up to half, and only when the list keeps
+        // room for a few rows
+        match self.detail() {
+            Some((lines, commands)) if content.height >= DETAIL_MIN_HEIGHT => {
+                let wanted = talos9s_core::convert::to_u16(lines.len() + 2);
+                let [list, detail] = Layout::vertical([
+                    Constraint::Fill(1),
+                    Constraint::Length(wanted.min(content.height / 2)),
+                ])
+                .areas(content);
+                self.draw_list(frame, list);
+                self.draw_detail(frame, detail, lines, &commands);
+            }
+            _ => self.draw_list(frame, content),
+        }
         Ok(())
     }
 }
@@ -1265,48 +1612,30 @@ impl crate::components::BackgroundRefresh for WorkloadHealthComponent {
         if self.k8s_client.is_none() {
             self.k8s_client = refreshed.k8s_client;
         }
-        let ns_count = self.data().map(|d| d.namespaces.len()).unwrap_or(0);
-        if ns_count > 0 && self.selected_namespace >= ns_count {
-            self.selected_namespace = 0;
-        }
-        self.table_state.select(Some(self.selected_namespace));
+        self.clamp_selection();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
+    use talos9s_core::workloads::PodIssue;
+
+    fn press(c: &mut WorkloadHealthComponent, code: KeyCode) -> Option<Action> {
+        c.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap()
+    }
 
     /// `a` toggles auto-refresh, as in every view that has it
     #[test]
     fn a_toggles_auto_refresh() {
-        use crate::components::Component;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut c = WorkloadHealthComponent::new(None);
-        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         assert!(c.auto_refresh);
-        c.handle_key_event(a).unwrap();
+        press(&mut c, KeyCode::Char('a'));
         assert!(!c.auto_refresh);
-        c.handle_key_event(a).unwrap();
+        press(&mut c, KeyCode::Char('a'));
         assert!(c.auto_refresh);
-    }
-    use k8s_openapi::api::core::v1::{PodCondition, PodStatus};
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
-
-    fn pod_owned_by(kind: &str, name: &str) -> Pod {
-        Pod {
-            metadata: ObjectMeta {
-                namespace: Some("apps".to_string()),
-                owner_references: Some(vec![OwnerReference {
-                    kind: kind.to_string(),
-                    name: name.to_string(),
-                    controller: Some(true),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
     }
 
     const NOW: i64 = 1_800_000_000;
@@ -1322,18 +1651,48 @@ mod tests {
     }
 
     fn issue(pod: &Pod) -> Option<PodIssue> {
-        WorkloadHealthComponent::analyze_pod(pod, NOW).1
+        pod_facts(pod).issue(NOW)
     }
 
+    /// The Kubernetes objects convert to the facts the classification uses
+    /// (the classification itself is tested in talos9s-core)
     #[test]
-    fn workload_health_tolerates_rollouts_and_scale_to_zero() {
-        let classify = WorkloadHealthComponent::classify_workload_health;
-        assert_eq!(classify(3, 3, 3).0, HealthState::Healthy);
-        // Surge pod during a rollout: more ready than desired
-        assert_eq!(classify(4, 3, 4).0, HealthState::Healthy);
-        assert_eq!(classify(0, 0, 0).0, HealthState::Healthy);
-        assert_eq!(classify(2, 3, 2).0, HealthState::Degraded);
-        assert_eq!(classify(0, 3, 0).0, HealthState::Failing);
+    fn pod_facts_reads_the_pod() {
+        let pod = pod_json(k8s_openapi::serde_json::json!({
+            "metadata": {
+                "namespace": "apps", "name": "web-1",
+                "creationTimestamp": ts(NOW - 600),
+                "ownerReferences": [
+                    {"apiVersion": "v1", "kind": "Job", "name": "j", "uid": "1"},
+                    {"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "web-7d9f",
+                     "uid": "2", "controller": true},
+                ],
+            },
+            "spec": {"nodeName": "bc3", "containers": []},
+            "status": {
+                "phase": "Running",
+                "conditions": [{"type": "Ready", "status": "False"}],
+                "containerStatuses": [{
+                    "name": "app", "image": "i", "imageID": "", "ready": false,
+                    "restartCount": 4,
+                    "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                    "lastState": {"terminated": {"exitCode": 1, "finishedAt": ts(NOW - 60)}},
+                }],
+            },
+        }));
+        let facts = pod_facts(&pod);
+        assert_eq!(facts.namespace, "apps");
+        assert_eq!(facts.node.as_deref(), Some("bc3"));
+        assert!(!facts.ready);
+        assert!(facts.job_owned);
+        // The controller, not the first owner
+        assert_eq!(
+            facts.owner,
+            Some(("ReplicaSet".to_string(), "web-7d9f".to_string()))
+        );
+        assert_eq!(facts.restarts(), 4);
+        assert_eq!(facts.containers[0].last_finished, Some(NOW - 60));
+        assert_eq!(issue(&pod), Some(PodIssue::CrashLoopBackOff));
     }
 
     #[test]
@@ -1350,27 +1709,10 @@ mod tests {
             }))
         };
         assert_eq!(issue(&restarted(NOW - 86_400 * 7)), None);
-        assert!(matches!(
+        assert_eq!(
             issue(&restarted(NOW - 60)),
             Some(PodIssue::HighRestarts(12))
-        ));
-    }
-
-    #[test]
-    fn finished_job_pods_are_not_failing() {
-        let failed = |owner: &str| {
-            pod_json(k8s_openapi::serde_json::json!({
-                "metadata": {"ownerReferences": [{
-                    "apiVersion": "batch/v1", "kind": owner, "name": "j", "uid": "u"
-                }]},
-                "status": {"phase": "Failed"},
-            }))
-        };
-        assert_eq!(issue(&failed("Job")), None);
-        assert!(matches!(
-            issue(&failed("ReplicaSet")),
-            Some(PodIssue::Error)
-        ));
+        );
     }
 
     #[test]
@@ -1381,76 +1723,174 @@ mod tests {
                 "state": {"waiting": {"reason": "CrashLoopBackOff"}},
             }]},
         }));
-        assert!(matches!(issue(&pod), Some(PodIssue::CrashLoopBackOff)));
+        assert_eq!(issue(&pod), Some(PodIssue::CrashLoopBackOff));
+    }
 
-        // A completed init container is terminated with exit code 0
-        let done = pod_json(k8s_openapi::serde_json::json!({
-            "metadata": {"creationTimestamp": ts(NOW - 600)},
-            "status": {"phase": "Running", "initContainerStatuses": [{
-                "name": "init", "image": "i", "imageID": "", "ready": true, "restartCount": 0,
-                "state": {"terminated": {"exitCode": 0, "reason": "Completed"}},
+    /// A status without a phase still has its containers checked; no status
+    /// at all is nothing to judge
+    #[test]
+    fn missing_phase_still_checks_containers() {
+        let pod = pod_json(k8s_openapi::serde_json::json!({
+            "status": {"containerStatuses": [{
+                "name": "app", "image": "i", "imageID": "", "ready": false, "restartCount": 0,
+                "state": {"waiting": {"reason": "ImagePullBackOff"}},
             }]},
         }));
-        assert_eq!(issue(&done), None);
+        assert_eq!(issue(&pod), Some(PodIssue::ImagePullBackOff));
+        assert_eq!(issue(&Pod::default()), None);
     }
 
-    #[test]
-    fn new_pending_pod_is_not_stuck() {
-        let pending = |created: i64| {
-            pod_json(k8s_openapi::serde_json::json!({
-                "metadata": {"creationTimestamp": ts(created)},
-                "status": {"phase": "Pending"},
-            }))
+    fn with_data(c: &mut WorkloadHealthComponent) {
+        let workload = |name: &str, ready, desired| WorkloadInfo {
+            namespace: "apps".into(),
+            name: name.into(),
+            kind: WorkloadKind::Deployment,
+            ready,
+            desired,
+            available: ready,
+            health: classify_workload(ready, desired, ready),
+            here: None,
+            pod_nodes: PodNodes::Unknown,
         };
-        assert_eq!(issue(&pending(NOW - 10)), None);
-        assert!(matches!(
-            issue(&pending(NOW - 600)),
-            Some(PodIssue::Pending)
-        ));
+        c.state.set_data(WorkloadsData {
+            workloads: vec![workload("api", 1, 3), workload("web", 2, 2)],
+            ..Default::default()
+        });
     }
 
+    /// `A` shows the healthy workloads, `S` adds namespace headings that the
+    /// selection skips
     #[test]
-    fn pod_owner_resolves_replicasets_to_deployments() {
-        let rs_owners = HashMap::from([(
-            ("apps".to_string(), "web-7d9f".to_string()),
-            "web".to_string(),
-        )]);
-        assert_eq!(
-            pod_owner(&pod_owned_by("ReplicaSet", "web-7d9f"), &rs_owners),
-            Some((WorkloadKind::Deployment, "web".to_string()))
-        );
-        assert_eq!(
-            pod_owner(&pod_owned_by("DaemonSet", "cilium"), &rs_owners),
-            Some((WorkloadKind::DaemonSet, "cilium".to_string()))
-        );
-        assert_eq!(
-            pod_owner(&pod_owned_by("StatefulSet", "db"), &rs_owners),
-            Some((WorkloadKind::StatefulSet, "db".to_string()))
-        );
-        // A ReplicaSet without a Deployment, a Job or no owner: not a workload
-        assert_eq!(
-            pod_owner(&pod_owned_by("ReplicaSet", "bare"), &rs_owners),
-            None
-        );
-        assert_eq!(pod_owner(&pod_owned_by("Job", "backup"), &rs_owners), None);
-        assert_eq!(pod_owner(&Pod::default(), &rs_owners), None);
+    fn show_healthy_and_sections() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        assert_eq!(c.list_rows().len(), 1);
+        press(&mut c, KeyCode::Char('A'));
+        assert_eq!(c.list_rows().len(), 2);
+        press(&mut c, KeyCode::Char('S'));
+        let rows = c.list_rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(WorkloadHealthComponent::selectable(&rows), [1, 2]);
+        press(&mut c, KeyCode::Char('G'));
+        assert_eq!(c.selected, 1);
     }
 
+    /// Typing filters live; Esc drops a kept filter before leaving the view
     #[test]
-    fn pod_ready_reads_the_ready_condition() {
-        let with_ready = |status: &str| Pod {
-            status: Some(PodStatus {
-                conditions: Some(vec![PodCondition {
-                    type_: "Ready".to_string(),
-                    status: status.to_string(),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }),
+    fn filter_then_esc() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        press(&mut c, KeyCode::Char('A'));
+        press(&mut c, KeyCode::Char('/'));
+        assert!(c.captures_text());
+        press(&mut c, KeyCode::Char('w'));
+        assert_eq!(c.list_rows().len(), 1);
+        press(&mut c, KeyCode::Enter);
+        assert!(!c.captures_text());
+        assert_eq!(c.options.filter.as_deref(), Some("w"));
+        assert!(press(&mut c, KeyCode::Esc).is_none());
+        assert_eq!(c.options.filter, None);
+        assert!(matches!(press(&mut c, KeyCode::Esc), Some(Action::Back)));
+    }
+
+    /// The detail pane counts the selected workload's pods, Enter lists them
+    /// (not ready first), and `y` would copy a rollout status command
+    #[test]
+    fn detail_shows_the_workloads_pods() {
+        let mut c = WorkloadHealthComponent::new(None);
+        let pod = |name: &str, node: &str, ready| PodFacts {
+            namespace: "apps".into(),
+            name: name.into(),
+            node: Some(node.into()),
+            phase: Some("Running".into()),
+            ready,
+            owner: Some(("StatefulSet".into(), "db".into())),
             ..Default::default()
         };
-        assert!(pod_is_ready(&with_ready("True")));
-        assert!(!pod_is_ready(&with_ready("False")));
-        assert!(!pod_is_ready(&Pod::default()));
+        c.state.set_data(WorkloadsData {
+            workloads: vec![WorkloadInfo {
+                namespace: "apps".into(),
+                name: "db".into(),
+                kind: WorkloadKind::StatefulSet,
+                ready: 1,
+                desired: 2,
+                available: 1,
+                health: classify_workload(1, 2, 1),
+                here: None,
+                pod_nodes: PodNodes::Unknown,
+            }],
+            all_pods: Some(vec![pod("db-0", "bc1", true), pod("db-1", "bc3", false)]),
+            ..Default::default()
+        });
+        let Some((lines, commands)) = c.detail() else {
+            panic!("no detail for the selected workload");
+        };
+        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+        assert!(text[0].starts_with("STS apps/db · 1/2 ready"), "{text:?}");
+        assert!(text[1].contains("2 pods") && text[1].contains("<Enter> shows them"));
+        assert_eq!(commands, ["kubectl -n apps rollout status statefulset/db"]);
+        // Expanded: the pods under it, not ready first, with their node
+        press(&mut c, KeyCode::Enter);
+        let rows = c.list_rows();
+        assert!(
+            matches!(rows[1], ListRow::Member(p) if p.name == "db-1" && p.node.as_deref() == Some("bc3"))
+        );
+        assert!(matches!(rows[2], ListRow::Member(p) if p.name == "db-0"));
+    }
+
+    /// Enter focuses a workload: its pods, the logs of all of them; Enter
+    /// on a pod lists its containers, whose logs are then one container's;
+    /// Esc goes back to the list where it was
+    #[test]
+    fn enter_focuses_a_workload_with_its_logs() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        let pod = |name: &str| PodFacts {
+            namespace: "apps".into(),
+            name: name.into(),
+            owner: Some(("ReplicaSet".into(), "api-7f".into())),
+            containers: vec![
+                ContainerFacts {
+                    name: "app".into(),
+                    ..Default::default()
+                },
+                ContainerFacts {
+                    name: "proxy".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        if let Some(d) = c.state.data_mut() {
+            d.all_pods = Some(vec![pod("api-7f-a"), pod("api-7f-b")]);
+            d.rs_owners = Some(
+                [(("apps".into(), "api-7f".into()), "api".into())]
+                    .into_iter()
+                    .collect(),
+            );
+        }
+        let command = |c: &WorkloadHealthComponent| {
+            c.focus
+                .as_ref()
+                .map(|f| f.logs.command())
+                .unwrap_or_default()
+        };
+        press(&mut c, KeyCode::Enter);
+        assert_eq!(c.list_rows().len(), 3);
+        assert!(command(&c).contains("deployment/api --all-pods"));
+        press(&mut c, KeyCode::Char('j'));
+        assert!(command(&c).contains("logs api-7f-a --all-containers"));
+        press(&mut c, KeyCode::Enter);
+        assert_eq!(c.list_rows().len(), 5);
+        press(&mut c, KeyCode::Char('j'));
+        assert_eq!(command(&c), "kubectl -n apps logs api-7f-a -c app");
+        press(&mut c, KeyCode::Char('p'));
+        assert_eq!(
+            command(&c),
+            "kubectl -n apps logs api-7f-a -c app --previous"
+        );
+        assert!(press(&mut c, KeyCode::Esc).is_none());
+        assert!(c.focus.is_none());
+        assert_eq!(c.list_rows().len(), 1);
     }
 }

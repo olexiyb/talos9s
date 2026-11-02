@@ -11,6 +11,7 @@ pub mod multi_logs;
 pub mod network;
 pub mod node_info;
 pub mod node_operations;
+pub mod pod_logs;
 pub mod processes;
 pub mod rolling_operations;
 pub mod security;

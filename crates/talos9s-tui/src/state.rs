@@ -31,11 +31,15 @@ pub struct UiState {
     pub auto_refresh: Option<bool>,
     /// Log levels shown, lower case (`error`, `warn`, `info`, `debug`, `other`)
     pub log_levels: Option<Vec<String>>,
+    /// Logs wrap long lines (`w`), in the Logs view and the Workloads
+    /// view's logs
+    pub log_wrap: Option<bool>,
     pub volumes: VolumesSettings,
     /// Processes sort (`processes::SortBy` name)
     pub processes_sort: Option<String>,
     pub network: NetworkSettings,
     pub storage: StorageSettings,
+    pub workloads: WorkloadsSettings,
     /// The last new-release check (`update.rs`)
     pub update: UpdateCheck,
 }
@@ -88,6 +92,16 @@ pub struct Folds {
 pub struct StorageSettings {
     /// Virtual block devices (loop, dm, md, drbd, zvol) shown too (`A`)
     pub show_all: Option<bool>,
+}
+
+/// Workloads view
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkloadsSettings {
+    /// Healthy workloads shown too (`A`)
+    pub show_healthy: Option<bool>,
+    /// Rows in namespace sections (`S`)
+    pub by_namespace: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -166,6 +180,7 @@ mod tests {
             }),
             view: Some("Network".into()),
             log_levels: Some(vec!["error".into(), "warn".into()]),
+            log_wrap: Some(true),
             ..Default::default()
         };
         save(&path, &state).unwrap();

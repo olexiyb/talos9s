@@ -922,6 +922,15 @@ impl MultiLogsComponent {
     }
 
     /// Restore a previously chosen level selection
+    /// Long lines wrap (`w`), carried to the next logs view and saved
+    pub fn wrap(&self) -> bool {
+        self.wrap
+    }
+
+    pub fn set_wrap(&mut self, wrap: bool) {
+        self.wrap = wrap;
+    }
+
     pub fn set_level_filter(&mut self, filter: LevelFilter) {
         for (level, active) in self.levels.iter_mut().zip(filter) {
             level.active = active;

@@ -24,6 +24,8 @@ helpers).
 | `logparse` | log line timestamp, level and message; search match ranges |
 | `stats` | `most_common`, `used_of_total`, `used_pct`, `gib` |
 | `version` | `is_newer`, `check_due` (update check) |
+| `pod_logs` | which containers' logs to read for a workload, pod or container (`log_sources`), merging timestamped lines (`merge_logs`) |
+| `workloads` | workload and pod health (`PodFacts::issue`), pod → workload (`pod_workload`, `place_pods`), the nodes of failures, the Workloads list rows and summary; detail pane helpers (`workload_pods`, `state_text`, `latest_event`, copied commands) |
 
 If logic in the TUI can be tested without a terminal or a cluster, it belongs
 here.

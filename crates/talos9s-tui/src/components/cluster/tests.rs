@@ -352,6 +352,16 @@ fn views_picked_while_nodes_load_say_so() {
         comp.action_for(NavMenuItem::Network),
         Some(Action::ShowHint(NavMenuItem::Network, ref m)) if m == LOADING_NODES_HINT
     ));
+    // Cluster-wide views wait for the connection too (they'd say "Not
+    // connected" and never retry); the dashboard shows "connecting" itself
+    assert!(matches!(
+        comp.action_for(NavMenuItem::Workloads),
+        Some(Action::ShowHint(NavMenuItem::Workloads, ref m)) if m == LOADING_NODES_HINT
+    ));
+    assert!(matches!(
+        comp.action_for(NavMenuItem::Dashboard),
+        Some(Action::ShowDashboard)
+    ));
 
     let mut comp = two_node_cluster();
     comp.selected_item = NodeListItem::ClusterHeader(0);

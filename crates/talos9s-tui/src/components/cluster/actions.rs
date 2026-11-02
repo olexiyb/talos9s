@@ -262,6 +262,14 @@ impl ClusterComponent {
                 ))
             })
         };
+        // Cluster-wide views (Workloads, etcd, ...) don't wait for the nodes,
+        // but they need the connection: while it's being made, the same
+        // hint, so the app opens them once connected instead of showing
+        // "Not connected" for good. The dashboard shows the connecting state
+        // itself.
+        if item != NavMenuItem::Dashboard && self.client().is_none() && self.nodes_pending() {
+            return Some(Action::ShowHint(item, LOADING_NODES_HINT.to_string()));
+        }
         let action = match item {
             NavMenuItem::Dashboard => Some(Action::ShowDashboard),
             NavMenuItem::Logs => self.logs_action(None),

@@ -4,6 +4,7 @@ use crate::components::multi_logs::{ALL_LEVELS, LevelFilter};
 use crate::components::network::NetworkSettings;
 use crate::components::processes;
 use crate::components::volumes::VolumesViewState;
+use crate::components::workloads;
 use crate::components::{
     BackgroundRefresh, Component, DiagnosticsComponent, EtcdComponent, GroupComponent,
     LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeInfoComponent,
@@ -103,21 +104,26 @@ macro_rules! spawn_refresh {
 #[derive(Debug, Clone)]
 pub(super) struct ViewSettings {
     pub(super) log_levels: LevelFilter,
+    /// Logs wrap long lines (`w`): the Logs view and the Workloads view's logs
+    pub(super) log_wrap: bool,
     pub(super) volumes: Option<VolumesViewState>,
     pub(super) processes_sort: processes::SortBy,
     pub(super) network: NetworkSettings,
     /// Virtual block devices shown in the node and group storage views (`A`)
     pub(super) storage_show_all: bool,
+    pub(super) workloads: workloads::WorkloadsSettings,
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
         Self {
             log_levels: ALL_LEVELS,
+            log_wrap: false,
             volumes: None,
             processes_sort: Default::default(),
             network: Default::default(),
             storage_show_all: false,
+            workloads: Default::default(),
         }
     }
 }
@@ -126,11 +132,18 @@ impl ViewComponent {
     /// Record the settings of this view that carry over
     pub(super) fn carry_over(&self, settings: &mut ViewSettings) {
         match self {
-            ViewComponent::MultiLogs(l) => settings.log_levels = l.level_filter(),
+            ViewComponent::MultiLogs(l) => {
+                settings.log_levels = l.level_filter();
+                settings.log_wrap = l.wrap();
+            }
             ViewComponent::Volumes(v) => settings.volumes = Some(v.view_state()),
             ViewComponent::Processes(p) => settings.processes_sort = p.sort_by(),
             ViewComponent::Network(n) => settings.network = n.settings(),
             ViewComponent::Storage(s) => settings.storage_show_all = s.show_all(),
+            ViewComponent::Workloads(w) => {
+                settings.workloads = w.settings();
+                settings.log_wrap = w.log_wrap();
+            }
             ViewComponent::Group(g) => {
                 if let Some(show_all) = g.storage_show_all() {
                     settings.storage_show_all = show_all;
