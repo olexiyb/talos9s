@@ -21,7 +21,7 @@ helpers).
 | `constants` | thresholds, CRD lists, refresh intervals |
 | `convert` | saturating numeric conversions (`to_u16`, `float_to_u64`, …) instead of `as`; `parse_quantity` (Kubernetes quantities) |
 | `etcd` | `EtcdQuorum`: quorum and whether a node can go down |
-| `logparse` | log line timestamp, level and message; search match ranges |
+| `logparse` | log line timestamp, level and message; JSON and logfmt lines as text (`JsonLine`); search match ranges |
 | `stats` | `most_common`, `used_of_total`, `used_pct`, `gib` |
 | `version` | `is_newer`, `check_due` (update check) |
 | `pod_logs` | which containers' logs to read for a workload, pod or container (`log_sources`), merging timestamped lines (`merge_logs`) |

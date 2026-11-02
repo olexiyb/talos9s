@@ -301,7 +301,7 @@ impl LogPane {
                         Style::default().fg(source_color(&l.source)),
                     ));
                 }
-                spans.push(Span::raw(l.text.clone()));
+                spans.extend(line_spans(l));
                 Line::from(spans)
             })
             .collect();
@@ -319,6 +319,50 @@ impl LogPane {
             talos9s_core::convert::to_u16(top),
         );
     }
+}
+
+/// A line's time (`HH:MM:SS`, UTC like the Logs view), level badge and
+/// text: a JSON line as its message, then its fields dimmed
+fn line_spans(line: &LogLine) -> Vec<Span<'static>> {
+    use talos9s_core::logparse::{JsonLine, LogLevel};
+    let time = line
+        .time
+        .and_then(|nanos| chrono::DateTime::from_timestamp(nanos.div_euclid(1_000_000_000), 0))
+        .map_or_else(|| " ".repeat(8), |t| t.format("%H:%M:%S").to_string());
+    let json = JsonLine::parse(&line.text);
+    let level = json
+        .as_ref()
+        .and_then(|j| j.level)
+        .unwrap_or_else(|| LogLevel::of_line(&line.text, &line.text));
+    let color = crate::components::multi_logs::level_color(level);
+    let text_style = match level {
+        LogLevel::Error => Style::default().fg(Color::Red),
+        LogLevel::Warn => Style::default().fg(Color::Yellow),
+        LogLevel::Debug => Style::default().dim(),
+        _ => Style::default(),
+    };
+    let mut spans = vec![
+        Span::styled(format!("{time} "), Style::default().dim()),
+        Span::styled(format!("{} ", level.badge()), Style::default().fg(color)),
+    ];
+    match json {
+        Some(json) => {
+            spans.push(Span::styled(json.message.clone(), text_style));
+            let fields: Vec<String> = json
+                .fields
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
+            if !fields.is_empty() {
+                spans.push(Span::styled(
+                    format!(" {}", fields.join(" ")),
+                    Style::default().dim(),
+                ));
+            }
+        }
+        None => spans.push(Span::styled(line.text.clone(), text_style)),
+    }
+    spans
 }
 
 /// Why a source couldn't be read, short: a missing previous run is expected
@@ -382,6 +426,42 @@ mod tests {
         assert!(pane.read.is_some());
         pane.handle_key(&KeyEvent::from(crossterm::event::KeyCode::Char('p')), None);
         assert_eq!(pane.command(), "kubectl --previous");
+    }
+
+    /// A JSON or logfmt line shows its message, then its fields dimmed, the
+    /// level from its field; other lines as they are
+    #[test]
+    fn json_lines_read_as_text() {
+        let line = LogLine {
+            time: Some(1_793_630_002_000_000_000),
+            source: String::new(),
+            text: r#"{"level":"error","msg":"db down","retry":3}"#.into(),
+        };
+        let text: String = line_spans(&line)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(text.ends_with("ERR db down retry=3"), "{text}");
+        let plain = LogLine {
+            time: None,
+            source: String::new(),
+            text: "level=warn msg=slow took=3s".into(),
+        };
+        let text: String = line_spans(&plain)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(text.ends_with("WRN slow took=3s"), "{text}");
+        let raw = LogLine {
+            time: None,
+            source: String::new(),
+            text: "Error: connection refused".into(),
+        };
+        let text: String = line_spans(&raw)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(text.ends_with("ERR Error: connection refused"), "{text}");
     }
 
     #[test]

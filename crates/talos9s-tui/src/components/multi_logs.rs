@@ -113,7 +113,7 @@ fn service_color(i: usize) -> Color {
 }
 
 /// Color of a level's badge
-fn level_color(level: LogLevel) -> Color {
+pub(crate) fn level_color(level: LogLevel) -> Color {
     match level {
         LogLevel::Error => Color::Red,
         LogLevel::Warn => Color::Yellow,

@@ -180,6 +180,15 @@ pub fn parse(line: &str, kernel: bool) -> ParsedLine {
     let (timestamp, timestamp_sort, rest) = extract_timestamp(line);
     // The whole line: klog's level letter is part of its timestamp
     let level = LogLevel::of_line(line, rest);
+    // A JSON line reads as its message and fields
+    if let Some(json) = JsonLine::parse(rest) {
+        return ParsedLine {
+            timestamp,
+            timestamp_sort,
+            level: json.level.unwrap_or(level),
+            message: json.text(),
+        };
+    }
     ParsedLine {
         timestamp,
         timestamp_sort,
@@ -448,6 +457,177 @@ pub fn unix_ts_to_time(ts: f64) -> (String, i64) {
     (short_ts, sort_key)
 }
 
+/// A JSON log line (zap, logrus, slog, Bunyan, Pino, ...) as text: its
+/// level, time and message, and the other fields
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonLine {
+    pub level: Option<LogLevel>,
+    /// The time field as written (`2026-11-02T15:00:00Z`, `1793630002.27`)
+    pub time: Option<String>,
+    pub message: String,
+    /// The other fields, by name, values as `key=value` would show them
+    pub fields: Vec<(String, String)>,
+}
+
+/// Field names loggers use, in the order they're tried
+const TIME_KEYS: [&str; 5] = ["time", "ts", "timestamp", "@timestamp", "t"];
+const LEVEL_KEYS: [&str; 5] = ["level", "lvl", "severity", "levelname", "log.level"];
+const MESSAGE_KEYS: [&str; 4] = ["msg", "message", "@message", "log"];
+
+impl JsonLine {
+    /// `text` as a JSON log line, or `None` when it isn't a JSON object
+    /// (it is shown as it is)
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if !text.starts_with('{') {
+            return Self::parse_logfmt(text);
+        }
+        let serde_json::Value::Object(mut map) = serde_json::from_str(text).ok()? else {
+            return None;
+        };
+        // klog's JSON (kubelet, Kubernetes components) has no level: an
+        // error carries `err`, the other lines a verbosity `v`
+        let klog_level = if map.contains_key("err") {
+            Some(LogLevel::Error)
+        } else if map.get("v").is_some_and(serde_json::Value::is_number) {
+            Some(LogLevel::Info)
+        } else {
+            None
+        };
+        let mut take = |keys: &[&str]| {
+            keys.iter()
+                .find_map(|k| map.remove(*k))
+                // The message itself bare, never quoted
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                })
+        };
+        let time = take(&TIME_KEYS);
+        // Bunyan and Pino write numbers: 50 is error, 40 warn, 30 info
+        let level = take(&LEVEL_KEYS).and_then(|l| match l.parse::<u32>() {
+            Ok(n) if n >= 50 => Some(LogLevel::Error),
+            Ok(n) if n >= 40 => Some(LogLevel::Warn),
+            Ok(n) if n >= 30 => Some(LogLevel::Info),
+            Ok(_) => Some(LogLevel::Debug),
+            Err(_) => LogLevel::named(&l),
+        });
+        let level = level.or(klog_level);
+        let message = take(&MESSAGE_KEYS).unwrap_or_default();
+        let fields = map
+            .iter()
+            .map(|(k, v)| (k.clone(), value_text(v)))
+            .collect();
+        Some(Self {
+            level,
+            time,
+            message,
+            fields,
+        })
+    }
+
+    /// A logfmt line (`time=... level=info msg="..." key=value`), when it
+    /// has a message and a level or time; anything else is shown as it is
+    fn parse_logfmt(text: &str) -> Option<Self> {
+        let pairs = logfmt_pairs(text)?;
+        let get = |keys: &[&str]| {
+            keys.iter()
+                .find_map(|k| pairs.iter().find(|(key, _)| key == k))
+                .cloned()
+        };
+        let (message_key, message) = get(&MESSAGE_KEYS)?;
+        let level = get(&LEVEL_KEYS);
+        let time = get(&TIME_KEYS);
+        if level.is_none() && time.is_none() {
+            return None;
+        }
+        let used = [
+            Some(&message_key),
+            level.as_ref().map(|l| &l.0),
+            time.as_ref().map(|t| &t.0),
+        ];
+        let fields = pairs
+            .iter()
+            .filter(|(key, _)| !used.contains(&Some(key)))
+            .map(|(key, value)| {
+                let shown = if value.contains(char::is_whitespace) || value.is_empty() {
+                    format!("{value:?}")
+                } else {
+                    value.clone()
+                };
+                (key.clone(), shown)
+            })
+            .collect();
+        Some(Self {
+            level: level.and_then(|(_, l)| LogLevel::named(&l)),
+            time: time.map(|(_, t)| t),
+            message,
+            fields,
+        })
+    }
+
+    /// The message, then the fields as `key=value`
+    pub fn text(&self) -> String {
+        let fields = self
+            .fields
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"));
+        std::iter::once(self.message.clone())
+            .filter(|m| !m.is_empty())
+            .chain(fields)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// The `key=value` pairs of a logfmt line (values bare or in quotes with
+/// `\` escapes); `None` when a word isn't a pair
+fn logfmt_pairs(text: &str) -> Option<Vec<(String, String)>> {
+    let mut pairs = Vec::new();
+    let mut chars = text.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        if chars.peek().is_none() {
+            break;
+        }
+        let mut key = String::new();
+        while let Some(c) = chars.next_if(|c| *c != '=' && !c.is_whitespace()) {
+            key.push(c);
+        }
+        if key.is_empty() || chars.next() != Some('=') {
+            return None;
+        }
+        let mut value = String::new();
+        if chars.next_if_eq(&'"').is_some() {
+            loop {
+                match chars.next()? {
+                    '"' => break,
+                    '\\' => value.push(chars.next()?),
+                    c => value.push(c),
+                }
+            }
+        } else {
+            while let Some(c) = chars.next_if(|c| !c.is_whitespace()) {
+                value.push(c);
+            }
+        }
+        pairs.push((key, value));
+    }
+    (!pairs.is_empty()).then_some(pairs)
+}
+
+/// A JSON value as `key=value` shows it: strings bare (quoted when they
+/// hold a space), the rest as compact JSON
+fn value_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) if s.contains(char::is_whitespace) || s.is_empty() => {
+            format!("{s:?}")
+        }
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// Clean message text
 pub fn clean_message(text: &str) -> String {
     let text = text.trim();
@@ -672,5 +852,48 @@ mod tests {
         );
         assert_eq!(entry.timestamp, "08:20:59");
         assert_eq!(entry.message, "eth0: renamed");
+    }
+
+    #[test]
+    fn json_lines_read_as_text() {
+        let zap = r#"{"level":"warn","ts":"2026-11-02T15:00:00Z","msg":"slow request","path":"/api","took_ms":812,"user":{"id":7}}"#;
+        let json = JsonLine::parse(zap).unwrap();
+        assert_eq!(json.level, Some(LogLevel::Warn));
+        assert_eq!(json.time.as_deref(), Some("2026-11-02T15:00:00Z"));
+        assert_eq!(
+            json.text(),
+            r#"slow request path=/api took_ms=812 user={"id":7}"#
+        );
+        // Pino: numeric level, `message` key, a value with spaces quoted
+        let pino =
+            r#"{"level":50,"time":1793630002274,"message":"db down","err":"connection refused"}"#;
+        let json = JsonLine::parse(pino).unwrap();
+        assert_eq!(json.level, Some(LogLevel::Error));
+        assert_eq!(json.text(), r#"db down err="connection refused""#);
+        // Not JSON, or not an object: shown as it is
+        // klog JSON: `err` is an error, `v` alone is info
+        let klog =
+            r#"{"ts":1793630002274.3,"caller":"x.go:1","msg":"failed","err":"rpc error","v":0}"#;
+        assert_eq!(JsonLine::parse(klog).unwrap().level, Some(LogLevel::Error));
+        let klog = r#"{"ts":1793630002274.3,"msg":"Pod update","v":0}"#;
+        assert_eq!(JsonLine::parse(klog).unwrap().level, Some(LogLevel::Info));
+        // logfmt: the same, message first
+        let cilium = r#"time=2026-11-02T15:50:02.93Z level=info msg="Marking CRD identity" identity=2571 note="a \"b\"""#;
+        let line = JsonLine::parse(cilium).unwrap();
+        assert_eq!(line.level, Some(LogLevel::Info));
+        assert_eq!(
+            line.text(),
+            r#"Marking CRD identity identity=2571 note="a \"b\"""#
+        );
+        // Text with an `=` here and there isn't logfmt
+        assert_eq!(JsonLine::parse("set x=1 for msg=y"), None);
+        assert_eq!(JsonLine::parse("msg=hello"), None);
+        assert_eq!(JsonLine::parse("plain {text}"), None);
+        assert_eq!(JsonLine::parse("[1, 2]"), None);
+        assert_eq!(JsonLine::parse("{broken"), None);
+        // In the Logs view's parse: level and message from the JSON
+        let line = parse(r#"{"level":"error","msg":"boom","code":3}"#, false);
+        assert_eq!(line.level, LogLevel::Error);
+        assert_eq!(line.message, "boom code=3");
     }
 }

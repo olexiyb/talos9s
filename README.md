@@ -102,7 +102,8 @@ The Dashboard shows:
 ### Logs
 
 - Service logs, searchable and colored by level; several services interleaved
-  (Stern-style).
+  (Stern-style). JSON and logfmt lines (kubelet, zap, slog, Pino ...) read
+  as their message, then the other fields.
 - On a cluster, control plane or workers row: the same services from every
   node merged by time with a node column, including the kernel log.
 
@@ -130,7 +131,7 @@ warning listed once with its nodes.
 |---|---|
 | etcd | Quorum, members, leader, alarms, advertised and listen addresses (running vs config), live member log |
 | Volumes | LINSTOR/DRBD and ZFS LocalPV volumes, with problems first (see below) |
-| Workloads | Unhealthy Deployments, StatefulSets, DaemonSets and pods in one list, worst first; NODES shows where each runs, or for a failing one, where its unready pods are; `A` shows healthy ones too, `S` groups by namespace, `/` filters; below the list, the selected pod's containers, last termination and latest event, and `y` copies the kubectl command. Enter focuses a workload: its pods, and the logs of all of them merged by time; select a pod for its containers' logs, Enter on it lists its containers, select one for only its logs (`p` previous run, `w` wrap, `PgUp/PgDn/g/G` scroll, follows the end) |
+| Workloads | Unhealthy Deployments, StatefulSets, DaemonSets and pods in one list, worst first; NODES shows where each runs, or for a failing one, where its unready pods are; `A` shows healthy ones too, `S` groups by namespace, `/` filters; below the list, the selected pod's containers, last termination and latest event, and `y` copies the kubectl command. Enter focuses a workload: its pods, and the logs of all of them merged by time; select a pod for its containers' logs, Enter on it lists its containers, select one for only its logs (`p` previous run, `w` wrap, `PgUp/PgDn/g/G` scroll, follows the end), levels coloured, JSON and logfmt lines shown as message and fields |
 | Lifecycle | Talos and Kubernetes versions across nodes; a saved config that differs from the one in effect is flagged "staged, reboot" |
 | Security | Certificate expiry, encryption status |
 
