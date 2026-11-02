@@ -4,6 +4,7 @@
 //! between the UI-agnostic core library and the TUI presentation layer.
 
 use ratatui::style::Color;
+use ratatui::text::{Line, Span};
 use talos9s_core::{
     CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus,
 };
@@ -398,9 +399,52 @@ impl<T: Clone> LineHits<T> {
     }
 }
 
+/// `line` cut to `width` columns with `…` at the end when it is wider, so a
+/// narrow pane shows that something was cut ("Control Pl…")
+pub fn ellipsize(line: Line<'_>, width: usize) -> Line<'_> {
+    if line.width() <= width {
+        return line;
+    }
+    let budget = width.saturating_sub(1);
+    let style = line.style;
+    let mut used = 0;
+    let mut spans = Vec::new();
+    for span in line.spans {
+        let w = span.width();
+        if used + w <= budget {
+            used += w;
+            spans.push(span);
+            continue;
+        }
+        let mut text = String::new();
+        for c in span.content.chars() {
+            let cw = Span::raw(c.to_string()).width();
+            if used + cw > budget {
+                break;
+            }
+            used += cw;
+            text.push(c);
+        }
+        spans.push(Span::styled(text, span.style));
+        break;
+    }
+    spans.push(Span::raw("…"));
+    Line::from(spans).style(style)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ellipsize_cuts_wide_lines_only() {
+        let line = || Line::from(vec![Span::raw("  ▼ "), Span::raw("Control Plane (3)")]);
+        assert_eq!(ellipsize(line(), 40).to_string(), "  ▼ Control Plane (3)");
+        let cut = ellipsize(line(), 12);
+        assert_eq!(cut.to_string(), "  ▼ Control…");
+        assert_eq!(cut.width(), 12);
+        assert_eq!(ellipsize(line(), 21).to_string(), "  ▼ Control Plane (3)");
+    }
 
     #[test]
     fn cursor_moves_stay_in_the_list() {

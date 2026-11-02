@@ -341,6 +341,10 @@ impl ClusterComponent {
                 }
             }
             scroll = scroll.min(total.saturating_sub(height));
+            let lines: Vec<Line> = lines
+                .into_iter()
+                .map(|l| crate::ui_ext::ellipsize(l, usize::from(list.width)))
+                .collect();
             frame.render_widget(Paragraph::new(lines).scroll((to_u16(scroll), 0)), list);
             crate::ui_ext::draw_scrollbar(
                 frame,
@@ -421,6 +425,10 @@ impl ClusterComponent {
             ]));
         }
 
+        let lines: Vec<Line> = lines
+            .into_iter()
+            .map(|l| crate::ui_ext::ellipsize(l, usize::from(area.width)))
+            .collect();
         frame.render_widget(Paragraph::new(lines), area);
     }
 }

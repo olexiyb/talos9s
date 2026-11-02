@@ -106,3 +106,6 @@ pub trait BackgroundRefresh: Clone + Send + 'static {
     /// dialogs, scroll) the user may have changed during the refresh.
     fn adopt_refresh(&mut self, refreshed: Self);
 }
+
+#[cfg(test)]
+mod layout_tests;

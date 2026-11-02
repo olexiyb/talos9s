@@ -1629,7 +1629,7 @@ impl MultiLogsComponent {
                 Span::raw(" clear").dim(),
             ]
         } else if self.floating_pane != FloatingPane::None {
-            vec![
+            let mut spans = vec![
                 Span::raw(" [Space]").fg(Color::Yellow),
                 Span::raw(" toggle").dim(),
                 Span::raw("  "),
@@ -1639,9 +1639,24 @@ impl MultiLogsComponent {
                 Span::raw("[n]").fg(Color::Yellow),
                 Span::raw(" none").dim(),
                 Span::raw("  "),
+            ];
+            // The level keys work everywhere in logs; they're listed here
+            // to keep the main key line within 100 columns
+            if self.floating_pane == FloatingPane::Levels {
+                spans.extend([
+                    Span::raw("[1-5]").fg(Color::Yellow),
+                    Span::raw(" only").dim(),
+                    Span::raw("  "),
+                    Span::raw("[⇧1-5]").fg(Color::Yellow),
+                    Span::raw(" ±level").dim(),
+                    Span::raw("  "),
+                ]);
+            }
+            spans.extend([
                 Span::raw("[Esc/q]").fg(Color::Yellow),
                 Span::raw(" close").dim(),
-            ]
+            ]);
+            spans
         } else if self.visual.active() {
             // Visual mode footer
             vec![
@@ -1655,29 +1670,27 @@ impl MultiLogsComponent {
                 Span::raw(" cancel").dim(),
             ]
         } else {
-            let stream_text = if self.streaming { " stop" } else { " stream" };
             let wrap_text = if self.wrap { " nowrap" } else { " wrap" };
-            let mut spans = vec![
-                Span::raw(" [s]").fg(Color::Yellow),
-                Span::raw(" svcs").dim(),
-                Span::raw(" "),
-                Span::raw("[l]").fg(Color::Yellow),
-                Span::raw(" lvls").dim(),
-                Span::raw(" "),
-                Span::raw("[1-5/0]").fg(Color::Yellow),
-                Span::raw(" only/all").dim(),
-                Span::raw(" "),
-                Span::raw("[⇧1-5]").fg(Color::Yellow),
-                Span::raw(" ±lvl").dim(),
+            // Grouped so the line fits a 100 column screen
+            let (panes, pane_labels) = if self.multi_node() {
+                (" [s/o/l]", " svcs/nodes/lvls")
+            } else {
+                (" [s/l]", " svcs/lvls")
+            };
+            let follow_text = if self.streaming {
+                " follow/stop"
+            } else {
+                " follow/stream"
+            };
+            let spans = vec![
+                Span::raw(panes).fg(Color::Yellow),
+                Span::raw(pane_labels).dim(),
                 Span::raw(" "),
                 Span::raw("[/]").fg(Color::Yellow),
                 Span::raw(" search").dim(),
                 Span::raw(" "),
-                Span::raw("[f]").fg(Color::Yellow),
-                Span::raw(" follow").dim(),
-                Span::raw(" "),
-                Span::raw("[F]").fg(Color::Yellow),
-                Span::raw(stream_text).dim(),
+                Span::raw("[f/F]").fg(Color::Yellow),
+                Span::raw(follow_text).dim(),
                 Span::raw(" "),
                 Span::raw("[w]").fg(Color::Yellow),
                 Span::raw(wrap_text).dim(),
@@ -1688,16 +1701,6 @@ impl MultiLogsComponent {
                 Span::raw("[y]").fg(Color::Yellow),
                 Span::raw(" yank").dim(),
             ];
-            if self.multi_node() {
-                spans.splice(
-                    3..3,
-                    [
-                        Span::raw("[o]").fg(Color::Yellow),
-                        Span::raw(" nodes").dim(),
-                        Span::raw(" "),
-                    ],
-                );
-            }
             spans
         };
 
@@ -2415,7 +2418,7 @@ mod tests {
         assert!(screen.contains("bc3 kernel"), "{screen}");
         // The node filter is offered in the key line, not drawn in the view
         let hints = logs.key_hints().unwrap().to_string();
-        assert!(hints.contains("[o]"), "{hints}");
+        assert!(hints.contains("[s/o/l] svcs/nodes"), "{hints}");
     }
 
     #[tokio::test]

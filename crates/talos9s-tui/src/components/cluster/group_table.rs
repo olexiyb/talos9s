@@ -206,6 +206,16 @@ impl ClusterComponent {
                 .map(|n| self.get_node_kubelet_version_for(cluster_idx, n))
                 .collect(),
         );
+        // Columns that don't fit are dropped, least useful first: squeezing
+        // all of them cuts every value (node names to 3 letters)
+        let cols = GroupCol::fit(cols, inner.width, |c| match c {
+            GroupCol::Node => to_u16(name_width.max(4)),
+            GroupCol::Talos => talos_width,
+            GroupCol::K8s => k8s_width,
+            // Fill: whatever is left, but worth showing only with some room
+            GroupCol::Gw => 12,
+            c => c.width(),
+        });
         let rows: Vec<Row> = nodes
             .iter()
             .map(|node| {
@@ -854,6 +864,31 @@ impl GroupCol {
         .collect()
     }
 
+    /// Drop columns, least useful first, until the rest fit `available`
+    /// at their full width (2 columns of spacing between them)
+    pub(super) fn fit(
+        mut cols: Vec<Self>,
+        available: u16,
+        width: impl Fn(Self) -> u16,
+    ) -> Vec<Self> {
+        use GroupCol::*;
+        let total = |cols: &[Self]| {
+            cols.iter()
+                .map(|c| u32::from(width(*c)) + 2)
+                .sum::<u32>()
+                .saturating_sub(2)
+        };
+        for drop in [
+            Gw, Cores, Tailscale, KSpan, Clock, Conn, Zfs, Uptime, Load, Role,
+        ] {
+            if total(&cols) <= u32::from(available) {
+                break;
+            }
+            cols.retain(|c| *c != drop);
+        }
+        cols
+    }
+
     pub(super) fn title(self) -> &'static str {
         match self {
             Self::Node => "Node",
@@ -876,7 +911,7 @@ impl GroupCol {
     }
 
     /// Fixed widths; Node, the versions and GW size to their content
-    fn width(self) -> u16 {
+    pub(super) fn width(self) -> u16 {
         match self {
             Self::Role => 6,
             Self::Mem => 9,

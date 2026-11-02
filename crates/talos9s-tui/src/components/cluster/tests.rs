@@ -882,6 +882,39 @@ fn group_columns_follow_the_features_present() {
     assert!(pos("Svc") < pos("KSpan") && pos("Tailscale") < pos("Clock"));
 }
 
+/// A narrow pane drops the least useful columns instead of cutting every
+/// value; a wide one keeps them all
+#[test]
+fn group_columns_that_dont_fit_are_dropped() {
+    use super::group_table::GroupCol;
+    let width = |c: GroupCol| match c {
+        GroupCol::Node => 4,
+        GroupCol::Talos | GroupCol::K8s => 7,
+        GroupCol::Gw => 12,
+        c => c.width(),
+    };
+    let all = GroupCol::shown(true, true, true, true);
+    let total = |cols: &[GroupCol]| -> u16 { cols.iter().map(|c| width(*c) + 2).sum::<u16>() - 2 };
+    assert_eq!(GroupCol::fit(all.clone(), 400, width), all);
+    for available in [60, 70, 98] {
+        let fit = GroupCol::fit(all.clone(), available, width);
+        assert!(total(&fit) <= available, "{available}: {fit:?}");
+        for kept in [
+            GroupCol::Node,
+            GroupCol::Talos,
+            GroupCol::Mem,
+            GroupCol::Svc,
+        ] {
+            assert!(fit.contains(&kept), "{available}: {fit:?}");
+        }
+        // Order is kept
+        assert!(
+            fit.windows(2)
+                .all(|w| all.iter().position(|c| *c == w[0]) < all.iter().position(|c| *c == w[1]))
+        );
+    }
+}
+
 fn press(comp: &mut ClusterComponent, code: KeyCode) {
     comp.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
         .unwrap();
