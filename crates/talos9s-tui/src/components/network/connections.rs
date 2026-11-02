@@ -104,16 +104,57 @@ impl NetworkStatsComponent {
             return;
         };
 
+        let pod_subnets = self.pod_subnets();
         self.filtered_connections = data
             .connections
             .iter()
-            .filter(|conn| Self::connection_matches_interface(conn, iface))
+            .filter(|conn| Self::connection_matches_interface(conn, iface, &pod_subnets))
             .cloned()
             .collect();
     }
 
+    /// The cluster's pod networks: from the node's config once read, Talos'
+    /// default until then (or when it can't be read)
+    pub(super) fn pod_subnets(&self) -> Vec<String> {
+        match &self.pod_subnets {
+            Some(subnets) if !subnets.is_empty() => subnets.clone(),
+            _ => vec![talos9s_core::network::DEFAULT_POD_SUBNET.to_string()],
+        }
+    }
+
+    /// Read the pod networks from the node's config once, in the background
+    /// (`talosctl get machineconfig`, of which only the subnets are kept)
+    pub(super) fn poll_pod_subnets(&mut self) {
+        if let Some(task) = self.pod_subnets_task.take_if(|t| t.is_finished()) {
+            if let Some(Ok(subnets)) = crate::task::poll_finished(task) {
+                self.pod_subnets = Some(subnets);
+                if self.view_mode == ViewMode::Connections {
+                    self.filter_connections_for_interface();
+                }
+            }
+            return;
+        }
+        if self.pod_subnets.is_some() || self.pod_subnets_task.is_some() {
+            return;
+        }
+        let node = self.address.clone();
+        let context = self.talos_context.clone();
+        let config_path = self.config_path.clone();
+        self.pod_subnets_task = Some(tokio::spawn(async move {
+            talos_rs::get_machine_config_for_node(context.as_deref(), &node, config_path.as_deref())
+                .await
+                .map(|config| config.pod_subnets)
+                // Unreadable: the default stands, and isn't asked again
+                .unwrap_or_default()
+        }));
+    }
+
     /// Check if a connection likely uses the given interface
-    fn connection_matches_interface(conn: &ConnectionInfo, iface: &str) -> bool {
+    fn connection_matches_interface(
+        conn: &ConnectionInfo,
+        iface: &str,
+        pod_subnets: &[String],
+    ) -> bool {
         match iface {
             // Loopback - connections to/from localhost
             "lo" => {
@@ -122,11 +163,15 @@ impl NetworkStatsComponent {
                     || conn.remote_ip.starts_with("127.")
                     || conn.remote_ip == "::1"
             }
-            // CNI bridge, flannel overlay and veth pairs carry pod traffic.
-            // Only Talos' default pod subnet counts: nodes often sit on 10.x
-            // too, and their traffic doesn't cross the pod interfaces.
+            // CNI bridge, flannel overlay and veth pairs carry pod traffic:
+            // addresses in the cluster's pod networks. Nodes often sit on
+            // 10.x too, and their traffic doesn't cross these interfaces.
             name if name == "cni0" || name.starts_with("flannel") || name.starts_with("veth") => {
-                let is_pod = |ip: &str| ip.starts_with("10.244.");
+                let is_pod = |ip: &str| {
+                    pod_subnets
+                        .iter()
+                        .any(|net| talos9s_core::network::cidr_contains(net, ip))
+                };
                 is_pod(&conn.local_ip) || is_pod(&conn.remote_ip)
             }
             // Main interface (eth0, enp0s*, etc.) - non-loopback, non-pod connections
@@ -900,7 +945,8 @@ mod tests {
     }
 
     fn matches(c: &ConnectionInfo, iface: &str) -> bool {
-        NetworkStatsComponent::connection_matches_interface(c, iface)
+        let pods = ["10.244.0.0/16".to_string()];
+        NetworkStatsComponent::connection_matches_interface(c, iface, &pods)
     }
 
     #[test]
@@ -927,5 +973,17 @@ mod tests {
         assert!(!matches(&conn("65.21.130.10", "1.1.1.1"), "lo"));
         // Listeners on every address show on the main interface
         assert!(matches(&conn("0.0.0.0", ""), "eth0"));
+    }
+
+    #[test]
+    fn pod_traffic_follows_the_clusters_subnets() {
+        let custom = ["10.44.0.0/16".to_string(), "fd00:44::/56".to_string()];
+        let matches = |c: &ConnectionInfo| {
+            NetworkStatsComponent::connection_matches_interface(c, "cni0", &custom)
+        };
+        assert!(matches(&conn("10.44.2.9", "10.0.0.11")));
+        assert!(matches(&conn("fd00:44::9", "fd00::1")));
+        // Talos' default range is not a pod network here
+        assert!(!matches(&conn("10.244.1.5", "10.0.0.11")));
     }
 }

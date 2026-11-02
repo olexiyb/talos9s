@@ -325,6 +325,9 @@ pub struct NetworkStatsComponent {
     config_path: Option<String>,
     /// In-flight KubeSpan fetch: (enabled, peers)
     kubespan_task: Option<tokio::task::JoinHandle<KubeSpanFetch>>,
+    /// The cluster's pod networks, `None` until read (see `pod_subnets`)
+    pod_subnets: Option<Vec<String>>,
+    pod_subnets_task: Option<tokio::task::JoinHandle<Vec<String>>>,
     /// When the last KubeSpan fetch started
     kubespan_started: Option<std::time::Instant>,
 
@@ -437,6 +440,8 @@ impl NetworkStatsComponent {
             talos_context: None,
             config_path: None,
             kubespan_task: None,
+            pod_subnets: None,
+            pod_subnets_task: None,
             kubespan_started: None,
             state: AsyncState::new(),
             selected: 0,
@@ -633,8 +638,9 @@ impl NetworkStatsComponent {
         // Update service health based on connection data
         self.update_service_health();
 
-        // KubeSpan data via talosctl, in the background
+        // KubeSpan data and the pod networks via talosctl, in the background
         self.poll_kubespan_data();
+        self.poll_pod_subnets();
 
         // Reset selection if needed
         let device_count = self.data().map(|d| d.devices.len()).unwrap_or(0);

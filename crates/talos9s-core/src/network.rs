@@ -231,6 +231,38 @@ fn route_flags(flags: u32) -> String {
     s
 }
 
+/// Talos' default pod network (`cluster.network.podSubnets`), for when the
+/// node's config can't be read
+pub const DEFAULT_POD_SUBNET: &str = "10.244.0.0/16";
+
+/// Whether `ip` is inside `cidr` (`10.44.0.0/16`, `fd00::/64`); false for
+/// anything that doesn't parse or mixes IPv4 and IPv6
+pub fn cidr_contains(cidr: &str, ip: &str) -> bool {
+    use std::net::IpAddr;
+    let Some((net, len)) = cidr.split_once('/') else {
+        return false;
+    };
+    let (Ok(net), Ok(len), Ok(ip)) = (
+        net.parse::<IpAddr>(),
+        len.parse::<u32>(),
+        ip.parse::<IpAddr>(),
+    ) else {
+        return false;
+    };
+    let masked = |bits: u128, width: u32| {
+        if len == 0 { 0 } else { bits >> (width - len) }
+    };
+    match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(i)) if len <= 32 => {
+            masked(u32::from(n).into(), 32) == masked(u32::from(i).into(), 32)
+        }
+        (IpAddr::V6(n), IpAddr::V6(i)) if len <= 128 => {
+            masked(u128::from(n), 128) == masked(u128::from(i), 128)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +323,22 @@ mod tests {
         assert!(pos("  # generated") > pos("─ Raw Content ─"));
         // Nothing parsed: no empty sections
         assert!(!resolv_conf_lines("").iter().any(|l| l.ends_with(':')));
+    }
+
+    #[test]
+    fn cidr_membership() {
+        assert!(cidr_contains("10.44.0.0/16", "10.44.3.7"));
+        assert!(!cidr_contains("10.44.0.0/16", "10.45.0.1"));
+        assert!(!cidr_contains("10.244.0.0/16", "10.0.0.11"));
+        assert!(cidr_contains("0.0.0.0/0", "8.8.8.8"));
+        assert!(cidr_contains("10.0.0.5/32", "10.0.0.5"));
+        assert!(!cidr_contains("10.0.0.5/32", "10.0.0.6"));
+        assert!(cidr_contains("fd00:10:244::/56", "fd00:10:244:0:1::5"));
+        assert!(!cidr_contains("fd00:10:244::/56", "fd00:10:245::5"));
+        // Mixed families, bad input
+        assert!(!cidr_contains("10.0.0.0/8", "::ffff:10.0.0.1"));
+        assert!(!cidr_contains("10.0.0.0/33", "10.0.0.1"));
+        assert!(!cidr_contains("10.0.0.0", "10.0.0.1"));
+        assert!(!cidr_contains("10.0.0.0/8", "*"));
     }
 }

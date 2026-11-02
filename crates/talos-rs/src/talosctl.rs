@@ -85,6 +85,9 @@ pub struct MachineConfigInfo {
     pub staged_differs: bool,
     /// Machine type
     pub machine_type: Option<String>,
+    /// The cluster's pod networks (`cluster.network.podSubnets` of the
+    /// config in effect); empty when the config doesn't say
+    pub pod_subnets: Vec<String>,
 }
 
 /// A node's machine config documents, as text
@@ -1082,6 +1085,7 @@ fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosE
             version,
             staged_differs: false,
             machine_type,
+            pod_subnets: Vec::new(),
         };
         let spec = doc.get("spec").and_then(|s| s.as_str()).map(str::to_string);
 
@@ -1105,11 +1109,40 @@ fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosE
             (&active_spec, &persistent_spec),
             (Some(a), Some(p)) if a != p
         );
+        info.pod_subnets = active_spec
+            .as_deref()
+            .map(pod_subnets_of)
+            .unwrap_or_default();
         return Ok(info);
     }
     fallback.ok_or_else(|| {
         TalosError::Connection("no machineconfig document with a version found".to_string())
     })
+}
+
+/// The pod networks of a machine config (the `spec` text of its resource,
+/// one or more YAML documents): a `KubeNetworkConfig` document's
+/// `podSubnets` (Talos 1.14), else v1alpha1's `cluster.network.podSubnets`.
+/// Only this field is kept: the rest of the config holds secrets.
+fn pod_subnets_of(config: &str) -> Vec<String> {
+    let docs: Vec<serde_json::Value> = resource_documents(config).collect();
+    let kube_network = docs.iter().find_map(|doc| {
+        (doc.get("kind")?.as_str()? == "KubeNetworkConfig").then(|| doc.get("podSubnets"))?
+    });
+    kube_network
+        .or_else(|| {
+            docs.iter()
+                .find_map(|doc| doc.pointer("/cluster/network/podSubnets"))
+        })
+        .and_then(|subnets| {
+            subnets.as_array().map(|subnets| {
+                subnets
+                    .iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
 
 /// Render a YAML scalar (`version` may be a number or a string) as a String.
@@ -1934,5 +1967,46 @@ spec:
                 .is_empty()
         );
         assert!(parse_volume_status_yaml(": : :").unwrap().is_empty());
+    }
+
+    #[test]
+    fn pod_subnets_come_from_the_active_config() {
+        let resource = |id: &str, subnet: &str| {
+            format!(
+                "node: 10.0.0.1\nmetadata:\n    id: {id}\n    version: 3\nspec: |\n    version: v1alpha1\n    machine:\n        token: secret\n    cluster:\n        network:\n            podSubnets:\n                - {subnet}\n                - fd00:44::/56\n    ---\n    apiVersion: v1alpha1\n    kind: KubeSpanConfig\n"
+            )
+        };
+        let output = format!(
+            "{}---\n{}",
+            resource("persistent", "10.99.0.0/16"),
+            resource("v1alpha1", "10.44.0.0/16")
+        );
+        let info = parse_machine_config_yaml(&output).unwrap();
+        assert_eq!(info.pod_subnets, ["10.44.0.0/16", "fd00:44::/56"]);
+        // A config without the field says nothing
+        assert!(pod_subnets_of("version: v1alpha1\ncluster:\n    clusterName: x\n").is_empty());
+        assert!(pod_subnets_of("not yaml: [").is_empty());
+        // Talos 1.14 keeps them in their own document
+        assert_eq!(
+            pod_subnets_of(
+                "version: v1alpha1\ncluster:\n    clusterName: x\n---\napiVersion: v1alpha1\nkind: KubeNetworkConfig\ndnsDomain: cluster.local\npodSubnets:\n    - 10.44.0.0/16\n"
+            ),
+            ["10.44.0.0/16"]
+        );
+    }
+
+    /// The pod networks of a real node: `TALOS9S_LIVE_CONTEXT=bc
+    /// TALOS9S_LIVE_NODES=<ip> cargo test live_pod_subnets -- --ignored --nocapture`.
+    /// Prints only the subnets, never the config.
+    #[tokio::test]
+    #[ignore]
+    async fn live_pod_subnets() {
+        let context = std::env::var("TALOS9S_LIVE_CONTEXT").expect("set TALOS9S_LIVE_CONTEXT");
+        let node = std::env::var("TALOS9S_LIVE_NODES").expect("set TALOS9S_LIVE_NODES=<ip>");
+        let info = get_machine_config_for_node(Some(&context), &node, None)
+            .await
+            .unwrap();
+        println!("pod subnets of {node}: {:?}", info.pod_subnets);
+        assert!(!info.pod_subnets.is_empty());
     }
 }
