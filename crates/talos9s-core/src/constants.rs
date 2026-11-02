@@ -114,6 +114,19 @@ pub mod refresh_intervals {
     pub const VERY_SLOW: u64 = 30;
 }
 
+/// Timing of the workspace: following the tree selection, clicks
+pub mod workspace {
+    /// How long the selection must rest before the view follows it (ms), so
+    /// moving through ten nodes loads one
+    pub const FOLLOW_DELAY_MS: u64 = 300;
+    /// Logs restart their streams on every retarget, so they wait longer
+    pub const FOLLOW_DELAY_LOGS_MS: u64 = 500;
+    /// (view, target) pairs kept for coming back to them at once
+    pub const VIEW_CACHE_SIZE: usize = 4;
+    /// Two clicks on the same cell within this long (ms) are a double-click
+    pub const DOUBLE_CLICK_MS: u64 = 400;
+}
+
 // =============================================================================
 // Storage
 // =============================================================================
@@ -160,5 +173,11 @@ mod tests {
         const { assert!(refresh_intervals::FAST < refresh_intervals::NORMAL) };
         const { assert!(refresh_intervals::NORMAL < refresh_intervals::SLOW) };
         const { assert!(refresh_intervals::SLOW < refresh_intervals::VERY_SLOW) };
+    }
+
+    #[test]
+    fn logs_follow_no_sooner_than_other_views() {
+        const { assert!(workspace::FOLLOW_DELAY_MS <= workspace::FOLLOW_DELAY_LOGS_MS) };
+        const { assert!(workspace::VIEW_CACHE_SIZE > 0) };
     }
 }

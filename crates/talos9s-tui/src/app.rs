@@ -26,6 +26,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use std::time::{Duration, Instant};
+use talos9s_core::constants::workspace::{self, VIEW_CACHE_SIZE};
 use tokio::task::JoinHandle;
 use view::{View, ViewComponent, ViewSettings};
 
@@ -51,14 +52,10 @@ fn quit_question() -> Line<'static> {
 }
 
 /// Two clicks on the same cell within this long open the row, like Enter
-const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-
-/// How long the selection must rest before the view follows it, so moving
-/// through ten nodes loads one; logs restart streams, so they wait longer
-const FOLLOW_DELAY: Duration = Duration::from_millis(300);
-const FOLLOW_DELAY_LOGS: Duration = Duration::from_millis(500);
-/// Views kept for coming back to them
-const VIEW_CACHE_SIZE: usize = 4;
+const DOUBLE_CLICK: Duration = Duration::from_millis(workspace::DOUBLE_CLICK_MS);
+/// How long the selection must rest before the view follows it
+const FOLLOW_DELAY: Duration = Duration::from_millis(workspace::FOLLOW_DELAY_MS);
+const FOLLOW_DELAY_LOGS: Duration = Duration::from_millis(workspace::FOLLOW_DELAY_LOGS_MS);
 
 /// How long the wizard waits for `talosctl apply-config` / `bootstrap`
 const APPLY_TIMEOUT: Duration = Duration::from_secs(60);

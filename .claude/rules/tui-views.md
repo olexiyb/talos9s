@@ -44,6 +44,37 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
 - **Leaving a view:** every `Show…` handler calls `leave_view()` first (stops
   log streams, keeps settings that carry over, caches the component by
   (pane, target)) and ends with `show_component(item, …)`.
+- **Target:** the selected tree row: a node, the control plane or workers
+  group, or a cluster. Moving the selection keeps the view and shows it for
+  the new target; a menu entry keeps the target and changes the view.
+- **Retargeting:** the selection must rest `FOLLOW_DELAY` (logs
+  `FOLLOW_DELAY_LOGS`, streams cost more) so walking ten nodes loads one;
+  the last `VIEW_CACHE_SIZE` (view, target) pairs show at once while they
+  reload (constants in `talos9s_core::constants::workspace`). A retarget
+  aborts the running refresh (`cancel_refresh_job`) and stops old streams.
+- **Carry over** the open tab, filters, sort, log levels and toggles
+  (`ViewSettings`); reset selection and scroll.
+- **Pane widths:** Full (sized to content), Compact (longest node name,
+  14-22 columns), Hidden. `[` narrows, `]` widens, `Z` toggles Hidden.
+  Default is Full when the view keeps at least 100 columns.
+- **Pop-ups** (operations `o`, rolling operations `O`, confirmations) draw
+  over the whole screen.
+- **Persisted:** selection, view, pane width, folds and view settings in
+  `~/.talos9s/state.yaml` (`state.rs`); text filters are not.
+- Not doing: `Alt+<hotkey>` to switch views from inside one. `Esc`/`q`
+  first is enough, and views keep all their letters.
+
+What each view shows per target:
+
+| View | Node | Control plane / workers | Cluster |
+|---|---|---|---|
+| Dashboard | node details | nodes table and problems (`group.rs`) | cluster summary |
+| Logs | node services | merged across the group | merged across the cluster |
+| Network, Storage, Diagnostics | the node | group view | group view (all nodes) |
+| Processes | the node | the group's nodes | all nodes |
+| Containers, Machine config, Extensions | the node | "Select a node" hint | same hint |
+| Volumes, Workloads | on this node | on those nodes | whole cluster |
+| etcd, Lifecycle, Security | the target's cluster | same | same |
 
 ## Wiring a new view (all of these, or it silently does nothing)
 
@@ -92,3 +123,9 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
 - Pull decisions out of `async` handlers into pure functions to test them
   (`follow_step`, `cache_insert`, `nodes_to_query`).
 - Test drawing and clicks with `ratatui::backend::TestBackend`.
+- Narrow screens: the right pane is 70-120 columns on a 100-120 column
+  terminal. A new view goes in `components/layout_tests.rs`, which draws
+  every view at those widths and checks its `key_hints()` fit beside
+  `[Esc/q/←] tree` on a 100 column screen (85 columns). When a key line
+  grows, group keys (`[s/o/l]`, `[f/F]`) or move a pane's keys into that
+  pane's hints instead of letting it be cut.
