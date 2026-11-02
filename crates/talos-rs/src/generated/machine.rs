@@ -2,6 +2,7 @@
 /// rpc applyConfiguration
 /// ApplyConfiguration describes a request to assert a new configuration upon a
 /// node.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ApplyConfigurationRequest {
     #[prost(bytes = "vec", tag = "1")]
@@ -15,6 +16,7 @@ pub struct ApplyConfigurationRequest {
 }
 /// Nested message and enum types in `ApplyConfigurationRequest`.
 pub mod apply_configuration_request {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -62,6 +64,7 @@ pub mod apply_configuration_request {
     }
 }
 /// ApplyConfigurationResponse describes the response to a configuration request.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ApplyConfiguration {
     #[prost(message, optional, tag = "1")]
@@ -76,12 +79,14 @@ pub struct ApplyConfiguration {
     #[prost(string, tag = "4")]
     pub mode_details: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ApplyConfigurationResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<ApplyConfiguration>,
 }
 /// rpc reboot
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RebootRequest {
     #[prost(enumeration = "reboot_request::Mode", tag = "1")]
@@ -89,6 +94,7 @@ pub struct RebootRequest {
 }
 /// Nested message and enum types in `RebootRequest`.
 pub mod reboot_request {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -130,6 +136,7 @@ pub mod reboot_request {
     }
 }
 /// The reboot message containing the reboot status.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Reboot {
     #[prost(message, optional, tag = "1")]
@@ -137,12 +144,14 @@ pub struct Reboot {
     #[prost(string, tag = "2")]
     pub actor_id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RebootResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Reboot>,
 }
 /// rpc Bootstrap
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BootstrapRequest {
     /// Enable etcd recovery from the snapshot.
@@ -155,17 +164,20 @@ pub struct BootstrapRequest {
     pub recover_skip_hash_check: bool,
 }
 /// The bootstrap message containing the bootstrap status.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Bootstrap {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BootstrapResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Bootstrap>,
 }
 /// rpc events
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SequenceEvent {
     #[prost(string, tag = "1")]
@@ -177,6 +189,7 @@ pub struct SequenceEvent {
 }
 /// Nested message and enum types in `SequenceEvent`.
 pub mod sequence_event {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -217,6 +230,7 @@ pub mod sequence_event {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PhaseEvent {
     #[prost(string, tag = "1")]
@@ -226,6 +240,7 @@ pub struct PhaseEvent {
 }
 /// Nested message and enum types in `PhaseEvent`.
 pub mod phase_event {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -263,6 +278,7 @@ pub mod phase_event {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TaskEvent {
     #[prost(string, tag = "1")]
@@ -272,6 +288,7 @@ pub struct TaskEvent {
 }
 /// Nested message and enum types in `TaskEvent`.
 pub mod task_event {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -309,6 +326,7 @@ pub mod task_event {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceStateEvent {
     #[prost(string, tag = "1")]
@@ -322,6 +340,7 @@ pub struct ServiceStateEvent {
 }
 /// Nested message and enum types in `ServiceStateEvent`.
 pub mod service_state_event {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -380,24 +399,28 @@ pub mod service_state_event {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RestartEvent {
     #[prost(int64, tag = "1")]
     pub cmd: i64,
 }
 /// ConfigLoadErrorEvent is reported when the config loading has failed.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConfigLoadErrorEvent {
     #[prost(string, tag = "1")]
     pub error: ::prost::alloc::string::String,
 }
 /// ConfigValidationErrorEvent is reported when config validation has failed.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConfigValidationErrorEvent {
     #[prost(string, tag = "1")]
     pub error: ::prost::alloc::string::String,
 }
 /// AddressEvent reports node endpoints aggregated from k8s.Endpoints and network.Hostname.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddressEvent {
     #[prost(string, tag = "1")]
@@ -406,6 +429,7 @@ pub struct AddressEvent {
     pub addresses: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// MachineStatusEvent reports changes to the MachineStatus resource.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MachineStatusEvent {
     #[prost(enumeration = "machine_status_event::MachineStage", tag = "1")]
@@ -415,6 +439,7 @@ pub struct MachineStatusEvent {
 }
 /// Nested message and enum types in `MachineStatusEvent`.
 pub mod machine_status_event {
+    #[allow(clippy::all)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MachineStatus {
         #[prost(bool, tag = "1")]
@@ -424,6 +449,7 @@ pub mod machine_status_event {
     }
     /// Nested message and enum types in `MachineStatus`.
     pub mod machine_status {
+        #[allow(clippy::all)]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct UnmetCondition {
             #[prost(string, tag = "1")]
@@ -432,6 +458,7 @@ pub mod machine_status_event {
             pub reason: ::prost::alloc::string::String,
         }
     }
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -490,6 +517,7 @@ pub mod machine_status_event {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventsRequest {
     #[prost(int32, tag = "1")]
@@ -501,6 +529,7 @@ pub struct EventsRequest {
     #[prost(string, tag = "4")]
     pub with_actor_id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Event {
     #[prost(message, optional, tag = "1")]
@@ -513,6 +542,7 @@ pub struct Event {
     pub actor_id: ::prost::alloc::string::String,
 }
 /// rpc reset
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ResetPartitionSpec {
     #[prost(string, tag = "1")]
@@ -520,6 +550,7 @@ pub struct ResetPartitionSpec {
     #[prost(bool, tag = "2")]
     pub wipe: bool,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ResetRequest {
     /// Graceful indicates whether node should leave etcd before the upgrade, it also
@@ -542,6 +573,7 @@ pub struct ResetRequest {
 }
 /// Nested message and enum types in `ResetRequest`.
 pub mod reset_request {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -583,6 +615,7 @@ pub mod reset_request {
     }
 }
 /// The reset message containing the restart status.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Reset {
     #[prost(message, optional, tag = "1")]
@@ -590,6 +623,7 @@ pub struct Reset {
     #[prost(string, tag = "2")]
     pub actor_id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ResetResponse {
     #[prost(message, repeated, tag = "1")]
@@ -597,6 +631,7 @@ pub struct ResetResponse {
 }
 /// rpc shutdown
 /// The messages message containing the shutdown status.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Shutdown {
     #[prost(message, optional, tag = "1")]
@@ -604,18 +639,21 @@ pub struct Shutdown {
     #[prost(string, tag = "2")]
     pub actor_id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ShutdownRequest {
     /// Force indicates whether node should shutdown without first cordening and draining
     #[prost(bool, tag = "1")]
     pub force: bool,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ShutdownResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Shutdown>,
 }
 /// rpc upgrade
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpgradeRequest {
     #[prost(string, tag = "1")]
@@ -631,6 +669,7 @@ pub struct UpgradeRequest {
 }
 /// Nested message and enum types in `UpgradeRequest`.
 pub mod upgrade_request {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -668,6 +707,7 @@ pub mod upgrade_request {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Upgrade {
     #[prost(message, optional, tag = "1")]
@@ -677,12 +717,14 @@ pub struct Upgrade {
     #[prost(string, tag = "3")]
     pub actor_id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpgradeResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Upgrade>,
 }
 /// rpc servicelist
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceList {
     #[prost(message, optional, tag = "1")]
@@ -690,11 +732,13 @@ pub struct ServiceList {
     #[prost(message, repeated, tag = "2")]
     pub services: ::prost::alloc::vec::Vec<ServiceInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceListResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<ServiceList>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceInfo {
     #[prost(string, tag = "1")]
@@ -706,11 +750,13 @@ pub struct ServiceInfo {
     #[prost(message, optional, tag = "4")]
     pub health: ::core::option::Option<ServiceHealth>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceEvents {
     #[prost(message, repeated, tag = "1")]
     pub events: ::prost::alloc::vec::Vec<ServiceEvent>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceEvent {
     #[prost(string, tag = "1")]
@@ -720,6 +766,7 @@ pub struct ServiceEvent {
     #[prost(message, optional, tag = "3")]
     pub ts: ::core::option::Option<::prost_types::Timestamp>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceHealth {
     #[prost(bool, tag = "1")]
@@ -732,11 +779,13 @@ pub struct ServiceHealth {
     pub last_change: ::core::option::Option<::prost_types::Timestamp>,
 }
 /// rpc servicestart
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceStartRequest {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceStart {
     #[prost(message, optional, tag = "1")]
@@ -744,16 +793,19 @@ pub struct ServiceStart {
     #[prost(string, tag = "2")]
     pub resp: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceStartResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<ServiceStart>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceStopRequest {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceStop {
     #[prost(message, optional, tag = "1")]
@@ -761,16 +813,19 @@ pub struct ServiceStop {
     #[prost(string, tag = "2")]
     pub resp: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceStopResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<ServiceStop>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceRestartRequest {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceRestart {
     #[prost(message, optional, tag = "1")]
@@ -778,6 +833,7 @@ pub struct ServiceRestart {
     #[prost(string, tag = "2")]
     pub resp: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceRestartResponse {
     #[prost(message, repeated, tag = "1")]
@@ -786,6 +842,7 @@ pub struct ServiceRestartResponse {
 /// CopyRequest describes a request to copy data out of Talos node
 ///
 /// Copy produces .tar.gz archive which is streamed back to the caller
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CopyRequest {
     /// Root path to start copying data out, it might be either a file or directory
@@ -793,6 +850,7 @@ pub struct CopyRequest {
     pub root_path: ::prost::alloc::string::String,
 }
 /// ListRequest describes a request to list the contents of a directory.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListRequest {
     /// Root indicates the root directory for the list. If not indicated, '/' is
@@ -817,6 +875,7 @@ pub struct ListRequest {
 /// Nested message and enum types in `ListRequest`.
 pub mod list_request {
     /// File type.
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -861,6 +920,7 @@ pub mod list_request {
     }
 }
 /// DiskUsageRequest describes a request to list disk usage of directories and regular files
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DiskUsageRequest {
     /// RecursionDepth indicates how many levels of subdirectories should be
@@ -879,6 +939,7 @@ pub struct DiskUsageRequest {
     pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// FileInfo describes a file or directory's information
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileInfo {
     #[prost(message, optional, tag = "1")]
@@ -918,6 +979,7 @@ pub struct FileInfo {
     #[prost(message, repeated, tag = "12")]
     pub xattrs: ::prost::alloc::vec::Vec<Xattr>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Xattr {
     #[prost(string, tag = "1")]
@@ -926,6 +988,7 @@ pub struct Xattr {
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
 /// DiskUsageInfo describes a file or directory's information for du command
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DiskUsageInfo {
     #[prost(message, optional, tag = "1")]
@@ -945,6 +1008,7 @@ pub struct DiskUsageInfo {
     pub relative_name: ::prost::alloc::string::String,
 }
 /// The messages message containing the requested df stats.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Mounts {
     #[prost(message, optional, tag = "1")]
@@ -952,12 +1016,14 @@ pub struct Mounts {
     #[prost(message, repeated, tag = "2")]
     pub stats: ::prost::alloc::vec::Vec<MountStat>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MountsResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Mounts>,
 }
 /// The messages message containing the requested processes.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MountStat {
     #[prost(string, tag = "1")]
@@ -969,6 +1035,7 @@ pub struct MountStat {
     #[prost(string, tag = "4")]
     pub mounted_on: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Version {
     #[prost(message, optional, tag = "1")]
@@ -981,11 +1048,13 @@ pub struct Version {
     #[prost(message, optional, tag = "4")]
     pub features: ::core::option::Option<FeaturesInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VersionResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Version>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VersionInfo {
     #[prost(string, tag = "1")]
@@ -1001,6 +1070,7 @@ pub struct VersionInfo {
     #[prost(string, tag = "6")]
     pub arch: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PlatformInfo {
     #[prost(string, tag = "1")]
@@ -1009,6 +1079,7 @@ pub struct PlatformInfo {
     pub mode: ::prost::alloc::string::String,
 }
 /// FeaturesInfo describes individual Talos features that can be switched on or off.
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FeaturesInfo {
     /// RBAC is true if role-based access control is enabled.
@@ -1017,6 +1088,7 @@ pub struct FeaturesInfo {
 }
 /// rpc logs
 /// The request message containing the process name.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LogsRequest {
     #[prost(string, tag = "1")]
@@ -1031,12 +1103,14 @@ pub struct LogsRequest {
     #[prost(int32, tag = "5")]
     pub tail_lines: i32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadRequest {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
 }
 /// LogsContainer desribes all avalaible registered log containers.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogsContainer {
     #[prost(message, optional, tag = "1")]
@@ -1044,24 +1118,29 @@ pub struct LogsContainer {
     #[prost(string, repeated, tag = "2")]
     pub ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogsContainersResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<LogsContainer>,
 }
 /// rpc rollback
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RollbackRequest {}
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Rollback {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RollbackResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Rollback>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ContainersRequest {
     #[prost(string, tag = "1")]
@@ -1071,6 +1150,7 @@ pub struct ContainersRequest {
     pub driver: i32,
 }
 /// The messages message containing the requested containers.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ContainerInfo {
     #[prost(string, tag = "1")]
@@ -1095,6 +1175,7 @@ pub struct ContainerInfo {
     pub network_namespace: ::prost::alloc::string::String,
 }
 /// The messages message containing the requested containers.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Container {
     #[prost(message, optional, tag = "1")]
@@ -1102,12 +1183,14 @@ pub struct Container {
     #[prost(message, repeated, tag = "2")]
     pub containers: ::prost::alloc::vec::Vec<ContainerInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ContainersResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Container>,
 }
 /// dmesg
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DmesgRequest {
     #[prost(bool, tag = "1")]
@@ -1116,11 +1199,13 @@ pub struct DmesgRequest {
     pub tail: bool,
 }
 /// rpc processes
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProcessesResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Process>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Process {
     #[prost(message, optional, tag = "1")]
@@ -1128,6 +1213,7 @@ pub struct Process {
     #[prost(message, repeated, tag = "2")]
     pub processes: ::prost::alloc::vec::Vec<ProcessInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProcessInfo {
     #[prost(int32, tag = "1")]
@@ -1155,6 +1241,7 @@ pub struct ProcessInfo {
 }
 /// rpc restart
 /// The request message containing the process to restart.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RestartRequest {
     #[prost(string, tag = "1")]
@@ -1165,18 +1252,21 @@ pub struct RestartRequest {
     #[prost(enumeration = "super::common::ContainerDriver", tag = "3")]
     pub driver: i32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Restart {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
 /// The messages message containing the restart status.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RestartResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Restart>,
 }
 /// The request message containing the containerd namespace.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StatsRequest {
     #[prost(string, tag = "1")]
@@ -1186,6 +1276,7 @@ pub struct StatsRequest {
     pub driver: i32,
 }
 /// The messages message containing the requested stats.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Stats {
     #[prost(message, optional, tag = "1")]
@@ -1193,12 +1284,14 @@ pub struct Stats {
     #[prost(message, repeated, tag = "2")]
     pub stats: ::prost::alloc::vec::Vec<Stat>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatsResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Stats>,
 }
 /// The messages message containing the requested stat.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Stat {
     #[prost(string, tag = "1")]
@@ -1214,6 +1307,7 @@ pub struct Stat {
     #[prost(string, tag = "7")]
     pub name: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Memory {
     #[prost(message, optional, tag = "1")]
@@ -1221,11 +1315,13 @@ pub struct Memory {
     #[prost(message, optional, tag = "2")]
     pub meminfo: ::core::option::Option<MemInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MemoryResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Memory>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MemInfo {
     #[prost(uint64, tag = "1")]
@@ -1325,11 +1421,13 @@ pub struct MemInfo {
     #[prost(uint64, tag = "48")]
     pub directmap1g: u64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HostnameResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Hostname>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Hostname {
     #[prost(message, optional, tag = "1")]
@@ -1337,11 +1435,13 @@ pub struct Hostname {
     #[prost(string, tag = "2")]
     pub hostname: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LoadAvgResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<LoadAvg>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LoadAvg {
     #[prost(message, optional, tag = "1")]
@@ -1353,11 +1453,13 @@ pub struct LoadAvg {
     #[prost(double, tag = "4")]
     pub load15: f64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemStatResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<SystemStat>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemStat {
     #[prost(message, optional, tag = "1")]
@@ -1385,6 +1487,7 @@ pub struct SystemStat {
     #[prost(message, optional, tag = "12")]
     pub soft_irq: ::core::option::Option<SoftIrqStat>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CpuStat {
     #[prost(double, tag = "1")]
@@ -1408,6 +1511,7 @@ pub struct CpuStat {
     #[prost(double, tag = "10")]
     pub guest_nice: f64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SoftIrqStat {
     #[prost(uint64, tag = "1")]
@@ -1431,11 +1535,13 @@ pub struct SoftIrqStat {
     #[prost(uint64, tag = "10")]
     pub rcu: u64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CpuFreqStatsResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<CpUsFreqStats>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CpUsFreqStats {
     #[prost(message, optional, tag = "1")]
@@ -1443,6 +1549,7 @@ pub struct CpUsFreqStats {
     #[prost(message, repeated, tag = "2")]
     pub cpu_freq_stats: ::prost::alloc::vec::Vec<CpuFreqStats>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CpuFreqStats {
     #[prost(uint64, tag = "1")]
@@ -1454,11 +1561,13 @@ pub struct CpuFreqStats {
     #[prost(string, tag = "4")]
     pub governor: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CpuInfoResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<CpUsInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CpUsInfo {
     #[prost(message, optional, tag = "1")]
@@ -1466,6 +1575,7 @@ pub struct CpUsInfo {
     #[prost(message, repeated, tag = "2")]
     pub cpu_info: ::prost::alloc::vec::Vec<CpuInfo>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CpuInfo {
     #[prost(uint32, tag = "1")]
@@ -1521,11 +1631,13 @@ pub struct CpuInfo {
     #[prost(string, tag = "26")]
     pub power_management: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NetworkDeviceStatsResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<NetworkDeviceStats>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NetworkDeviceStats {
     #[prost(message, optional, tag = "1")]
@@ -1535,6 +1647,7 @@ pub struct NetworkDeviceStats {
     #[prost(message, repeated, tag = "3")]
     pub devices: ::prost::alloc::vec::Vec<NetDev>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NetDev {
     #[prost(string, tag = "1")]
@@ -1572,11 +1685,13 @@ pub struct NetDev {
     #[prost(uint64, tag = "17")]
     pub tx_compressed: u64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DiskStatsResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<DiskStats>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DiskStats {
     #[prost(message, optional, tag = "1")]
@@ -1586,6 +1701,7 @@ pub struct DiskStats {
     #[prost(message, repeated, tag = "3")]
     pub devices: ::prost::alloc::vec::Vec<DiskStat>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DiskStat {
     #[prost(string, tag = "1")]
@@ -1621,50 +1737,61 @@ pub struct DiskStat {
     #[prost(uint64, tag = "16")]
     pub discard_time_ms: u64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdLeaveClusterRequest {}
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdLeaveCluster {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdLeaveClusterResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdLeaveCluster>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdRemoveMemberRequest {
     #[prost(string, tag = "1")]
     pub member: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdRemoveMember {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdRemoveMemberResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdRemoveMember>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdRemoveMemberByIdRequest {
     #[prost(uint64, tag = "1")]
     pub member_id: u64,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdRemoveMemberById {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdRemoveMemberByIdResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdRemoveMemberById>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdForfeitLeadershipRequest {}
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdForfeitLeadership {
     #[prost(message, optional, tag = "1")]
@@ -1672,17 +1799,20 @@ pub struct EtcdForfeitLeadership {
     #[prost(string, tag = "2")]
     pub member: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdForfeitLeadershipResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdForfeitLeadership>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdMemberListRequest {
     #[prost(bool, tag = "1")]
     pub query_local: bool,
 }
 /// EtcdMember describes a single etcd member.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdMember {
     /// member ID.
@@ -1702,6 +1832,7 @@ pub struct EtcdMember {
     pub is_learner: bool,
 }
 /// EtcdMembers contains the list of members registered on the host.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdMembers {
     #[prost(message, optional, tag = "1")]
@@ -1713,28 +1844,34 @@ pub struct EtcdMembers {
     #[prost(message, repeated, tag = "3")]
     pub members: ::prost::alloc::vec::Vec<EtcdMember>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdMemberListResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdMembers>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdSnapshotRequest {}
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdRecover {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdRecoverResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdRecover>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdAlarmListResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdAlarm>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdAlarm {
     #[prost(message, optional, tag = "1")]
@@ -1742,6 +1879,7 @@ pub struct EtcdAlarm {
     #[prost(message, repeated, tag = "2")]
     pub member_alarms: ::prost::alloc::vec::Vec<EtcdMemberAlarm>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdMemberAlarm {
     #[prost(uint64, tag = "1")]
@@ -1751,6 +1889,7 @@ pub struct EtcdMemberAlarm {
 }
 /// Nested message and enum types in `EtcdMemberAlarm`.
 pub mod etcd_member_alarm {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -1791,11 +1930,13 @@ pub mod etcd_member_alarm {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdAlarmDisarmResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdAlarmDisarm>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdAlarmDisarm {
     #[prost(message, optional, tag = "1")]
@@ -1803,21 +1944,25 @@ pub struct EtcdAlarmDisarm {
     #[prost(message, repeated, tag = "2")]
     pub member_alarms: ::prost::alloc::vec::Vec<EtcdMemberAlarm>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDefragmentResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdDefragment>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDefragment {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdStatusResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdStatus>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdStatus {
     #[prost(message, optional, tag = "1")]
@@ -1825,6 +1970,7 @@ pub struct EtcdStatus {
     #[prost(message, optional, tag = "2")]
     pub member_status: ::core::option::Option<EtcdMemberStatus>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdMemberStatus {
     #[prost(string, tag = "11")]
@@ -1850,16 +1996,19 @@ pub struct EtcdMemberStatus {
     #[prost(bool, tag = "9")]
     pub is_learner: bool,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdDowngradeValidateRequest {
     #[prost(string, tag = "1")]
     pub version: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDowngradeValidateResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdDowngradeValidate>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDowngradeValidate {
     #[prost(message, optional, tag = "1")]
@@ -1867,16 +2016,19 @@ pub struct EtcdDowngradeValidate {
     #[prost(message, optional, tag = "2")]
     pub cluster_downgrade: ::core::option::Option<EtcdClusterDowngrade>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdDowngradeEnableRequest {
     #[prost(string, tag = "1")]
     pub version: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDowngradeEnableResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdDowngradeEnable>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDowngradeEnable {
     #[prost(message, optional, tag = "1")]
@@ -1884,11 +2036,13 @@ pub struct EtcdDowngradeEnable {
     #[prost(message, optional, tag = "2")]
     pub cluster_downgrade: ::core::option::Option<EtcdClusterDowngrade>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDowngradeCancelResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<EtcdDowngradeCancel>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EtcdDowngradeCancel {
     #[prost(message, optional, tag = "1")]
@@ -1896,11 +2050,13 @@ pub struct EtcdDowngradeCancel {
     #[prost(message, optional, tag = "2")]
     pub cluster_downgrade: ::core::option::Option<EtcdClusterDowngrade>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EtcdClusterDowngrade {
     #[prost(string, tag = "1")]
     pub cluster_version: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RouteConfig {
     #[prost(string, tag = "1")]
@@ -1910,11 +2066,13 @@ pub struct RouteConfig {
     #[prost(uint32, tag = "3")]
     pub metric: u32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DhcpOptionsConfig {
     #[prost(uint32, tag = "1")]
     pub route_metric: u32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NetworkDeviceConfig {
     #[prost(string, tag = "1")]
@@ -1932,6 +2090,7 @@ pub struct NetworkDeviceConfig {
     #[prost(message, repeated, tag = "7")]
     pub routes: ::prost::alloc::vec::Vec<RouteConfig>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NetworkConfig {
     #[prost(string, tag = "1")]
@@ -1939,6 +2098,7 @@ pub struct NetworkConfig {
     #[prost(message, repeated, tag = "2")]
     pub interfaces: ::prost::alloc::vec::Vec<NetworkDeviceConfig>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InstallConfig {
     #[prost(string, tag = "1")]
@@ -1946,6 +2106,7 @@ pub struct InstallConfig {
     #[prost(string, tag = "2")]
     pub install_image: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MachineConfig {
     #[prost(enumeration = "machine_config::MachineType", tag = "1")]
@@ -1959,6 +2120,7 @@ pub struct MachineConfig {
 }
 /// Nested message and enum types in `MachineConfig`.
 pub mod machine_config {
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -2002,11 +2164,13 @@ pub mod machine_config {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ControlPlaneConfig {
     #[prost(string, tag = "1")]
     pub endpoint: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CniConfig {
     #[prost(string, tag = "1")]
@@ -2014,6 +2178,7 @@ pub struct CniConfig {
     #[prost(string, repeated, tag = "2")]
     pub urls: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClusterNetworkConfig {
     #[prost(string, tag = "1")]
@@ -2021,6 +2186,7 @@ pub struct ClusterNetworkConfig {
     #[prost(message, optional, tag = "2")]
     pub cni_config: ::core::option::Option<CniConfig>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClusterConfig {
     #[prost(string, tag = "1")]
@@ -2034,6 +2200,7 @@ pub struct ClusterConfig {
 }
 /// GenerateConfigurationRequest describes a request to generate a new configuration
 /// on a node.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GenerateConfigurationRequest {
     #[prost(string, tag = "1")]
@@ -2046,6 +2213,7 @@ pub struct GenerateConfigurationRequest {
     pub override_time: ::core::option::Option<::prost_types::Timestamp>,
 }
 /// GenerateConfiguration describes the response to a generate configuration request.
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GenerateConfiguration {
     #[prost(message, optional, tag = "1")]
@@ -2055,11 +2223,13 @@ pub struct GenerateConfiguration {
     #[prost(bytes = "vec", tag = "3")]
     pub talosconfig: ::prost::alloc::vec::Vec<u8>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GenerateConfigurationResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<GenerateConfiguration>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GenerateClientConfigurationRequest {
     /// Roles in the generated client certificate.
@@ -2069,6 +2239,7 @@ pub struct GenerateClientConfigurationRequest {
     #[prost(message, optional, tag = "2")]
     pub crt_ttl: ::core::option::Option<::prost_types::Duration>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GenerateClientConfiguration {
     #[prost(message, optional, tag = "1")]
@@ -2086,11 +2257,13 @@ pub struct GenerateClientConfiguration {
     #[prost(bytes = "vec", tag = "5")]
     pub talosconfig: ::prost::alloc::vec::Vec<u8>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GenerateClientConfigurationResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<GenerateClientConfiguration>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PacketCaptureRequest {
     /// Interface name to perform packet capture on.
@@ -2106,6 +2279,7 @@ pub struct PacketCaptureRequest {
     #[prost(message, repeated, tag = "4")]
     pub bpf_filter: ::prost::alloc::vec::Vec<BpfInstruction>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BpfInstruction {
     #[prost(uint32, tag = "1")]
@@ -2117,6 +2291,7 @@ pub struct BpfInstruction {
     #[prost(uint32, tag = "4")]
     pub k: u32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NetstatRequest {
     #[prost(enumeration = "netstat_request::Filter", tag = "1")]
@@ -2130,11 +2305,13 @@ pub struct NetstatRequest {
 }
 /// Nested message and enum types in `NetstatRequest`.
 pub mod netstat_request {
+    #[allow(clippy::all)]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Feature {
         #[prost(bool, tag = "1")]
         pub pid: bool,
     }
+    #[allow(clippy::all)]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct L4proto {
         #[prost(bool, tag = "1")]
@@ -2154,6 +2331,7 @@ pub mod netstat_request {
         #[prost(bool, tag = "8")]
         pub raw6: bool,
     }
+    #[allow(clippy::all)]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NetNs {
         #[prost(bool, tag = "1")]
@@ -2163,6 +2341,7 @@ pub mod netstat_request {
         #[prost(bool, tag = "3")]
         pub allnetns: bool,
     }
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -2203,6 +2382,7 @@ pub mod netstat_request {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConnectRecord {
     #[prost(string, tag = "1")]
@@ -2244,6 +2424,7 @@ pub struct ConnectRecord {
 }
 /// Nested message and enum types in `ConnectRecord`.
 pub mod connect_record {
+    #[allow(clippy::all)]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Process {
         #[prost(uint32, tag = "1")]
@@ -2251,6 +2432,7 @@ pub mod connect_record {
         #[prost(string, tag = "2")]
         pub name: ::prost::alloc::string::String,
     }
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -2317,6 +2499,7 @@ pub mod connect_record {
             }
         }
     }
+    #[allow(clippy::all)]
     #[derive(
         Clone,
         Copy,
@@ -2363,6 +2546,7 @@ pub mod connect_record {
         }
     }
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Netstat {
     #[prost(message, optional, tag = "1")]
@@ -2370,11 +2554,13 @@ pub struct Netstat {
     #[prost(message, repeated, tag = "2")]
     pub connectrecord: ::prost::alloc::vec::Vec<ConnectRecord>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NetstatResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<Netstat>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MetaWriteRequest {
     #[prost(uint32, tag = "1")]
@@ -2382,37 +2568,44 @@ pub struct MetaWriteRequest {
     #[prost(bytes = "vec", tag = "2")]
     pub value: ::prost::alloc::vec::Vec<u8>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetaWrite {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetaWriteResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<MetaWrite>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MetaDeleteRequest {
     #[prost(uint32, tag = "1")]
     pub key: u32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetaDelete {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetaDeleteResponse {
     #[prost(message, repeated, tag = "1")]
     pub messages: ::prost::alloc::vec::Vec<MetaDelete>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ImageListRequest {
     /// Containerd namespace to use.
     #[prost(enumeration = "super::common::ContainerdNamespace", tag = "1")]
     pub namespace: i32,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImageListResponse {
     #[prost(message, optional, tag = "1")]
@@ -2426,6 +2619,7 @@ pub struct ImageListResponse {
     #[prost(message, optional, tag = "5")]
     pub created_at: ::core::option::Option<::prost_types::Timestamp>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ImagePullRequest {
     /// Containerd namespace to use.
@@ -2435,11 +2629,13 @@ pub struct ImagePullRequest {
     #[prost(string, tag = "2")]
     pub reference: ::prost::alloc::string::String,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImagePull {
     #[prost(message, optional, tag = "1")]
     pub metadata: ::core::option::Option<super::common::Metadata>,
 }
+#[allow(clippy::all)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImagePullResponse {
     #[prost(message, repeated, tag = "1")]
