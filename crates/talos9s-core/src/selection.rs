@@ -197,6 +197,46 @@ impl<'a, T> IntoIterator for &'a SelectableList<T> {
     }
 }
 
+/// Vim-style visual selection over a list: an anchor row set with `v`, and
+/// the cursor. Rows between the two, inclusive, are selected.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VisualSelection {
+    anchor: Option<usize>,
+}
+
+impl VisualSelection {
+    pub fn active(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    /// Start at the cursor, or stop when already selecting
+    pub fn toggle(&mut self, cursor: usize) {
+        self.anchor = match self.anchor {
+            Some(_) => None,
+            None => Some(cursor),
+        };
+    }
+
+    pub fn clear(&mut self) {
+        self.anchor = None;
+    }
+
+    /// The selected rows, `None` when not selecting
+    pub fn range(&self, cursor: usize) -> Option<std::ops::RangeInclusive<usize>> {
+        self.anchor
+            .map(|anchor| anchor.min(cursor)..=anchor.max(cursor))
+    }
+
+    pub fn contains(&self, row: usize, cursor: usize) -> bool {
+        self.range(cursor).is_some_and(|r| r.contains(&row))
+    }
+
+    /// The rows to copy: the selection, or the cursor row alone
+    pub fn rows(&self, cursor: usize) -> std::ops::RangeInclusive<usize> {
+        self.range(cursor).unwrap_or(cursor..=cursor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +301,25 @@ mod tests {
         // Grow list - selection should stay
         list.update_items(vec!["a", "b", "c", "d", "e"]);
         assert_eq!(list.selected_index(), 1); // Preserved
+    }
+
+    #[test]
+    fn visual_selection_spans_anchor_and_cursor() {
+        let mut v = VisualSelection::default();
+        assert!(!v.active());
+        assert_eq!(v.range(3), None);
+        assert_eq!(v.rows(3), 3..=3);
+        assert!(!v.contains(3, 3));
+        v.toggle(5);
+        assert!(v.active());
+        // The cursor moved up past the anchor
+        assert_eq!(v.range(2), Some(2..=5));
+        assert!(v.contains(2, 2) && v.contains(5, 2) && !v.contains(6, 2));
+        assert_eq!(v.rows(8), 5..=8);
+        v.toggle(8);
+        assert!(!v.active());
+        v.toggle(1);
+        v.clear();
+        assert_eq!(v.range(1), None);
     }
 }

@@ -32,3 +32,13 @@ pub fn copy_to_clipboard(text: String) -> Result<(), String> {
 
     Ok(())
 }
+
+/// Copy `lines`, one per line; `(copied, line count)`, nothing copied when
+/// there are no lines
+pub fn copy_lines(lines: Vec<String>) -> (bool, usize) {
+    if lines.is_empty() {
+        return (false, 0);
+    }
+    let count = lines.len();
+    (copy_to_clipboard(lines.join("\n")).is_ok(), count)
+}

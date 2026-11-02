@@ -152,31 +152,7 @@ impl NetworkStatsComponent {
         self.selected_interface = None;
         self.filtered_connections.clear();
         self.show_all_connections = false;
-        self.conn_selection_start = None;
-    }
-
-    /// Check if visual selection mode is active for connections
-    fn conn_in_visual_mode(&self) -> bool {
-        self.conn_selection_start.is_some()
-    }
-
-    /// Get the selection range (start, end) inclusive
-    fn conn_selection_range(&self) -> Option<(usize, usize)> {
-        self.conn_selection_start.map(|anchor| {
-            (
-                anchor.min(self.conn_selected),
-                anchor.max(self.conn_selected),
-            )
-        })
-    }
-
-    /// Check if a connection index is within the selection
-    fn is_conn_selected(&self, idx: usize) -> bool {
-        if let Some((start, end)) = self.conn_selection_range() {
-            idx >= start && idx <= end
-        } else {
-            false
-        }
+        self.conn_visual.clear();
     }
 
     /// Format a connection as a string for copying
@@ -222,34 +198,13 @@ impl NetworkStatsComponent {
         )
     }
 
-    /// Yank (copy) selected connections or current connection to clipboard
+    /// Yank (copy) the selected connections, or the current one
     fn yank_conn_selection(&self) -> (bool, usize) {
         let conns = self.get_filtered_connections();
-
-        let lines: Vec<String> = if let Some((start, end)) = self.conn_selection_range() {
-            // Yank all selected connections
-            (start..=end)
-                .filter_map(|idx| conns.get(idx).map(Self::format_connection))
-                .collect()
-        } else {
-            // Yank current connection only
-            conns
-                .get(self.conn_selected)
-                .map(|c| vec![Self::format_connection(c)])
-                .unwrap_or_default()
-        };
-
-        if lines.is_empty() {
-            return (false, 0);
-        }
-
-        let count = lines.len();
-        let content = lines.join("\n");
-
-        // Copy to clipboard
-        let success = crate::clipboard::copy_to_clipboard(content).is_ok();
-
-        (success, count)
+        let lines = (self.conn_visual.rows(self.conn_selected))
+            .filter_map(|idx| conns.get(idx).map(Self::format_connection))
+            .collect();
+        crate::clipboard::copy_lines(lines)
     }
 
     /// Page up in connection list
@@ -331,8 +286,8 @@ impl NetworkStatsComponent {
         ];
 
         // Show visual mode indicator
-        if let Some((start, end)) = self.conn_selection_range() {
-            let count = end - start + 1;
+        if let Some(range) = self.conn_visual.range(self.conn_selected) {
+            let count = range.count();
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 format!("-- VISUAL ({} lines) --", count),
@@ -418,7 +373,7 @@ impl NetworkStatsComponent {
             .bottom_margin(1);
 
         let conns = self.get_filtered_connections();
-        let in_visual = self.conn_in_visual_mode();
+        let in_visual = self.conn_visual.active();
 
         // Extract data needed for the closure
         let time_wait_count = self.data().map(|d| d.conn_counts.time_wait).unwrap_or(0);
@@ -505,7 +460,7 @@ impl NetworkStatsComponent {
                     };
 
                 // Check if this row is selected in visual mode
-                let is_selected = in_visual && self.is_conn_selected(idx);
+                let is_selected = in_visual && self.conn_visual.contains(idx, self.conn_selected);
 
                 // Row style - highlight selection with magenta background
                 let row_style = if is_selected {
@@ -564,7 +519,7 @@ impl NetworkStatsComponent {
             ("BPF:OFF", Color::Yellow)
         };
 
-        let spans = if self.conn_in_visual_mode() {
+        let spans = if self.conn_visual.active() {
             // Visual mode footer
             vec![
                 Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
@@ -786,8 +741,8 @@ impl NetworkStatsComponent {
                 Ok(None)
             }
             KeyCode::Esc => {
-                if self.conn_in_visual_mode() {
-                    self.conn_selection_start = None;
+                if self.conn_visual.active() {
+                    self.conn_visual.clear();
                 } else {
                     self.exit_connections_view();
                 }
@@ -837,14 +792,14 @@ impl NetworkStatsComponent {
                 self.conn_sort_by = ConnSortBy::State;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
-                self.conn_selection_start = None;
+                self.conn_visual.clear();
                 Ok(None)
             }
             KeyCode::Char('2') => {
                 self.conn_sort_by = ConnSortBy::Port;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
-                self.conn_selection_start = None;
+                self.conn_visual.clear();
                 Ok(None)
             }
 
@@ -853,7 +808,7 @@ impl NetworkStatsComponent {
                 self.listening_only = !self.listening_only;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
-                self.conn_selection_start = None;
+                self.conn_visual.clear();
                 Ok(None)
             }
 
@@ -862,17 +817,13 @@ impl NetworkStatsComponent {
                 self.show_all_connections = !self.show_all_connections;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
-                self.conn_selection_start = None;
+                self.conn_visual.clear();
                 Ok(None)
             }
 
             // Visual line selection mode
             KeyCode::Char('V') => {
-                if self.conn_in_visual_mode() {
-                    self.conn_selection_start = None;
-                } else {
-                    self.conn_selection_start = Some(self.conn_selected);
-                }
+                self.conn_visual.toggle(self.conn_selected);
                 Ok(None)
             }
 
@@ -883,7 +834,7 @@ impl NetworkStatsComponent {
                     tracing::info!("Copied {} connection(s) to clipboard", count);
                 }
                 // Clear visual selection after yank
-                self.conn_selection_start = None;
+                self.conn_visual.clear();
                 Ok(None)
             }
 

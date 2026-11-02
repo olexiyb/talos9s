@@ -358,7 +358,7 @@ pub struct NetworkStatsComponent {
     show_all_connections: bool,
 
     /// Visual selection anchor (for V mode) - stores connection index
-    conn_selection_start: Option<usize>,
+    conn_visual: talos9s_core::VisualSelection,
     /// Viewport height for connection table (for page navigation)
     conn_viewport_height: u16,
 
@@ -449,7 +449,7 @@ impl NetworkStatsComponent {
             conn_sort_by: ConnSortBy::State,
             listening_only: false,
             show_all_connections: false,
-            conn_selection_start: None,
+            conn_visual: Default::default(),
             conn_viewport_height: 20, // Will be updated on draw
             pending_action: None,
             status_message: None,
@@ -720,13 +720,13 @@ impl NetworkStatsComponent {
                     self.conn_sort_by = sort;
                     self.conn_selected = 0;
                     self.conn_table_state.select(Some(0));
-                    self.conn_selection_start = None;
+                    self.conn_visual.clear();
                     return;
                 }
                 if let Some(i) = self.hits.connection_rows.row_at(column, row) {
                     self.conn_selected = i;
                     self.conn_table_state.select(Some(i));
-                    self.conn_selection_start = None;
+                    self.conn_visual.clear();
                 }
             }
             ViewMode::KubeSpan => {

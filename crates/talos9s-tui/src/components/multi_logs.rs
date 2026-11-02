@@ -296,7 +296,7 @@ pub struct MultiLogsComponent {
     /// Whether to wrap long lines
     wrap: bool,
     /// Visual selection anchor (for V mode) - stores visible_index
-    selection_start: Option<usize>,
+    visual: talos9s_core::VisualSelection,
     /// Current cursor position in visible_indices (always tracked, moves with navigation)
     cursor: usize,
 }
@@ -418,7 +418,7 @@ impl MultiLogsComponent {
             started: HashSet::new(),
             pulse_frame: 0,
             wrap: false,
-            selection_start: None,
+            visual: Default::default(),
             cursor: 0,
         }
     }
@@ -914,37 +914,9 @@ impl MultiLogsComponent {
         self.following = true;
     }
 
-    /// Get the entry at the cursor position
-    fn current_entry(&self) -> Option<&MultiLogEntry> {
-        let data = self.data()?;
-        data.visible_indices
-            .get(self.cursor)
-            .and_then(|&i| data.entries.get(i))
-    }
-
-    /// Check if visual selection mode is active
-    fn in_visual_mode(&self) -> bool {
-        self.selection_start.is_some()
-    }
-
-    /// Get the selection range (start, end) in visible indices, inclusive
-    fn selection_range(&self) -> Option<(usize, usize)> {
-        self.selection_start
-            .map(|anchor| (anchor.min(self.cursor), anchor.max(self.cursor)))
-    }
-
     /// Check if a visible index is the cursor position
     fn is_cursor(&self, visible_idx: usize) -> bool {
         visible_idx == self.cursor
-    }
-
-    /// Check if a visible index is within the selection
-    fn is_selected(&self, visible_idx: usize) -> bool {
-        if let Some((start, end)) = self.selection_range() {
-            visible_idx >= start && visible_idx <= end
-        } else {
-            false
-        }
     }
 
     /// Format a log entry as a string
@@ -968,40 +940,20 @@ impl MultiLogsComponent {
         )
     }
 
-    /// Yank (copy) selected lines or current line to system clipboard
+    /// Yank (copy) the selected lines, or the current one
     fn yank_selection(&self) -> (bool, usize) {
         let Some(data) = self.data() else {
             return (false, 0);
         };
-
-        let lines: Vec<String> = if let Some((start, end)) = self.selection_range() {
-            // Yank all selected lines
-            (start..=end)
-                .filter_map(|vi| {
-                    data.visible_indices
-                        .get(vi)
-                        .and_then(|&i| data.entries.get(i))
-                        .map(|e| self.format_entry(e))
-                })
-                .collect()
-        } else {
-            // Yank current line only
-            self.current_entry()
-                .map(|e| vec![self.format_entry(e)])
-                .unwrap_or_default()
-        };
-
-        if lines.is_empty() {
-            return (false, 0);
-        }
-
-        let count = lines.len();
-        let content = lines.join("\n");
-
-        // Copy to clipboard using helper that handles Linux quirks
-        let success = crate::clipboard::copy_to_clipboard(content).is_ok();
-
-        (success, count)
+        let lines = (self.visual.rows(self.cursor))
+            .filter_map(|vi| {
+                data.visible_indices
+                    .get(vi)
+                    .and_then(|&i| data.entries.get(i))
+                    .map(|e| self.format_entry(e))
+            })
+            .collect();
+        crate::clipboard::copy_lines(lines)
     }
 
     /// Update search matches
@@ -1376,7 +1328,7 @@ impl MultiLogsComponent {
             let entry = &data.entries[entry_idx];
             let is_current_match = self.is_current_match(visible_idx);
             let is_match = self.entry_matches(visible_idx);
-            let is_selected = self.is_selected(visible_idx);
+            let is_selected = self.visual.contains(visible_idx, self.cursor);
 
             let mut spans = Vec::new();
             let is_cursor = self.is_cursor(visible_idx);
@@ -1659,7 +1611,7 @@ impl MultiLogsComponent {
                 Span::raw("[Esc/q]").fg(Color::Yellow),
                 Span::raw(" close").dim(),
             ]
-        } else if self.in_visual_mode() {
+        } else if self.visual.active() {
             // Visual mode footer
             vec![
                 Span::raw(" [j/k]").fg(Color::Yellow),
@@ -1796,8 +1748,8 @@ impl Component for MultiLogsComponent {
             // q is Esc here too (Esc never arrives in some terminals): close
             // what is open first, else back to the tree
             KeyCode::Esc | KeyCode::Char('q') => {
-                if self.in_visual_mode() {
-                    self.selection_start = None;
+                if self.visual.active() {
+                    self.visual.clear();
                 } else if self.search_mode == SearchMode::Active {
                     self.clear_search();
                 } else if self.floating_pane != FloatingPane::None {
@@ -2048,13 +2000,7 @@ impl Component for MultiLogsComponent {
 
             // Visual line selection mode
             KeyCode::Char('V') => {
-                if self.in_visual_mode() {
-                    // Toggle off
-                    self.selection_start = None;
-                } else {
-                    // Start selection at current cursor position
-                    self.selection_start = Some(self.cursor);
-                }
+                self.visual.toggle(self.cursor);
                 Ok(None)
             }
 
@@ -2065,7 +2011,7 @@ impl Component for MultiLogsComponent {
                     tracing::info!("Copied {} log entries to clipboard", count);
                 }
                 // Clear visual selection after yank
-                self.selection_start = None;
+                self.visual.clear();
                 Ok(None)
             }
 
@@ -2174,8 +2120,8 @@ impl Component for MultiLogsComponent {
         }
 
         // Show visual selection indicator
-        if let Some((start, end)) = self.selection_range() {
-            let count = end - start + 1;
+        if let Some(range) = self.visual.range(self.cursor) {
+            let count = range.count();
             header_spans.push(Span::raw("  "));
             header_spans.push(Span::styled(
                 format!("-- VISUAL ({} lines) --", count),
