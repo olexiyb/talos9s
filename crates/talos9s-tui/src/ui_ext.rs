@@ -446,6 +446,66 @@ impl RowHits {
     }
 }
 
+/// A table's header line and what clicking each column does (e.g. the sort
+/// it selects), to sort by clicking a column. Build it from the same
+/// widths the table was drawn with, right after drawing:
+///
+/// ```ignore
+/// self.header = ColumnHits::new(area, &widths, &[None, Some(Sort::Name)]);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnHits<T> {
+    /// The header line's row on screen
+    line: u16,
+    /// Each column's first screen column, width and target
+    columns: Vec<(u16, u16, T)>,
+}
+
+impl<T> Default for ColumnHits<T> {
+    fn default() -> Self {
+        Self {
+            line: u16::MAX,
+            columns: Vec::new(),
+        }
+    }
+}
+
+impl<T: Copy> ColumnHits<T> {
+    /// A `Table` (no border, no highlight symbol, column spacing 1) drawn at
+    /// `area` with `widths`; `targets[i]` is what a click on column `i`
+    /// does, `None` for nothing. The table lays its columns out the same way.
+    pub fn new(
+        area: ratatui::layout::Rect,
+        widths: &[ratatui::layout::Constraint],
+        targets: &[Option<T>],
+    ) -> Self {
+        let line = ratatui::layout::Rect { height: 1, ..area };
+        let rects = ratatui::layout::Layout::horizontal(widths.iter().copied())
+            .spacing(1)
+            .split(line);
+        let columns = rects
+            .iter()
+            .zip(targets)
+            .filter_map(|(r, t)| t.map(|t| (r.x, r.width, t)))
+            .collect();
+        Self {
+            line: area.y,
+            columns,
+        }
+    }
+
+    /// The target of the column a left click on the header landed on
+    pub fn clicked(&self, mouse: &crossterm::event::MouseEvent) -> Option<T> {
+        if !is_left_click(mouse) || mouse.row != self.line {
+            return None;
+        }
+        self.columns
+            .iter()
+            .find(|(x, width, _)| mouse.column >= *x && mouse.column < x.saturating_add(*width))
+            .map(|(_, _, t)| *t)
+    }
+}
+
 /// Lines of a text list and what each one shows (an item, or nothing for a
 /// heading or blank line), to turn a click into an item. Push one entry per
 /// drawn line while building the lines.

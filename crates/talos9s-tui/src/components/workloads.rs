@@ -360,6 +360,8 @@ pub struct WorkloadHealthComponent {
     picker: Option<crate::components::namespace_picker::NamespacePicker>,
     /// This cluster's recent namespaces, for the picker
     recent_namespaces: Vec<String>,
+    /// The pod list's header, to sort by clicking a column
+    pod_header: crate::ui_ext::ColumnHits<PodSort>,
 
     /// The focused view (Enter): one workload, its pods and their logs
     focus: Option<Focus>,
@@ -401,6 +403,7 @@ impl WorkloadHealthComponent {
             pod_sort: PodSort::default(),
             picker: None,
             recent_namespaces: Vec::new(),
+            pod_header: Default::default(),
         }
     }
 
@@ -1131,15 +1134,34 @@ impl WorkloadHealthComponent {
                 _ => None,
             })
             .max()
-            .unwrap_or(9)
-            .clamp(9, 20);
+            .unwrap_or(10)
+            .clamp(10, 20);
+        // STATE and NODE as wide as what they hold; the room left goes to
+        // NAME and OWNER, which get cut
+        let longest = |f: &dyn Fn(&PodFacts) -> usize, min: usize, max: usize| {
+            rows.iter()
+                .filter_map(|r| match r {
+                    ListRow::Member(pod) => Some(f(pod)),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(min)
+                .clamp(min, max)
+        };
+        let state_width = longest(&|p| Self::pod_status(p, now).0.chars().count(), 6, 22);
+        let node_width = longest(
+            &|p| p.node.as_deref().map_or(1, |n| n.chars().count()),
+            4,
+            16,
+        );
         let widths = [
             Constraint::Length(1),
             Constraint::Length(talos9s_core::convert::to_u16(namespace_width)),
             Constraint::Fill(3),
-            Constraint::Length(5),
-            Constraint::Length(8),
-            Constraint::Fill(2),
+            // `READY▼`
+            Constraint::Length(6),
+            Constraint::Length(talos9s_core::convert::to_u16(node_width)),
+            Constraint::Length(talos9s_core::convert::to_u16(state_width + 1)),
             // `RESTARTS▼`
             Constraint::Length(9),
             Constraint::Length(6),
@@ -1155,14 +1177,14 @@ impl WorkloadHealthComponent {
         };
         let header = Row::new(vec![
             Cell::from(""),
-            Cell::from("NAMESPACE"),
+            sorted("NAMESPACE", PodSort::Namespace),
             sorted("NAME", PodSort::Name),
-            Cell::from("READY"),
+            sorted("READY", PodSort::Ready),
             sorted("NODE", PodSort::Node),
             sorted("STATE", PodSort::Health),
             sorted("RESTARTS", PodSort::Restarts),
             sorted("AGE", PodSort::Age),
-            Cell::from("OWNER"),
+            sorted("OWNER", PodSort::Owner),
         ])
         .style(Style::default().add_modifier(Modifier::DIM));
         let row_count = table_rows.len();
@@ -1176,6 +1198,22 @@ impl WorkloadHealthComponent {
                     .add_modifier(Modifier::BOLD),
             );
         frame.render_stateful_widget(table, area, &mut self.table_state);
+        // Columns in `widths` order; the ones `1`-`5` sort by
+        self.pod_header = crate::ui_ext::ColumnHits::new(
+            area,
+            &widths,
+            &[
+                None,
+                Some(PodSort::Namespace),
+                Some(PodSort::Name),
+                Some(PodSort::Ready),
+                Some(PodSort::Node),
+                Some(PodSort::Health),
+                Some(PodSort::Restarts),
+                Some(PodSort::Age),
+                Some(PodSort::Owner),
+            ],
+        );
         self.rows =
             crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), row_count);
     }
@@ -1745,7 +1783,7 @@ impl WorkloadHealthComponent {
             Span::raw(" logs  "),
         ];
         if self.pod_mode {
-            spans.extend([key("<1-5>"), Span::raw(" sort ")]);
+            spans.extend([key("<1-8>"), Span::raw(" sort ")]);
         } else {
             spans.extend([key("<y>"), Span::raw(" copy  ")]);
         }
@@ -1778,6 +1816,16 @@ impl WorkloadHealthComponent {
 
 impl Component for WorkloadHealthComponent {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        // A column header of the pod list: sort by it, as `1`-`5`
+        if self.pod_mode
+            && self.focus.is_none()
+            && self.picker.is_none()
+            && let Some(sort) = self.pod_header.clicked(&mouse)
+        {
+            self.pod_sort = sort;
+            self.options_changed();
+            return Ok(None);
+        }
         if let Some(row) = self.rows.clicked(&mouse)
             && let Some(i) = Self::selectable(&self.list_rows())
                 .iter()
@@ -1856,7 +1904,7 @@ impl Component for WorkloadHealthComponent {
                 self.options_changed();
                 Ok(None)
             }
-            KeyCode::Char(c @ '1'..='5') if self.pod_mode => {
+            KeyCode::Char(c @ '1'..='8') if self.pod_mode => {
                 let i = usize::from(u8::try_from(c).unwrap_or(b'1') - b'1');
                 if let Some(&sort) = PodSort::ALL.get(i) {
                     self.pod_sort = sort;
@@ -2194,7 +2242,7 @@ mod tests {
         // Healthy pods only with `A`
         assert!(c.list_rows().is_empty());
         press(&mut c, KeyCode::Char('A'));
-        press(&mut c, KeyCode::Char('4'));
+        press(&mut c, KeyCode::Char('6'));
         let first = |c: &WorkloadHealthComponent| match c.list_rows().first() {
             Some(ListRow::Member(p)) => p.name.clone(),
             _ => String::new(),
@@ -2234,6 +2282,58 @@ mod tests {
         c.set_warp(vec!["other".into()], Vec::new());
         assert!(c.list_rows().is_empty());
         assert!(!c.captures_text());
+    }
+
+    /// A click on a column header of the pod list sorts by it, wherever
+    /// the table put that column; `1`-`8` are the columns in order
+    #[test]
+    fn click_a_pod_list_header_to_sort() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        if let Some(d) = c.state.data_mut() {
+            d.all_pods = Some(vec![PodFacts {
+                namespace: "apps".into(),
+                name: "web-0".into(),
+                node: Some("bc1".into()),
+                phase: Some("Running".into()),
+                ready: true,
+                ..Default::default()
+            }]);
+        }
+        press(&mut c, KeyCode::Char('P'));
+        press(&mut c, KeyCode::Char('A'));
+        let mut terminal = Terminal::new(TestBackend::new(140, 20)).unwrap();
+        terminal.draw(|f| c.draw(f, f.area()).unwrap()).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let find = |label: &str| {
+            (0..buffer.area.height).find_map(|y| {
+                let line: String = (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                line.find(label).map(|x| (u16::try_from(x).unwrap(), y))
+            })
+        };
+        let click = |c: &mut WorkloadHealthComponent, (x, y): (u16, u16)| {
+            c.handle_mouse_event(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: x + 1,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+            .unwrap();
+        };
+        click(&mut c, find("NODE").unwrap());
+        assert_eq!(c.pod_sort, PodSort::Node);
+        click(&mut c, find(" AGE").map(|(x, y)| (x + 1, y)).unwrap());
+        assert_eq!(c.pod_sort, PodSort::Age);
+        // Every column sorts, NAMESPACE too
+        click(&mut c, find("NAMESPACE").unwrap());
+        assert_eq!(c.pod_sort, PodSort::Namespace);
+        // and the digits follow the columns: `8` is OWNER, the last
+        press(&mut c, KeyCode::Char('8'));
+        assert_eq!(c.pod_sort, PodSort::Owner);
     }
 
     /// Typing filters live; Esc drops a kept filter before leaving the view

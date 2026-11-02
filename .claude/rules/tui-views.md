@@ -124,8 +124,10 @@ What each view shows per target:
   `ui_ext::RowHits::new(area, bordered, header_lines, state.offset(), rows)`
   right after rendering a table or list, and `ui_ext::LineHits` (one
   `push` per drawn line) for lists drawn as text; then
-  `rows.clicked(&mouse)` gives the index. Other targets (tabs, column
-  headers) record their `Rect`s.
+  `rows.clicked(&mouse)` gives the index. A sortable table records its
+  header with `ui_ext::ColumnHits::new(area, &widths, &targets)` (the same
+  widths it was drawn with) so a click on a column sorts by it, as the
+  sort keys do. Other targets (tabs) record their `Rect`s.
 - Widths: size to content where possible (see `nodes_pane_width`) instead of
   fixed percentages; never let one long error line set a pane's width.
 - Tables whose columns come and go (the group table): build the header and

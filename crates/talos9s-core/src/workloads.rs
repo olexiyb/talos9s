@@ -748,35 +748,47 @@ pub fn list_rows<'a>(
 /// How the pod list (`P`) is sorted (`1`-`5`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PodSort {
+    Namespace,
+    /// The pod name, across namespaces
+    Name,
+    /// Fewest of their containers ready first
+    Ready,
+    Node,
     /// Worst first: failing, degraded or not ready, pending, then healthy
     #[default]
     Health,
-    /// The pod name, across namespaces
-    Name,
-    Node,
     /// Most restarts first
     Restarts,
     /// Newest first
     Age,
+    /// `deploy/…`, `sts/…`, `Job/…`: a workload's pods together
+    Owner,
 }
 
 impl PodSort {
-    pub const ALL: [PodSort; 5] = [
-        PodSort::Health,
+    /// In the pod list's column order: `1`-`8` and a click on a header
+    pub const ALL: [PodSort; 8] = [
+        PodSort::Namespace,
         PodSort::Name,
+        PodSort::Ready,
         PodSort::Node,
+        PodSort::Health,
         PodSort::Restarts,
         PodSort::Age,
+        PodSort::Owner,
     ];
 
     /// Its name in the state file
     pub fn name(&self) -> &'static str {
         match self {
-            PodSort::Health => "Health",
+            PodSort::Namespace => "Namespace",
             PodSort::Name => "Name",
+            PodSort::Ready => "Ready",
             PodSort::Node => "Node",
+            PodSort::Health => "Health",
             PodSort::Restarts => "Restarts",
             PodSort::Age => "Age",
+            PodSort::Owner => "Owner",
         }
     }
 
@@ -851,7 +863,14 @@ pub fn pod_rows<'a>(
                 .then_with(|| a.name.cmp(&b.name))
         };
         let key = match sort {
+            PodSort::Namespace => std::cmp::Ordering::Equal,
             PodSort::Health => ha.cmp(hb),
+            // The share of containers ready, lowest first: 0/2 before 1/2
+            PodSort::Ready => {
+                let ((ra, ta), (rb, tb)) = (a.containers_ready(), b.containers_ready());
+                (ra * tb.max(1)).cmp(&(rb * ta.max(1)))
+            }
+            PodSort::Owner => pod_owner(a, rs_owners).cmp(&pod_owner(b, rs_owners)),
             // The pod's own name across namespaces (ties: namespace, below)
             PodSort::Name => a.name.cmp(&b.name),
             PodSort::Node => a.node.cmp(&b.node),
@@ -1440,6 +1459,42 @@ mod tests {
             names(&pod_rows(&pods, None, &all, PodSort::Health, NOW)),
             ["  zeta", "  alpha"]
         );
+    }
+
+    /// Every column sorts: namespace, the share of containers ready
+    /// (fewest first), the owner
+    #[test]
+    fn pod_list_sorts_by_namespace_ready_and_owner() {
+        let pod = |ns: &str, name: &str, ready: usize, owner: &str| {
+            let mut p = PodFacts {
+                namespace: ns.into(),
+                name: name.into(),
+                owner: Some(("StatefulSet".into(), owner.into())),
+                ..running()
+            };
+            p.containers = (0..2)
+                .map(|i| ContainerFacts {
+                    ready: i < ready,
+                    ..Default::default()
+                })
+                .collect();
+            p
+        };
+        let pods = vec![
+            pod("web", "a", 2, "zz"),
+            pod("db", "b", 1, "aa"),
+            pod("apps", "c", 2, "mm"),
+        ];
+        let all = ListOptions {
+            show_healthy: true,
+            ..Default::default()
+        };
+        let sorted = |by| names(&pod_rows(&pods, None, &all, by, NOW));
+        assert_eq!(sorted(PodSort::Namespace), ["  c", "  b", "  a"]);
+        assert_eq!(sorted(PodSort::Ready)[0], "  b", "1/2 before 2/2");
+        assert_eq!(sorted(PodSort::Owner), ["  b", "  c", "  a"]);
+        assert_eq!(PodSort::from_name("Health"), Some(PodSort::Health));
+        assert_eq!(PodSort::ALL.len(), 8);
     }
 
     #[test]
