@@ -510,7 +510,7 @@ pub(super) fn connection_error_lines(
     let retry = if auto_refresh {
         format!(
             "  Retrying every {}s — press r to retry now.",
-            talos9s_core::constants::refresh_intervals::SLOW
+            talos9s_core::constants::refresh_intervals::SLOW.as_secs()
         )
     } else {
         "  Press r to retry.".to_string()

@@ -27,7 +27,8 @@ use talos_rs::{
 };
 use talos9s_core::AsyncState;
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
+const AUTO_REFRESH_INTERVAL: std::time::Duration =
+    talos9s_core::constants::refresh_intervals::VERY_SLOW;
 /// Upper bound for one Containers call
 const CONTAINERS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -566,7 +567,6 @@ pub struct NodeInfoComponent {
     /// Reload the config and extensions on the next refresh, not only the
     /// containers
     reload_all: bool,
-    auto_refresh: bool,
     /// Per tab
     queries: PerTab<Query>,
     containers_table: TableState,
@@ -621,7 +621,6 @@ impl NodeInfoComponent {
             context,
             config_path,
             reload_all: true,
-            auto_refresh: true,
             queries: Default::default(),
             containers_table,
             extensions_table,
@@ -1566,8 +1565,7 @@ impl Component for NodeInfoComponent {
             {
                 return Ok(Some(Action::Refresh));
             }
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+            if self.state.should_auto_refresh(true, AUTO_REFRESH_INTERVAL) {
                 return Ok(Some(Action::Refresh));
             }
         }

@@ -99,19 +99,29 @@ pub const FLUX_CRDS: &[&str] = &[
 // Default Refresh Intervals
 // =============================================================================
 
-/// Default refresh intervals for components (in seconds)
+/// Default refresh intervals for components
 pub mod refresh_intervals {
+    use std::time::Duration;
+
     /// Fast refresh for real-time data (network stats)
-    pub const FAST: u64 = 2;
+    pub const FAST: Duration = Duration::from_secs(2);
 
     /// Normal refresh for moderately changing data (processes, etcd)
-    pub const NORMAL: u64 = 5;
+    pub const NORMAL: Duration = Duration::from_secs(5);
 
     /// Slow refresh for stable data (workloads, diagnostics)
-    pub const SLOW: u64 = 10;
+    pub const SLOW: Duration = Duration::from_secs(10);
 
     /// Very slow refresh for rarely changing data (lifecycle, security)
-    pub const VERY_SLOW: u64 = 30;
+    pub const VERY_SLOW: Duration = Duration::from_secs(30);
+
+    /// Data that is expensive to gather and changes rarely (volumes)
+    pub const RARE: Duration = Duration::from_secs(60);
+
+    const _: () = assert!(FAST.as_millis() < NORMAL.as_millis());
+    const _: () = assert!(NORMAL.as_millis() < SLOW.as_millis());
+    const _: () = assert!(SLOW.as_millis() < VERY_SLOW.as_millis());
+    const _: () = assert!(VERY_SLOW.as_millis() < RARE.as_millis());
 }
 
 /// Timing of the workspace: following the tree selection, clicks
@@ -171,12 +181,5 @@ mod tests {
         assert!(!KYVERNO_CRDS.is_empty());
         assert!(!ARGOCD_CRDS.is_empty());
         assert!(!FLUX_CRDS.is_empty());
-    }
-
-    #[test]
-    fn test_refresh_intervals_ordering() {
-        const { assert!(refresh_intervals::FAST < refresh_intervals::NORMAL) };
-        const { assert!(refresh_intervals::NORMAL < refresh_intervals::SLOW) };
-        const { assert!(refresh_intervals::SLOW < refresh_intervals::VERY_SLOW) };
     }
 }

@@ -30,7 +30,6 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 use talos9s_core::constants::{
     HIGH_RESTART_THRESHOLD, POD_PENDING_GRACE_SECS, RECENT_RESTART_SECS,
 };
@@ -219,7 +218,8 @@ fn pod_is_ready(pod: &Pod) -> bool {
 /// Auto-refresh interval in seconds
 // Pod problems change slowly, and a refresh downloads every pod of the
 // cluster
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
+const AUTO_REFRESH_INTERVAL: std::time::Duration =
+    talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]
@@ -1220,8 +1220,10 @@ impl Component for WorkloadHealthComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             // Check for auto-refresh
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+            if self
+                .state
+                .should_auto_refresh(self.auto_refresh, AUTO_REFRESH_INTERVAL)
+            {
                 return Ok(Some(Action::Refresh));
             }
         }

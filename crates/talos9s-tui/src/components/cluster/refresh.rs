@@ -112,8 +112,7 @@ impl ClusterComponent {
         if self.background_refresh.len() != self.clusters.len() {
             return;
         }
-        let interval =
-            std::time::Duration::from_secs(talos9s_core::constants::refresh_intervals::SLOW);
+        let interval = talos9s_core::constants::refresh_intervals::SLOW;
         for (idx, cluster) in self.clusters.iter().enumerate() {
             let (Some(running), Some(&refreshed_at)) = (
                 self.background_refresh.get(idx),

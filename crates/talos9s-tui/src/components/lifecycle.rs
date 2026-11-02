@@ -28,7 +28,8 @@ use talos_rs::{
 };
 use talos9s_core::{AsyncState, EtcdQuorum, HasHealth, HealthIndicator, SelectableList};
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
+const AUTO_REFRESH_INTERVAL: std::time::Duration =
+    talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// How long one Talos, Kubernetes or `talosctl` call may take; a dead node
 /// must not hold up the refresh
@@ -284,9 +285,6 @@ pub struct LifecycleComponent {
     /// Where the rows were drawn, for clicks
     rows: crate::ui_ext::RowHits,
 
-    /// Auto-refresh enabled
-    auto_refresh: bool,
-
     /// Client for API calls
     client: Option<TalosClient>,
 
@@ -323,7 +321,6 @@ impl LifecycleComponent {
             state,
             table_state,
             rows: Default::default(),
-            auto_refresh: true,
             client: None,
             k8s_client: None,
             k8s_source: None,
@@ -1153,8 +1150,7 @@ impl Component for LifecycleComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             // Check for auto-refresh using AsyncState
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+            if self.state.should_auto_refresh(true, AUTO_REFRESH_INTERVAL) {
                 return Ok(Some(Action::Refresh));
             }
         }

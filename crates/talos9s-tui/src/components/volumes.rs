@@ -42,7 +42,7 @@ use talos_rs::TalosClient;
 use talos9s_core::{AsyncState, HasHealth, HealthIndicator};
 
 /// Auto-refresh interval: a full scan reads a few hundred kernel files
-const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const AUTO_REFRESH_INTERVAL: Duration = talos9s_core::constants::refresh_intervals::RARE;
 
 /// Where a volume comes from
 #[derive(Debug, Clone)]

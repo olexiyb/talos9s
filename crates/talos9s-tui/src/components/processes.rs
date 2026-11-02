@@ -23,7 +23,8 @@ use std::time::{Duration, Instant};
 use talos_rs::{CpuStat, MemInfo, ProcessInfo, ProcessState, TalosClient};
 use talos9s_core::{AsyncState, format_bytes, format_bytes_compact};
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::NORMAL;
+const AUTO_REFRESH_INTERVAL: std::time::Duration =
+    talos9s_core::constants::refresh_intervals::NORMAL;
 
 /// Upper bound for each per-node API call in a refresh
 const NODE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1548,8 +1549,10 @@ impl Component for ProcessesComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             // Check for auto-refresh using AsyncState
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+            if self
+                .state
+                .should_auto_refresh(self.auto_refresh, AUTO_REFRESH_INTERVAL)
+            {
                 return Ok(Some(Action::Refresh));
             }
             // The first screen shows at once with CPU % pending; the second

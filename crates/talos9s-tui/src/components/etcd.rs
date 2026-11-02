@@ -169,7 +169,8 @@ fn address_check(member: &EtcdMember) -> Option<String> {
     })
 }
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::NORMAL;
+const AUTO_REFRESH_INTERVAL: std::time::Duration =
+    talos9s_core::constants::refresh_intervals::NORMAL;
 
 use talos9s_core::constants::etcd::{
     APPLY_LAG_ERROR, APPLY_LAG_WARN, BEHIND_LEADER_WARN, DEFAULT_QUOTA_BYTES,
@@ -1218,8 +1219,10 @@ impl Component for EtcdComponent {
         if let Action::Tick = action {
             self.log.drain();
             // Check for auto-refresh using AsyncState helper
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+            if self
+                .state
+                .should_auto_refresh(self.auto_refresh, AUTO_REFRESH_INTERVAL)
+            {
                 return Ok(Some(Action::Refresh));
             }
         }

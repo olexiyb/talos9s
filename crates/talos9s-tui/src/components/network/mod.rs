@@ -134,7 +134,7 @@ fn conn_warnings(cc: &ConnectionCounts) -> bool {
         || cc.syn_sent >= SYN_SENT_WARN
 }
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::FAST;
+const AUTO_REFRESH_INTERVAL: std::time::Duration = talos9s_core::constants::refresh_intervals::FAST;
 
 /// Result of one KubeSpan fetch: whether it is enabled, and its peers
 type KubeSpanFetch = (Option<bool>, Result<Vec<KubeSpanPeerStatus>, String>);
@@ -846,11 +846,9 @@ impl Component for NetworkStatsComponent {
             if self.auto_refresh
                 && !self.state.is_loading()
                 && let Some(last) = self.state.last_refresh()
+                && last.elapsed() >= AUTO_REFRESH_INTERVAL
             {
-                let interval = std::time::Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-                if last.elapsed() >= interval {
-                    return Ok(Some(Action::Refresh));
-                }
+                return Ok(Some(Action::Refresh));
             }
         }
         Ok(None)

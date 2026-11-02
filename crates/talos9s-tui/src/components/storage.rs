@@ -14,11 +14,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
-use std::time::Duration;
 use talos_rs::{DiskInfo, VolumeStatus, get_disks_for_node, get_volume_status_for_node};
 use talos9s_core::{AsyncState, HealthIndicator, format_bytes};
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::VERY_SLOW;
+const AUTO_REFRESH_INTERVAL: std::time::Duration =
+    talos9s_core::constants::refresh_intervals::VERY_SLOW;
 
 /// View mode for the storage component
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -100,9 +100,6 @@ pub struct StorageComponent {
     /// Where the table's rows were drawn last, for clicks
     rows: crate::ui_ext::RowHits,
 
-    /// Auto-refresh enabled
-    auto_refresh: bool,
-
     /// Node address for talosctl commands
     node_address: Option<String>,
 
@@ -155,7 +152,6 @@ impl StorageComponent {
             disk_table_state,
             volume_table_state,
             rows: Default::default(),
-            auto_refresh: true,
             node_address,
             context,
             config_path,
@@ -598,8 +594,7 @@ impl Component for StorageComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             // Check for auto-refresh using AsyncState
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+            if self.state.should_auto_refresh(true, AUTO_REFRESH_INTERVAL) {
                 return Ok(Some(Action::Refresh));
             }
         }

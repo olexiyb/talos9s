@@ -245,9 +245,7 @@ impl ClusterComponent {
         }
         match self.last_auto_refresh {
             None => true,
-            Some(last) => {
-                last.elapsed().as_secs() >= talos9s_core::constants::refresh_intervals::NORMAL
-            }
+            Some(last) => last.elapsed() >= talos9s_core::constants::refresh_intervals::NORMAL,
         }
     }
 

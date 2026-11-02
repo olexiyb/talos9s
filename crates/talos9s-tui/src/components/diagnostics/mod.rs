@@ -34,7 +34,7 @@ use talos9s_core::AsyncState;
 use crate::ui_ext::CheckStatusExt;
 pub use types::*;
 
-const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::SLOW;
+const AUTO_REFRESH_INTERVAL: std::time::Duration = talos9s_core::constants::refresh_intervals::SLOW;
 
 /// Data loaded asynchronously for the diagnostics component
 #[derive(Debug, Clone, Default)]
@@ -91,9 +91,6 @@ pub struct DiagnosticsComponent {
     details_title: String,
     /// Content of the details popup
     details_content: String,
-
-    /// Auto-refresh enabled
-    auto_refresh: bool,
 
     /// Client for API calls
     client: Option<TalosClient>,
@@ -200,7 +197,6 @@ impl DiagnosticsComponent {
             show_details: false,
             details_title: String::new(),
             details_content: String::new(),
-            auto_refresh: true,
             client: None,
             controlplane_endpoint: None,
             config_path,
@@ -1042,11 +1038,10 @@ impl Component for DiagnosticsComponent {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        if let Action::Tick = action {
-            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-            if self.state.should_auto_refresh(self.auto_refresh, interval) {
-                return Ok(Some(Action::Refresh));
-            }
+        if let Action::Tick = action
+            && self.state.should_auto_refresh(true, AUTO_REFRESH_INTERVAL)
+        {
+            return Ok(Some(Action::Refresh));
         }
         Ok(None)
     }
