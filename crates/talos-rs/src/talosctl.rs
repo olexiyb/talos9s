@@ -1883,4 +1883,56 @@ spec:
         assert_eq!(peers[1].state, "down");
         assert_eq!(peers[1].endpoint, None);
     }
+
+    #[test]
+    fn volume_status_skips_documents_without_an_id() {
+        // An id is the only key a volume row has; without one the document
+        // is dropped instead of showing a nameless row
+        let yaml = "metadata:
+    type: VolumeStatuses.block.talos.dev
+spec:
+    phase: ready
+---
+metadata:
+    id: \"\"
+spec:
+    phase: ready
+---
+just some text
+---
+- a
+- list
+---
+metadata:
+    id: EPHEMERAL
+spec:
+    phase: ready
+    type: partition
+    prettySize: 10 GiB
+";
+        let volumes = parse_volume_status_yaml(yaml).unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].id, "EPHEMERAL");
+        // A real size wins over the type fallback
+        assert_eq!(volumes[0].size, "10 GiB");
+        assert_eq!(volumes[0].filesystem.as_deref(), Some("partition"));
+        // Not a path, so no mount location is invented from the id
+        assert_eq!(volumes[0].mount_location, None);
+    }
+
+    #[test]
+    fn volume_status_without_spec_or_input() {
+        let volumes = parse_volume_status_yaml("metadata:\n    id: META\n").unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].phase, "unknown");
+        assert_eq!(volumes[0].size, "");
+
+        assert!(parse_volume_status_yaml("").unwrap().is_empty());
+        assert!(
+            parse_volume_status_yaml("\n---\n\n---\n")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(parse_volume_status_yaml(": : :").unwrap().is_empty());
+    }
 }

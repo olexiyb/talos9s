@@ -120,6 +120,24 @@ mod tests {
     }
 
     #[test]
+    fn grpc_errors_remaining_codes() {
+        use tonic::Status;
+        assert_eq!(
+            format_grpc_error(&Status::unauthenticated("bad cert")),
+            "Authentication failed - check talosconfig"
+        );
+        assert_eq!(
+            format_grpc_error(&Status::already_exists("x")),
+            "Resource already exists"
+        );
+        assert_eq!(
+            format_grpc_error(&Status::unimplemented("method Foo")),
+            "Not supported by this Talos version: method Foo"
+        );
+        assert_eq!(format_grpc_error(&Status::cancelled("")), "gRPC error: ");
+    }
+
+    #[test]
     fn test_format_connection_error() {
         assert!(format_connection_error("connection refused").contains("refused"));
         assert!(format_connection_error("TLS handshake failed").contains("TLS"));

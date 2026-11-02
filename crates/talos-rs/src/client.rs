@@ -3125,4 +3125,80 @@ mod tests {
         let reset = NetDevRate::from_delta(&dev(37, 1000), &dev(0, 3), 5.0);
         assert!(!reset.rising());
     }
+
+    /// The kernel rejects a program whose jumps leave it, so a hand-edited
+    /// offset would fail every capture on the node
+    #[test]
+    fn bpf_jump_targets_stay_in_bounds() {
+        for (name, program) in [("EN10MB", BPF_NOT_PORT_EN10MB), ("RAW", BPF_NOT_PORT_RAW)] {
+            let len = program.len();
+            assert_eq!(program.last().unwrap().0, 0x06, "{name}: must end with ret");
+            for (pc, &(op, jt, jf, _)) in program.iter().enumerate() {
+                // BPF_JMP class, except BPF_JA (unused here)
+                if op & 0x07 == 0x05 {
+                    for off in [jt, jf] {
+                        let target = pc + 1 + off as usize;
+                        assert!(
+                            target < len,
+                            "{name}: insn {pc} jumps to {target}, len {len}"
+                        );
+                    }
+                } else {
+                    assert_eq!((jt, jf), (0, 0), "{name}: insn {pc} is not a jump");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn process_state_parses_every_letter() {
+        let cases = [
+            ("R", ProcessState::Running),
+            ("S", ProcessState::Sleeping),
+            ("D", ProcessState::DiskSleep),
+            ("Z", ProcessState::Zombie),
+            ("T", ProcessState::Stopped),
+            ("t", ProcessState::TracingStop),
+            ("X", ProcessState::Dead),
+        ];
+        for (input, state) in cases {
+            assert_eq!(ProcessState::parse(input), state);
+            assert_eq!(state.short(), input);
+        }
+        // procfs may append flags ("Ss", "R+"); only the first letter counts
+        assert_eq!(ProcessState::parse("Ss"), ProcessState::Sleeping);
+        // Case matters: 't' is tracing stop, 'r' is nothing
+        assert_eq!(ProcessState::parse("r"), ProcessState::Unknown("r".into()));
+        assert_eq!(ProcessState::parse("I"), ProcessState::Unknown("I".into()));
+        assert_eq!(
+            ProcessState::parse(""),
+            ProcessState::Unknown(String::new())
+        );
+        assert_eq!(ProcessState::Unknown(String::new()).short(), "?");
+    }
+
+    #[test]
+    fn connection_state_from_every_proto_value() {
+        use ConnectionState::*;
+        let states = [
+            Established,
+            SynSent,
+            SynRecv,
+            FinWait1,
+            FinWait2,
+            TimeWait,
+            Close,
+            CloseWait,
+            LastAck,
+            Listen,
+            Closing,
+        ];
+        for (value, state) in (1..).zip(states) {
+            assert_eq!(ConnectionState::from_proto(value), state);
+        }
+        // 0 is the proto default (unset), not a TCP state
+        for value in [0, 12, -1, i32::MAX] {
+            assert_eq!(ConnectionState::from_proto(value), Unknown);
+        }
+    }
 }
