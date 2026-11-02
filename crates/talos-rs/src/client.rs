@@ -636,6 +636,36 @@ impl TalosClient {
         Ok(logs)
     }
 
+    /// The last `tail_lines` of a container's logs: a system service by
+    /// name, or a Kubernetes container by its id (`ns/pod:container:id`),
+    /// whose lines come in the CRI format (`<RFC 3339> stdout F text`)
+    pub async fn container_logs(
+        &self,
+        kind: ContainerKind,
+        id: &str,
+        tail_lines: i32,
+    ) -> Result<String, TalosError> {
+        use crate::proto::common::ContainerDriver;
+        let (namespace, driver) = match kind {
+            ContainerKind::System => ("system", ContainerDriver::Containerd),
+            ContainerKind::Kubernetes => ("k8s.io", ContainerDriver::Cri),
+        };
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(LogsRequest {
+            namespace: namespace.to_string(),
+            id: id.to_string(),
+            driver: driver as i32,
+            follow: false,
+            tail_lines,
+        }));
+        let mut stream = client.logs(request).await?.into_inner();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            bytes.extend(chunk?.bytes);
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// Stream logs from a service (follow mode)
     /// Returns a receiver that yields log lines as they arrive
     pub async fn logs_stream(

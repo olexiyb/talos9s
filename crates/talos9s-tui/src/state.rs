@@ -31,8 +31,8 @@ pub struct UiState {
     pub auto_refresh: Option<bool>,
     /// Log levels shown, lower case (`error`, `warn`, `info`, `debug`, `other`)
     pub log_levels: Option<Vec<String>>,
-    /// Logs wrap long lines (`w`), in the Logs view and the Workloads
-    /// view's logs
+    /// Logs wrap long lines (`w`), in the Logs view and the Workloads and
+    /// Containers views' logs
     pub log_wrap: Option<bool>,
     pub volumes: VolumesSettings,
     /// Processes sort (`processes::SortBy` name)
@@ -40,6 +40,7 @@ pub struct UiState {
     pub network: NetworkSettings,
     pub storage: StorageSettings,
     pub workloads: WorkloadsSettings,
+    pub containers: ContainersStateSettings,
     /// The last new-release check (`update.rs`)
     pub update: UpdateCheck,
     /// Namespace warp (`W`) and recent namespaces, per talosconfig context
@@ -122,6 +123,16 @@ pub struct Folds {
 pub struct StorageSettings {
     /// Virtual block devices (loop, dm, md, drbd, zvol) shown too (`A`)
     pub show_all: Option<bool>,
+}
+
+/// Containers view
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContainersStateSettings {
+    /// Exited containers shown too (`A`)
+    pub show_exited: Option<bool>,
+    /// `ContainerSort` name
+    pub sort: Option<String>,
 }
 
 /// Workloads view

@@ -6,6 +6,19 @@ impl ClusterComponent {
     /// Processes view for the selection: the selected node, or every online
     /// node under the selected cluster / control plane / workers header
     pub(super) fn processes_action(&self) -> Option<Action> {
+        let (title, nodes) = self.online_nodes()?;
+        Some(Action::ShowProcesses(title, nodes))
+    }
+
+    /// Containers view for the selection, the same nodes as Processes
+    pub(super) fn containers_action(&self) -> Option<Action> {
+        let (title, nodes) = self.online_nodes()?;
+        Some(Action::ShowContainers(title, nodes))
+    }
+
+    /// The selected node, or the online nodes under the selected header,
+    /// with the title for them; none when there are none
+    fn online_nodes(&self) -> Option<(String, Vec<ProcessNode>)> {
         let (cluster_idx, names) = self.selected_nodes()?;
         let cluster = self.clusters.get(cluster_idx)?;
         let nodes: Vec<ProcessNode> = names
@@ -26,7 +39,7 @@ impl ClusterComponent {
             NodeListItem::WorkersHeader(_) => format!("{} workers", cluster.name),
             _ => nodes.first()?.hostname.clone(),
         };
-        (!nodes.is_empty()).then_some(Action::ShowProcesses(title, nodes))
+        (!nodes.is_empty()).then_some((title, nodes))
     }
 
     /// Online nodes of the selected header as group view nodes, with the
@@ -284,7 +297,7 @@ impl ClusterComponent {
             NavMenuItem::Lifecycle => Some(Action::ShowLifecycle),
             NavMenuItem::Workloads => Some(self.workloads_action()),
             NavMenuItem::Volumes => Some(self.volumes_action()),
-            NavMenuItem::Containers => node_only(NodeInfoTab::Containers),
+            NavMenuItem::Containers => self.containers_action(),
             NavMenuItem::Config => node_only(NodeInfoTab::Config),
             NavMenuItem::Extensions => node_only(NodeInfoTab::Extensions),
         };

@@ -87,8 +87,8 @@ What each view shows per target:
 | Dashboard | node details | nodes table and problems (`group.rs`) | cluster summary |
 | Logs | node services | merged across the group | merged across the cluster |
 | Network, Storage, Diagnostics | the node | group view | group view (all nodes) |
-| Processes | the node | the group's nodes | all nodes |
-| Containers, Machine config, Extensions | the node | "Select a node" hint | same hint |
+| Processes, Containers | the node | the group's nodes | all nodes |
+| Machine config, Extensions | the node | "Select a node" hint | same hint |
 | Volumes, Workloads | on this node | on those nodes | whole cluster |
 | etcd, Lifecycle, Security | the target's cluster | same | same |
 
@@ -136,6 +136,10 @@ What each view shows per target:
   nodes.
 - Visual selection and copying: `talos9s_core::VisualSelection` and
   `clipboard::copy_lines`.
+- Logs from the Talos API in the same pane (`LogSource::talos`, the
+  Containers view): CRI lines lose their `stdout F` (`strip_cri`), service
+  lines get an RFC 3339 time (`service_time`), so both merge by time. The
+  wheel over the pane scrolls it (`LogPane::handle_mouse`).
 - Logs from the Kubernetes API (`components/pod_logs.rs`): read with
   `timestamps=true` to merge sources by time, bounded (sources, lines,
   timeout), read again only while following the end, and after the

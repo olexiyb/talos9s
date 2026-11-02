@@ -194,10 +194,7 @@ impl NavMenuItem {
 
     /// Opens only for a node: a cluster or group header shows a hint instead
     pub fn needs_node(&self) -> bool {
-        matches!(
-            self,
-            NavMenuItem::Containers | NavMenuItem::Config | NavMenuItem::Extensions
-        )
+        matches!(self, NavMenuItem::Config | NavMenuItem::Extensions)
     }
 
     pub fn label(&self) -> &'static str {

@@ -155,8 +155,12 @@ fn selection_keys_and_views_per_target() {
     comp.selected_item = NodeListItem::ClusterHeader(0);
     assert_eq!(comp.target_key(), "test");
     assert!(matches!(
+        comp.action_for(NavMenuItem::Config),
+        Some(Action::ShowHint(NavMenuItem::Config, ref m)) if m == "Select a node to see its machine config"
+    ));
+    assert!(matches!(
         comp.action_for(NavMenuItem::Containers),
-        Some(Action::ShowHint(NavMenuItem::Containers, ref m)) if m == "Select a node to see its containers"
+        Some(Action::ShowContainers(_, ref nodes)) if nodes.len() == 2
     ));
     assert!(matches!(
         comp.action_for(NavMenuItem::Network),
@@ -176,7 +180,7 @@ fn selection_keys_and_views_per_target() {
     assert_eq!(comp.cluster_key(), "test");
     assert!(matches!(
         comp.action_for(NavMenuItem::Containers),
-        Some(Action::ShowNodeInfo(ref n, _, NodeInfoTab::Containers)) if n == "worker1"
+        Some(Action::ShowContainers(ref n, ref nodes)) if n == "worker1" && nodes.len() == 1
     ));
     assert!(matches!(
         comp.action_for(NavMenuItem::Network),

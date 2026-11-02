@@ -116,7 +116,7 @@ The Dashboard shows:
 | KubeSpan | The node's WireGuard peers; on a cluster or group row, the peer matrix |
 | Disks | The node's disks, read-only ones marked `RO`; virtual devices (loop, dm, md, DRBD, zvol) hidden until `A`, which is remembered |
 | Partitions | Talos volumes: the partitions with their filesystem, encryption and mount point |
-| Containers | Talos system services and Kubernetes containers |
+| Containers | Every container on a node, a group or the cluster, read from containerd through the Talos API, so it works when the Kubernetes API doesn't: Talos services and pods folded to one row (`Enter` unfolds), exited containers hidden until `A`, sort by any column (`1`-`6` or a header click), `W` namespace warp; the logs of the selected service, container or pod below (`l` for levels and search, the wheel or `PgUp`/`PgDn` to scroll, `v` opens them in `hl`) |
 | Machine config | The config in effect, read-only, searchable, secrets masked; flags a staged change waiting for a reboot |
 | Extensions | Installed system extensions |
 | Diagnostics | Health checks with suggested fixes, CNI checks (Flannel, Cilium, Calico) and addon checks (cert-manager and more) |
@@ -175,7 +175,8 @@ mouse do the same):
 | `s` / `t` | Disks / partitions | Disks / partitions of every node |
 | `d` | Diagnostics | Diagnostics grid |
 | `p` | Processes | Processes |
-| `C` / `m` / `x` | Containers / machine config / extensions | |
+| `C` | Containers | Containers of every node |
+| `m` / `x` | Machine config / extensions | |
 | `o` | Operations (drain, reboot, shutdown) | |
 | `v` / `w` | Volumes / workloads on this node | Volumes / workloads on those nodes |
 | `e` `b` `c` | etcd, lifecycle (boot and upgrades), security (cluster-wide) | same |

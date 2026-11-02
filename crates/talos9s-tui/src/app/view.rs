@@ -1,14 +1,15 @@
 //! The view on the right of the workspace and its one dispatch point
 
+use crate::components::containers::ContainersSettings;
 use crate::components::multi_logs::{ALL_LEVELS, LevelFilter};
 use crate::components::network::NetworkSettings;
 use crate::components::processes;
 use crate::components::volumes::VolumesViewState;
 use crate::components::workloads;
 use crate::components::{
-    BackgroundRefresh, Component, DiagnosticsComponent, EtcdComponent, GroupComponent,
-    LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeInfoComponent,
-    ProcessesComponent, SecurityComponent, StorageComponent, VolumesComponent,
+    BackgroundRefresh, Component, ContainersComponent, DiagnosticsComponent, EtcdComponent,
+    GroupComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent,
+    NodeInfoComponent, ProcessesComponent, SecurityComponent, StorageComponent, VolumesComponent,
     WorkloadHealthComponent,
 };
 use tokio::task::JoinHandle;
@@ -21,6 +22,7 @@ pub(super) enum View {
     MultiLogs,
     Etcd,
     Processes,
+    Containers,
     Network,
     Diagnostics,
     Security,
@@ -53,6 +55,7 @@ pub(super) enum ViewComponent {
     MultiLogs(Box<MultiLogsComponent>),
     Etcd(Box<EtcdComponent>),
     Processes(Box<ProcessesComponent>),
+    Containers(Box<ContainersComponent>),
     Network(Box<NetworkStatsComponent>),
     Diagnostics(Box<DiagnosticsComponent>),
     Security(Box<SecurityComponent>),
@@ -71,6 +74,7 @@ macro_rules! each {
             ViewComponent::MultiLogs($c) => $body,
             ViewComponent::Etcd($c) => $body,
             ViewComponent::Processes($c) => $body,
+            ViewComponent::Containers($c) => $body,
             ViewComponent::Network($c) => $body,
             ViewComponent::Diagnostics($c) => $body,
             ViewComponent::Security($c) => $body,
@@ -104,7 +108,8 @@ macro_rules! spawn_refresh {
 #[derive(Debug, Clone)]
 pub(super) struct ViewSettings {
     pub(super) log_levels: LevelFilter,
-    /// Logs wrap long lines (`w`): the Logs view and the Workloads view's logs
+    /// Logs wrap long lines (`w`): the Logs view and the Workloads and
+    /// Containers views' logs
     pub(super) log_wrap: bool,
     pub(super) volumes: Option<VolumesViewState>,
     pub(super) processes_sort: processes::SortBy,
@@ -112,6 +117,7 @@ pub(super) struct ViewSettings {
     /// Virtual block devices shown in the node and group storage views (`A`)
     pub(super) storage_show_all: bool,
     pub(super) workloads: workloads::WorkloadsSettings,
+    pub(super) containers: ContainersSettings,
 }
 
 impl Default for ViewSettings {
@@ -124,6 +130,7 @@ impl Default for ViewSettings {
             network: Default::default(),
             storage_show_all: false,
             workloads: Default::default(),
+            containers: Default::default(),
         }
     }
 }
@@ -138,6 +145,10 @@ impl ViewComponent {
             }
             ViewComponent::Volumes(v) => settings.volumes = Some(v.view_state()),
             ViewComponent::Processes(p) => settings.processes_sort = p.sort_by(),
+            ViewComponent::Containers(c) => {
+                settings.containers = c.settings();
+                settings.log_wrap = c.log_wrap();
+            }
             ViewComponent::Network(n) => settings.network = n.settings(),
             ViewComponent::Storage(s) => settings.storage_show_all = s.show_all(),
             ViewComponent::Workloads(w) => {
@@ -158,6 +169,7 @@ impl ViewComponent {
             ViewComponent::MultiLogs(_) => View::MultiLogs,
             ViewComponent::Etcd(_) => View::Etcd,
             ViewComponent::Processes(_) => View::Processes,
+            ViewComponent::Containers(_) => View::Containers,
             ViewComponent::Network(_) => View::Network,
             ViewComponent::Diagnostics(_) => View::Diagnostics,
             ViewComponent::Security(_) => View::Security,
@@ -189,6 +201,7 @@ impl ViewComponent {
             ViewComponent::MultiLogs(_) | ViewComponent::Network(_) => return None,
             ViewComponent::Etcd(c) => spawn_refresh!(c, ViewComponent::Etcd),
             ViewComponent::Processes(c) => spawn_refresh!(c, ViewComponent::Processes),
+            ViewComponent::Containers(c) => spawn_refresh!(c, ViewComponent::Containers),
             ViewComponent::Diagnostics(c) => spawn_refresh!(c, ViewComponent::Diagnostics),
             ViewComponent::Security(c) => spawn_refresh!(c, ViewComponent::Security),
             ViewComponent::Lifecycle(c) => spawn_refresh!(c, ViewComponent::Lifecycle),
@@ -207,6 +220,7 @@ impl ViewComponent {
         match (self, refreshed) {
             (V::Etcd(c), V::Etcd(r)) => c.adopt_refresh(*r),
             (V::Processes(c), V::Processes(r)) => c.adopt_refresh(*r),
+            (V::Containers(c), V::Containers(r)) => c.adopt_refresh(*r),
             (V::Diagnostics(c), V::Diagnostics(r)) => c.adopt_refresh(*r),
             (V::Security(c), V::Security(r)) => c.adopt_refresh(*r),
             (V::Lifecycle(c), V::Lifecycle(r)) => c.adopt_refresh(*r),

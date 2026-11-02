@@ -7,10 +7,10 @@ use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
 use crate::components::workloads;
 use crate::components::{
-    ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, GroupComponent,
-    LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeInfoComponent,
-    NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent, SecurityComponent,
-    StorageComponent, VolumesComponent, WorkloadHealthComponent,
+    ClusterComponent, Component, ContainersComponent, DiagnosticsComponent, EtcdComponent,
+    GroupComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent,
+    NodeInfoComponent, NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent,
+    SecurityComponent, StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
 use crate::components::{GroupKind, NodeInfoTab, StorageViewMode};
 use crate::tui::{self, Tui};
@@ -675,6 +675,15 @@ impl App {
                 .and_then(talos9s_core::workloads::PodSort::from_name)
                 .unwrap_or_default(),
         };
+        self.settings.containers = crate::components::containers::ContainersSettings {
+            show_exited: state.containers.show_exited.unwrap_or(false),
+            sort: state
+                .containers
+                .sort
+                .as_deref()
+                .and_then(talos9s_core::containers::ContainerSort::from_name)
+                .unwrap_or_default(),
+        };
         let item = by_name(state.view.as_deref());
         self.update = state.update.clone();
         self.namespaces = state
@@ -710,6 +719,7 @@ impl App {
             network,
             storage_show_all,
             workloads,
+            containers,
         } = settings;
         crate::state::UiState {
             // Nothing listed yet (no talosconfig): keep the remembered one
@@ -753,6 +763,10 @@ impl App {
                 by_namespace: Some(workloads.by_namespace),
                 pods: Some(workloads.pods),
                 pod_sort: Some(workloads.pod_sort.name().to_string()),
+            },
+            containers: crate::state::ContainersStateSettings {
+                show_exited: Some(containers.show_exited),
+                sort: Some(containers.sort.name().to_string()),
             },
             update: self.update.clone(),
             namespaces: self.namespaces.values().cloned().collect(),
@@ -902,8 +916,10 @@ impl App {
         };
         if let Some(problem) = problem {
             tracing::warn!("log viewer: {problem}");
-            if let Some(ViewComponent::Workloads(w)) = &mut self.component {
-                w.viewer_failed(problem);
+            match &mut self.component {
+                Some(ViewComponent::Workloads(w)) => w.viewer_failed(problem),
+                Some(ViewComponent::Containers(c)) => c.viewer_failed(problem),
+                _ => {}
             }
         }
         Ok(())
@@ -1382,6 +1398,10 @@ impl App {
                 v.set_warp(here.warp.clone(), here.recent.clone());
                 true
             }
+            Some(ViewComponent::Containers(c)) => {
+                c.set_warp(here.warp.clone(), here.recent.clone());
+                true
+            }
             _ => false,
         };
         if let Some(i) = self.pane_title.find(" · ns ") {
@@ -1512,7 +1532,6 @@ impl App {
         // The node view keeps the tab the user switched to
         let item = match &self.component {
             Some(ViewComponent::NodeInfo(n)) if self.view == View::NodeInfo => match n.tab() {
-                NodeInfoTab::Containers => NavMenuItem::Containers,
                 NodeInfoTab::Config => NavMenuItem::Config,
                 NodeInfoTab::Extensions => NavMenuItem::Extensions,
             },
@@ -1809,6 +1828,28 @@ impl App {
                     load,
                 );
             }
+            Action::ShowContainers(title, nodes) => {
+                self.leave_view();
+                tracing::info!("ShowContainers: '{}' ({} node(s))", title, nodes.len());
+                let mut containers = ContainersComponent::new(nodes);
+                containers.set_settings(self.settings.containers);
+                containers.set_log_wrap(self.settings.log_wrap);
+                let load = match self.cluster.client() {
+                    Some(client) => {
+                        containers.set_client(client.clone());
+                        true
+                    }
+                    None => {
+                        containers.set_error("Not connected to the cluster".to_string());
+                        false
+                    }
+                };
+                self.show_component(
+                    NavMenuItem::Containers,
+                    ViewComponent::Containers(Box::new(containers)),
+                    load,
+                );
+            }
             Action::ShowNetwork(hostname, address) => {
                 let from_group = self.begin_drill(&hostname);
                 self.leave_view();
@@ -2005,7 +2046,6 @@ impl App {
                 self.leave_view();
                 let mut load = false;
                 let item = match tab {
-                    NodeInfoTab::Containers => NavMenuItem::Containers,
                     NodeInfoTab::Config => NavMenuItem::Config,
                     NodeInfoTab::Extensions => NavMenuItem::Extensions,
                 };
@@ -2310,13 +2350,13 @@ mod tests {
     async fn dashboard_and_hints() {
         let mut app = app_with_view(View::Cluster);
         app.handle_action(Action::ShowHint(
-            NavMenuItem::Containers,
+            NavMenuItem::Config,
             "Select a node".to_string(),
         ))
         .await
         .unwrap();
         assert_eq!(app.view, View::Hint);
-        assert_eq!(app.pane, NavMenuItem::Containers);
+        assert_eq!(app.pane, NavMenuItem::Config);
         assert_eq!(app.hint.as_deref(), Some("Select a node"));
 
         let action = app.dispatch_key(key(KeyCode::Esc)).unwrap();

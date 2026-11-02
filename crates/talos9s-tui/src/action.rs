@@ -24,6 +24,9 @@ pub enum Action {
     /// Show processes for a node: (hostname, address)
     /// Processes of one or more nodes: (title, nodes)
     ShowProcesses(String, Vec<crate::components::ProcessNode>),
+    /// Containers of the selected node, or every node under a header:
+    /// (title, nodes)
+    ShowContainers(String, Vec<crate::components::ProcessNode>),
     /// Show network stats for a node: (hostname, address)
     ShowNetwork(String, String),
     /// Show diagnostics for a node: (hostname, address, role, controlplane_endpoint)
@@ -50,7 +53,7 @@ pub enum Action {
         Vec<crate::components::GroupNode>,
         Option<String>,
     ),
-    /// Containers, machine config or extensions of a node: (hostname,
+    /// Machine config or extensions of a node: (hostname,
     /// address, tab to open)
     ShowNodeInfo(String, String, crate::components::NodeInfoTab),
     /// A node's KubeSpan peers: (hostname, address)

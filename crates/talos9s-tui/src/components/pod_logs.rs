@@ -123,6 +123,10 @@ pub struct LogPane {
     current_match: Option<usize>,
     /// Why the external viewer (`v`) failed
     viewer_problem: Option<String>,
+    /// For sources read through the Talos API (`LogSource::talos`)
+    talos: Option<talos_rs::TalosClient>,
+    /// Where the pane was last drawn, for the mouse wheel
+    area: Rect,
 }
 
 impl LogPane {
@@ -144,6 +148,50 @@ impl LogPane {
         self.read = None;
         self.scroll = None;
         self.pending = Some(Instant::now());
+    }
+
+    /// The wheel over the pane scrolls it (3 lines); scrolled back to the
+    /// end it follows again. Whether the event was the pane's.
+    pub fn handle_mouse(&mut self, mouse: &crossterm::event::MouseEvent) -> bool {
+        use crossterm::event::MouseEventKind;
+        let delta: isize = match mouse.kind {
+            MouseEventKind::ScrollUp => -3,
+            MouseEventKind::ScrollDown => 3,
+            _ => return false,
+        };
+        let a = self.area;
+        if mouse.column < a.x
+            || mouse.column >= a.right()
+            || mouse.row < a.y
+            || mouse.row >= a.bottom()
+        {
+            return false;
+        }
+        self.scroll_lines(delta);
+        true
+    }
+
+    /// Scroll by `delta` lines; back at the end it follows again
+    pub fn scroll_lines(&mut self, delta: isize) {
+        let count = self.visible().len();
+        let last = count.saturating_sub(self.height.max(1));
+        let top = self.scroll.unwrap_or(last);
+        let moved = top.saturating_add_signed(delta).min(last);
+        self.scroll = (moved < last).then_some(moved);
+    }
+
+    /// Whether the mouse event is over the pane
+    pub fn contains(&self, mouse: &crossterm::event::MouseEvent) -> bool {
+        let a = self.area;
+        mouse.column >= a.x
+            && mouse.column < a.right()
+            && mouse.row >= a.y
+            && mouse.row < a.bottom()
+    }
+
+    /// The Talos client for sources read through the Talos API
+    pub fn set_talos_client(&mut self, client: talos_rs::TalosClient) {
+        self.talos = Some(client);
     }
 
     pub fn previous(&self) -> bool {
@@ -193,14 +241,17 @@ impl LogPane {
         self.pending = None;
         self.last_read = Some(Instant::now());
         self.generation += 1;
-        let Some(client) = client.cloned() else {
+        let kube = client.cloned();
+        let talos = self.talos.clone();
+        let needs_kube = self.sources.iter().any(|s| s.talos.is_none());
+        if needs_kube && kube.is_none() {
             self.read = Some(Read {
                 lines: Vec::new(),
                 failed: vec!["Not connected to Kubernetes".to_string()],
                 skipped: 0,
             });
             return;
-        };
+        }
         let sources: Vec<LogSource> = self
             .sources
             .iter()
@@ -214,15 +265,48 @@ impl LogPane {
         let generation = self.generation;
         tokio::spawn(async move {
             let reads = sources.iter().map(|s| {
-                let api: Api<Pod> = Api::namespaced(client.clone(), &s.namespace);
-                let params = LogParams {
-                    container: Some(s.container.clone()),
-                    previous,
-                    tail_lines: Some(tail),
-                    timestamps: true,
-                    ..Default::default()
-                };
-                async move { api.logs(&s.pod, &params).await }
+                let kube = kube.clone();
+                let talos = talos.clone();
+                async move {
+                    if let Some(target) = &s.talos {
+                        // CRI lines carry their time; services' lines don't
+                        let Some(talos) = talos else {
+                            return Err("Not connected to the cluster".to_string());
+                        };
+                        let tail = i32::try_from(tail).unwrap_or(i32::MAX);
+                        return talos
+                            .with_node(&target.address)
+                            .container_logs(target.kind, &target.id, tail)
+                            .await
+                            .map(|text| {
+                                use talos9s_core::pod_logs::{service_time, strip_cri};
+                                let system = target.kind == talos_rs::ContainerKind::System;
+                                text.lines()
+                                    .map(|l| {
+                                        if system {
+                                            service_time(l)
+                                        } else {
+                                            strip_cri(l)
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .map_err(|e| e.to_string());
+                    }
+                    let Some(kube) = kube else {
+                        return Err("Not connected to Kubernetes".to_string());
+                    };
+                    let api: Api<Pod> = Api::namespaced(kube, &s.namespace);
+                    let params = LogParams {
+                        container: Some(s.container.clone()),
+                        previous,
+                        tail_lines: Some(tail),
+                        timestamps: true,
+                        ..Default::default()
+                    };
+                    api.logs(&s.pod, &params).await.map_err(|e| e.to_string())
+                }
             });
             let results =
                 tokio::time::timeout(WORKLOADS_FETCH_TIMEOUT, futures::future::join_all(reads))
@@ -234,7 +318,7 @@ impl LogPane {
                     for (source, result) in sources.iter().zip(results) {
                         match result {
                             Ok(text) => texts.push((source.label.clone(), text)),
-                            Err(e) => failed.push(failure(source, &e.to_string())),
+                            Err(e) => failed.push(failure(source, &e)),
                         }
                     }
                 }
@@ -457,6 +541,7 @@ impl LogPane {
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         self.poll();
+        self.area = area;
         let dim = Style::default().dim();
         let block = Block::default().borders(Borders::TOP);
         let inner = block.inner(area);
@@ -715,6 +800,7 @@ mod tests {
             container: "app".into(),
             label: pod.into(),
             has_previous: true,
+            talos: None,
         }
     }
 
@@ -769,6 +855,43 @@ mod tests {
             .map(|s| s.content.to_string())
             .collect();
         assert!(text.ends_with("ERR Error: connection refused"), "{text}");
+    }
+
+    /// The wheel over the pane scrolls it, elsewhere it doesn't; back at
+    /// the end it follows again
+    #[test]
+    fn wheel_scrolls_over_the_pane() {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let mut pane = LogPane {
+            height: 10,
+            area: Rect::new(0, 20, 80, 11),
+            ..Default::default()
+        };
+        pane.read = Some(Read {
+            lines: (0..50)
+                .map(|i| {
+                    Shown::of(LogLine {
+                        time: None,
+                        source: String::new(),
+                        text: format!("line {i}"),
+                    })
+                })
+                .collect(),
+            failed: Vec::new(),
+            skipped: 0,
+        });
+        let wheel = |kind, row| MouseEvent {
+            kind,
+            column: 5,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(!pane.handle_mouse(&wheel(MouseEventKind::ScrollUp, 5)));
+        assert_eq!(pane.scroll, None);
+        assert!(pane.handle_mouse(&wheel(MouseEventKind::ScrollUp, 25)));
+        assert_eq!(pane.scroll, Some(37));
+        assert!(pane.handle_mouse(&wheel(MouseEventKind::ScrollDown, 25)));
+        assert_eq!(pane.scroll, None, "following again");
     }
 
     /// `2` shows warnings only, `0` all again; a search marks its matches

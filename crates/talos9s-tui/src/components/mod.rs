@@ -3,6 +3,7 @@
 //! Based on the ratatui Component template pattern.
 
 pub mod cluster;
+pub mod containers;
 pub mod diagnostics;
 pub mod etcd;
 pub mod group;
@@ -22,6 +23,7 @@ pub mod wizard;
 pub mod workloads;
 
 pub use cluster::ClusterComponent;
+pub use containers::ContainersComponent;
 pub use diagnostics::DiagnosticsComponent;
 pub use etcd::EtcdComponent;
 pub use group::{GroupComponent, GroupKind, GroupNode};

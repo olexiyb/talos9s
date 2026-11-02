@@ -83,7 +83,7 @@ fn row_id(row: &ListRow) -> Option<String> {
 
 /// Write `text` to `path`, readable by the user only: logs can hold what
 /// the containers printed
-fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -1638,13 +1638,15 @@ impl WorkloadHealthComponent {
         let search = if logs.has_search() {
             [key("<n/N>"), Span::raw(" match  ")]
         } else {
-            [key("</>"), Span::raw(" search  ")]
+            [key("</>"), Span::raw(" find  ")]
         };
         let mut spans = vec![
             key("<Enter>"),
-            Span::raw(" containers  "),
+            Span::raw(" expand  "),
+            key("<PgUp/Dn>"),
+            Span::raw(" scroll  "),
             key("<1-5/0>"),
-            Span::raw(" levels  "),
+            Span::raw(" level  "),
         ];
         spans.extend(search);
         // `<p>` only where a container shown has a previous run
@@ -1657,10 +1659,8 @@ impl WorkloadHealthComponent {
         spans.extend([
             key("<w>"),
             Span::raw(" wrap  "),
-            key("<y>"),
-            Span::raw(" copy  "),
-            key("<v>"),
-            Span::raw(" hl"),
+            key("<y/v>"),
+            Span::raw(" copy/hl"),
         ]);
         Line::from(spans)
     }
@@ -1816,6 +1816,12 @@ impl WorkloadHealthComponent {
 
 impl Component for WorkloadHealthComponent {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        // The wheel over the focused view's logs scrolls them
+        if let Some(focus) = &mut self.focus
+            && focus.logs.handle_mouse(&mouse)
+        {
+            return Ok(None);
+        }
         // A column header of the pod list: sort by it, as `1`-`5`
         if self.pod_mode
             && self.focus.is_none()

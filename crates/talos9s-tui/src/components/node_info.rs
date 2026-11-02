@@ -1,7 +1,5 @@
-//! Node info component - containers, machine config and system extensions
+//! Node info component - machine config and system extensions
 //!
-//! - Containers: Talos system services (containerd `system` namespace) and
-//!   Kubernetes containers (CRI), from the Containers API
 //! - Config: the machine config in effect (`talosctl get machineconfig`),
 //!   read-only, with secrets masked before it is kept or shown
 //! - Extensions: installed system extensions (`talosctl get extensions`)
@@ -20,23 +18,19 @@ use ratatui::{
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use talos_rs::{
-    ContainerInfo, ContainerKind, ExtensionInfo, TalosClient, get_extensions_for_node,
-    get_machine_config_text_for_node,
+    ExtensionInfo, TalosClient, get_extensions_for_node, get_machine_config_text_for_node,
 };
 use talos9s_core::AsyncState;
 
 const AUTO_REFRESH_INTERVAL: std::time::Duration =
     talos9s_core::constants::refresh_intervals::VERY_SLOW;
-/// Upper bound for one Containers call
-const CONTAINERS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Tabs of the node info view
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NodeInfoTab {
     #[default]
-    Containers,
     Config,
     Extensions,
 }
@@ -45,7 +39,7 @@ impl NodeInfoTab {}
 
 /// One value per tab, indexed by the tab
 #[derive(Debug, Clone, Default)]
-pub struct PerTab<T>([T; 3]);
+pub struct PerTab<T>([T; 2]);
 
 impl<T> PerTab<T> {
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
@@ -56,9 +50,8 @@ impl<T> PerTab<T> {
 impl<T> std::ops::Index<NodeInfoTab> for PerTab<T> {
     type Output = T;
     fn index(&self, tab: NodeInfoTab) -> &T {
-        let [containers, config, extensions] = &self.0;
+        let [config, extensions] = &self.0;
         match tab {
-            NodeInfoTab::Containers => containers,
             NodeInfoTab::Config => config,
             NodeInfoTab::Extensions => extensions,
         }
@@ -67,9 +60,8 @@ impl<T> std::ops::Index<NodeInfoTab> for PerTab<T> {
 
 impl<T> std::ops::IndexMut<NodeInfoTab> for PerTab<T> {
     fn index_mut(&mut self, tab: NodeInfoTab) -> &mut T {
-        let [containers, config, extensions] = &mut self.0;
+        let [config, extensions] = &mut self.0;
         match tab {
-            NodeInfoTab::Containers => containers,
             NodeInfoTab::Config => config,
             NodeInfoTab::Extensions => extensions,
         }
@@ -112,8 +104,6 @@ pub struct MaskedConfig {
 /// Loaded node info (wrapped by AsyncState). Each source fails on its own.
 #[derive(Debug, Clone, Default)]
 pub struct NodeInfoData {
-    pub containers: Vec<ContainerInfo>,
-    pub containers_error: Option<String>,
     pub config: Option<MaskedConfig>,
     pub config_error: Option<String>,
     pub extensions: Vec<ExtensionInfo>,
@@ -564,12 +554,10 @@ pub struct NodeInfoComponent {
     node_address: String,
     context: Option<String>,
     config_path: Option<String>,
-    /// Reload the config and extensions on the next refresh, not only the
-    /// containers
+    /// Reload the config and extensions on the next refresh
     reload_all: bool,
     /// Per tab
     queries: PerTab<Query>,
-    containers_table: TableState,
     extensions_table: TableState,
     /// First config line shown, and the first column
     config_scroll: usize,
@@ -603,8 +591,6 @@ impl NodeInfoComponent {
         config_path: Option<String>,
         tab: NodeInfoTab,
     ) -> Self {
-        let mut containers_table = TableState::default();
-        containers_table.select(Some(0));
         let mut extensions_table = TableState::default();
         extensions_table.select(Some(0));
         Self {
@@ -622,7 +608,6 @@ impl NodeInfoComponent {
             config_path,
             reload_all: true,
             queries: Default::default(),
-            containers_table,
             extensions_table,
             config_scroll: 0,
             config_hscroll: 0,
@@ -644,7 +629,7 @@ impl NodeInfoComponent {
         {
             data.config = Some(config);
             data.attempted[NodeInfoTab::Config] = true;
-            // The containers and extensions still load
+            // The extensions still load
             self.reload_all = false;
         }
         self
@@ -671,12 +656,11 @@ impl NodeInfoComponent {
         self.state.data()
     }
 
-    /// Load the open tab's source first, then the others; afterwards reload
-    /// the containers each time, and the config and extensions on `r` or
-    /// after a failure
+    /// Load the open tab's source first, then the other; afterwards reload
+    /// them on `r` or after a failure
     pub async fn refresh(&mut self) -> Result<()> {
         self.state.start_loading();
-        let Some(client) = &self.client else {
+        if self.client.is_none() {
             self.state.set_error("No Talos client configured");
             return Ok(());
         };
@@ -688,7 +672,6 @@ impl NodeInfoComponent {
                 return tab == self.tab;
             }
             match tab {
-                NodeInfoTab::Containers => true,
                 NodeInfoTab::Config => {
                     self.reload_all
                         || data.config_error.is_some()
@@ -701,30 +684,9 @@ impl NodeInfoComponent {
                 }
             }
         };
-        let (want_containers, want_config, want_extensions) = (
-            want(NodeInfoTab::Containers),
-            want(NodeInfoTab::Config),
-            want(NodeInfoTab::Extensions),
-        );
+        let (want_config, want_extensions) =
+            (want(NodeInfoTab::Config), want(NodeInfoTab::Extensions));
 
-        let containers = async {
-            if !want_containers {
-                return None;
-            }
-            let (system, kubernetes) = tokio::join!(
-                tokio::time::timeout(CONTAINERS_TIMEOUT, client.containers(ContainerKind::System)),
-                tokio::time::timeout(
-                    CONTAINERS_TIMEOUT,
-                    client.containers(ContainerKind::Kubernetes)
-                ),
-            );
-            let flatten = |r: std::result::Result<_, _>| match r {
-                Ok(Ok(list)) => Ok(list),
-                Ok(Err(e)) => Err(format!("{e}")),
-                Err(_) => Err(format!("timed out after {}s", CONTAINERS_TIMEOUT.as_secs())),
-            };
-            Some((flatten(system), flatten(kubernetes)))
-        };
         let context = self.context.as_deref();
         let config_path = self.config_path.as_deref();
         let node = self.node_address.as_str();
@@ -742,30 +704,8 @@ impl NodeInfoComponent {
                 None
             }
         };
-        let (containers, config, extensions) = tokio::join!(containers, config, extensions);
+        let (config, extensions) = tokio::join!(config, extensions);
 
-        // Kubernetes containers are missing on a node without kubelet; the
-        // system ones alone still make the tab useful
-        if let Some((system, kubernetes)) = containers {
-            match (system, kubernetes) {
-                (Ok(mut system), Ok(kubernetes)) => {
-                    system.extend(kubernetes);
-                    data.containers = system;
-                    data.containers_error = None;
-                }
-                (Ok(system), Err(e)) => {
-                    data.containers = system;
-                    data.containers_error = Some(format!("Kubernetes containers: {e}"));
-                }
-                (Err(e), Ok(kubernetes)) => {
-                    data.containers = kubernetes;
-                    data.containers_error = Some(format!("System containers: {e}"));
-                }
-                (Err(e), Err(_)) => data.containers_error = Some(e),
-            }
-            sort_containers(&mut data.containers);
-            data.attempted[NodeInfoTab::Containers] = true;
-        }
         if let Some(config) = config {
             match config {
                 Ok(config) => {
@@ -816,25 +756,6 @@ impl NodeInfoComponent {
 
     fn query_mut(&mut self) -> &mut Query {
         &mut self.queries[self.tab]
-    }
-
-    /// Containers shown: pod sandboxes left out, filtered
-    fn visible_containers(&self) -> Vec<&ContainerInfo> {
-        let filter = self.queries[NodeInfoTab::Containers].text.to_lowercase();
-        self.data()
-            .map(|d| {
-                d.containers
-                    .iter()
-                    .filter(|c| !c.sandbox)
-                    .filter(|c| {
-                        filter.is_empty()
-                            || [&c.id, &c.pod, &c.name, &c.image, &c.status]
-                                .iter()
-                                .any(|f| f.to_lowercase().contains(&filter))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     fn visible_extensions(&self) -> Vec<&ExtensionInfo> {
@@ -904,10 +825,6 @@ impl NodeInfoComponent {
             table.select(Some(i.min(len - 1)));
         };
         match self.tab {
-            NodeInfoTab::Containers => {
-                let len = self.visible_containers().len();
-                step(&mut self.containers_table, len);
-            }
             NodeInfoTab::Extensions => {
                 let len = self.visible_extensions().len();
                 step(&mut self.extensions_table, len);
@@ -974,98 +891,6 @@ impl NodeInfoComponent {
             .style(Style::default().fg(Color::Red))
             .block(block);
         frame.render_widget(text, area);
-    }
-
-    fn draw_containers(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(data) = self.data() else {
-            return;
-        };
-        let (mut running, mut exited) = (0, 0);
-        for c in data.containers.iter().filter(|c| !c.sandbox) {
-            if c.status.ends_with("RUNNING") {
-                running += 1;
-            } else if c.status.ends_with("EXITED") {
-                exited += 1;
-            }
-        }
-        let error = data.containers_error.clone();
-        let visible = self.visible_containers();
-        let header = Row::new(
-            ["NAMESPACE", "POD", "CONTAINER", "IMAGE", "PID", "STATUS"]
-                .map(|h| Cell::from(h).style(Style::default().add_modifier(Modifier::BOLD))),
-        );
-        let rows: Vec<Row> = visible
-            .iter()
-            .map(|c| {
-                let (namespace, pod) = match c.kind {
-                    ContainerKind::System => ("system", ""),
-                    ContainerKind::Kubernetes => {
-                        c.pod.split_once('/').unwrap_or(("", c.pod.as_str()))
-                    }
-                };
-                let name = if c.kind == ContainerKind::System {
-                    c.id.as_str()
-                } else {
-                    c.name.as_str()
-                };
-                let status = c
-                    .status
-                    .strip_prefix("CONTAINER_")
-                    .unwrap_or(&c.status)
-                    .to_string();
-                let color = if c.status.ends_with("RUNNING") {
-                    Color::Green
-                } else if c.status.ends_with("EXITED") {
-                    // Finished jobs and init containers exit normally
-                    Color::DarkGray
-                } else {
-                    Color::Yellow
-                };
-                Row::new(vec![
-                    Cell::from(namespace.to_string()),
-                    Cell::from(pod.to_string()),
-                    Cell::from(name.to_string()),
-                    Cell::from(c.image.clone()),
-                    Cell::from(if c.pid == 0 {
-                        String::new()
-                    } else {
-                        c.pid.to_string()
-                    }),
-                    Cell::from(status).style(Style::default().fg(color)),
-                ])
-            })
-            .collect();
-        let mut title = format!(" Containers: {running} running, {exited} exited ");
-        let filter = &self.queries[NodeInfoTab::Containers].text;
-        if !filter.is_empty() {
-            let _ = write!(title, "· {} match \"{filter}\" ", visible.len());
-        }
-        if let Some(e) = &error {
-            let _ = write!(title, "· {e} ");
-        }
-        let widths = [
-            Constraint::Length(20),
-            Constraint::Percentage(28),
-            Constraint::Percentage(18),
-            Constraint::Min(20),
-            Constraint::Length(8),
-            Constraint::Length(14),
-        ];
-        let table = Table::new(rows, widths)
-            .header(header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .title_style(Style::default().fg(if error.is_some() {
-                        Color::Yellow
-                    } else {
-                        Color::Cyan
-                    })),
-            )
-            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        frame.render_stateful_widget(table, area, &mut self.containers_table);
-        self.content_area = area;
     }
 
     fn draw_config(&mut self, frame: &mut Frame, area: Rect) {
@@ -1349,19 +1174,6 @@ impl NodeInfoComponent {
     }
 }
 
-/// Containers in a stable order: system services, then Kubernetes ones by
-/// pod and name
-fn sort_containers(containers: &mut [ContainerInfo]) {
-    containers.sort_by(|a, b| {
-        let kind = |c: &ContainerInfo| c.kind == ContainerKind::Kubernetes;
-        kind(a)
-            .cmp(&kind(b))
-            .then_with(|| a.pod.cmp(&b.pod))
-            .then_with(|| a.name.cmp(&b.name))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-}
-
 /// A config line colored: keys, comments, document separators, masked values
 fn config_spans(text: &str, masked: bool) -> Vec<Span<'static>> {
     let trimmed = text.trim_start();
@@ -1446,16 +1258,8 @@ impl Component for NodeInfoComponent {
                 if !at(&area) || mouse.row < area.y + 2 {
                     return Ok(None);
                 }
-                let (table, len) = match self.tab {
-                    NodeInfoTab::Containers => {
-                        let len = self.visible_containers().len();
-                        (&mut self.containers_table, len)
-                    }
-                    _ => {
-                        let len = self.visible_extensions().len();
-                        (&mut self.extensions_table, len)
-                    }
-                };
+                let len = self.visible_extensions().len();
+                let table = &mut self.extensions_table;
                 let row = table.offset() + (mouse.row - area.y - 2) as usize;
                 if row < len {
                     table.select(Some(row));
@@ -1496,7 +1300,6 @@ impl Component for NodeInfoComponent {
                 TextEdit::Changed | TextEdit::Ignored => {}
             }
             // The list shrinks as the filter narrows
-            self.containers_table.select(Some(0));
             self.extensions_table.select(Some(0));
             return Ok(None);
         }
@@ -1580,12 +1383,11 @@ impl Component for NodeInfoComponent {
             );
             return Ok(());
         }
-        // Containers, Machine config and Extensions are separate menu
+        // Machine config and Extensions are separate menu
         // entries: no tab bar, and the window title names the node
         let attempted = self.data().is_some_and(|d| d.attempted[self.tab]);
         if !attempted {
             let what = match self.tab {
-                NodeInfoTab::Containers => "containers",
                 NodeInfoTab::Config => "machine config",
                 NodeInfoTab::Extensions => "extensions",
             };
@@ -1605,7 +1407,6 @@ impl Component for NodeInfoComponent {
             );
         } else {
             match self.tab {
-                NodeInfoTab::Containers => self.draw_containers(frame, area),
                 NodeInfoTab::Config => self.draw_config(frame, area),
                 NodeInfoTab::Extensions => self.draw_extensions(frame, area),
             }
@@ -1848,28 +1649,5 @@ auth: bWU6aHVudGVyMg==
         let (lines, hidden) = masked(config);
         assert_eq!(lines.join("\n") + "\n", config);
         assert_eq!(hidden, 0);
-    }
-
-    #[test]
-    fn orders_system_containers_first() {
-        let container = |kind, pod: &str, name: &str| ContainerInfo {
-            kind,
-            id: name.to_string(),
-            name: name.to_string(),
-            pod: pod.to_string(),
-            sandbox: false,
-            image: String::new(),
-            pid: 1,
-            status: "RUNNING".to_string(),
-        };
-        let mut list = vec![
-            container(ContainerKind::Kubernetes, "kube-system/b", "x"),
-            container(ContainerKind::System, "", "trustd"),
-            container(ContainerKind::Kubernetes, "kube-system/a", "y"),
-            container(ContainerKind::System, "", "apid"),
-        ];
-        sort_containers(&mut list);
-        let names: Vec<&str> = list.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["apid", "trustd", "y", "x"]);
     }
 }

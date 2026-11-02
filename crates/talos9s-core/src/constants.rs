@@ -50,6 +50,9 @@ pub const SYN_SENT_WARN: usize = 50;
 /// A pod Pending for less than this is being scheduled or pulled, not stuck
 pub const POD_PENDING_GRACE_SECS: i64 = 120;
 
+/// Upper bound for one node's Containers call (system and Kubernetes)
+pub const CONTAINERS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Upper bound for the Workloads view's lists, fetched together (every pod of
 /// a busy cluster is several MB)
 pub const WORKLOADS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);

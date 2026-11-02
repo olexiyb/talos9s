@@ -1,6 +1,6 @@
 # Design: Workloads view rework
 
-Status: draft for review · Author: Olexiy Buyanskyy · 2026-11-02
+Status: built (steps 1–5, 7); step 6 dropped · Author: Olexiy Buyanskyy · 2026-11-02
 
 ## Summary
 
@@ -42,9 +42,10 @@ pod to its node's Talos state, logs and storage.
 2. Show why for the selected row without leaving the view: replicas,
    conditions, its pods with node and state, the latest event of each failing
    pod.
-3. Make a node that many failures share obvious at a glance.
-4. Jump from a failure to its node in the tree, and to that node's kubelet
-   logs.
+3. Make a node that many failures share obvious at a glance (the NODES
+   column; the pod list sorted by node).
+4. Read a failing workload's logs without leaving the view: all its pods
+   merged, one pod, or one container.
 5. Keep working when part of the data can't be read: that part says unknown
    or shows its error, the rest stays.
 
@@ -59,78 +60,92 @@ pod to its node's Talos state, logs and storage.
 ## Layout
 
 ```
-┌ Workloads · bc ─────────────────────────────────────────────────────────────┐
-│ Deploy 41/42 · StatefulSet 12/12 · DaemonSet 9/10 · Pods 3 failing           │
-│                                                                              │
+┌ Workloads · bc · ns web* ───────────────────────────────────────────────────┐
+│ Deploy 41/42 · StatefulSet 12/12 · DaemonSet 9/10 · Pods 3 failing     <W>   │
 │   KIND    NAMESPACE   NAME              READY   NODES        ISSUE           │
 │ ● Deploy  api         gateway           1/3     bc3 +1       2 not ready     │
+│     ● Pod gateway-7f9c-x2               0/1     bc3          CrashLoopBackOff│
 │ ● DS      kube-system cilium            3/4     bc3          1 not ready     │
-│ ● Pod     api         gateway-7f9c-x2   0/1     bc3          CrashLoopBackOff│
 │ ● Pod     media       transcoder-0      -       -            Pending 12m     │
 │ ─────────────────────────────────────────────────────────────────────────── │
 │ Deploy api/gateway · 1/3 ready · Progressing: ReplicaSetUpdated              │
-│   POD               NODE  STATE              RESTARTS  LAST EVENT            │
-│ ● gateway-7f9c-x2   bc3   CrashLoopBackOff   14        Back-off restarting   │
-│ ● gateway-7f9c-k8   bc4   Running, not ready 0         Readiness probe failed│
-│ ● gateway-7f9c-p1   bc1   Running            0                               │
+│   gateway-7f9c-x2  bc3  CrashLoopBackOff  14  Back-off restarting failed     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Summary line
 
-Ready/total per kind and the count of failing pods. Counts the view computes
-today, shown first, so a healthy cluster reads as healthy in one line.
+Ready/total per kind and the count of failing pods, so a healthy cluster
+reads as healthy in one line. A list that failed shows its error here
+("StatefulSets: forbidden"); the rest of the view works. The warp hint
+(`<W>`) is drawn at the right end.
 
 ### The list
 
-- Rows: unhealthy Deployments, StatefulSets and DaemonSets, and problem pods
-  (the current `PodIssue` classification). Worst first (failing, degraded),
-  then namespace, then name.
-- `A` shows healthy workloads too (`a` stays auto-refresh, as in every
-  view; `A` is "show all" there), saved in `state.yaml`.
-- `/` filters on namespace, name and node. `S` groups the rows under
-  namespace sections, the current layout for those who want it (`N` is
-  the previous match after `/` in other views).
-- A pod owned by a listed workload is shown under it (indented), not as a
-  separate top-level row, so one broken Deployment is one entry.
+- Rows: unhealthy Deployments, StatefulSets and DaemonSets and problem pods,
+  worst first, then namespace, then name. A pod owned by a listed workload
+  is indented under it, so one broken Deployment is one entry.
+- `A` shows healthy workloads too; `S` groups rows under namespace
+  sections; `/` filters on namespace, name and node. `A` and `S` are saved
+  in `state.yaml`.
+- `P` swaps the list for every pod (saved): NAMESPACE, NAME, READY, NODE,
+  HEALTH, RESTARTS, AGE, OWNER. `1`-`8` sort by the column in that order, a
+  click on a header too. The sort is saved.
+  Sorted by NODE it answers "one bad node" at a glance.
+- `W` warps into namespaces: one, several (`Space` marks), or a prefix
+  (`web*`); `0` all, `1`-`4` the recent warps. Kept per talosconfig
+  context, shared with the Volumes view (`namespace_picker.rs`).
 
 ### NODES column
 
 - On an unhealthy workload: the nodes of its not-ready pods, sorted, cut to
   `bc3 +1` when narrow, in the health color.
-- On a healthy workload: the nodes its pods run on, dimmed. (First drafted
-  as empty; an all-healthy cluster then showed an empty column.)
-- On a pod: its `spec.nodeName`.
-- `-` for a pod that isn't scheduled (Pending without a node). Never a
-  guess.
+- On a healthy workload: the nodes its pods run on, dimmed.
+- On a pod: its `spec.nodeName`; `-` when it isn't scheduled. Never a guess.
 - Unknown (`?`) for Deployments when ReplicaSets couldn't be read, since
   their pods can't be tied to them.
 
 ### Detail pane
 
-For the selected row, below the list, in the lower part of the view:
+Below the list, for the selected row:
 
-- Workload: kind, name, ready/desired, its conditions from status (e.g.
-  `Progressing: ReplicaSetUpdated`, `Available: False`), then its pods with
-  node, state, restarts and the latest event of each failing pod.
+- Workload: kind, name, ready/desired, its false conditions (e.g.
+  `Available: False`), then its pods with node, state, restarts and the
+  latest event of each failing pod.
 - Pod: phase, each container's state and last termination (reason, exit
   code, when), node, and its latest event.
-- Copied commands (`y`, as in the etcd, Processes and Volumes views): `kubectl -n NS describe pod NAME`, `kubectl -n NS
-  logs NAME --previous`, `kubectl -n NS rollout status deploy/NAME`.
+- `y` copies the matching commands: `kubectl -n NS describe pod NAME`,
+  `kubectl -n NS logs NAME --previous`, `kubectl -n NS rollout status
+  deploy/NAME`.
 
-### Node grid
+### Focused workload (Enter)
 
-`M` (map, Headlamp's name for it) swaps the list for a grid of the unhealthy workloads by node, built like
-the services grid on the cluster dashboard
-(`components/cluster/group_table.rs`): one row per workload, one column per
-node, a dot per pod colored by state. Three workloads failing only in the
-`bc3` column is the "one bad node" answer.
+Enter on a workload focuses it: the list shows only it and its pods, and
+the lower pane shows logs instead of the detail. Esc returns to the list
+with the selection, filter and warp where they were.
 
-### Jumps
+- The logs follow the selected row: the workload merges all its pods; a pod
+  merges its containers (Enter lists them, init containers too); a
+  container shows its own. Lines are merged by timestamp, at most
+  `POD_LOG_SOURCES_MAX` containers and `POD_LOG_TOTAL_LINES` lines, read
+  again every `POD_LOG_FOLLOW_INTERVAL` while following the end.
+- Init containers that finished OK are left out of the merged logs; listed
+  on their own they show their logs.
+- `p` shows the previous run, offered only when a container restarted.
+- Level filters and `/` search with `n`/`N`, as in the Logs view; `w` wrap
+  (one setting with the Logs view, saved); `y` copies the lines.
+- `v` opens the lines in an external viewer (`TALOS9S_LOG_VIEWER`,
+  default `hl --allow-prefix`), through a private temp file removed after.
 
-- `L` on a pod: open its node's kubelet and containerd logs (the Logs view,
-  those services selected).
-- Esc: back to the tree, as today.
+### Dropped
+
+- **Node grid (`M`)**: a grid of unhealthy workloads by node. The NODES
+  column, the pod list sorted by NODE and the focused view answer the same
+  question.
+- **Jumps**: Enter selecting the pod's node in the tree, and `L` opening its
+  kubelet logs. Moving the selection replaced the view being read, and
+  kubelet logs rarely explain a failing pod better than its own logs and
+  events.
 
 ## Data
 
@@ -178,13 +193,17 @@ those nodes' pods. The node grid shows only the scoped nodes.
 ## Implementation steps
 
 1. talos9s-core: workload/pod classification and the pod → workload → nodes
-   mapping, with tests (moved from `workloads.rs`, unchanged behavior).
-2. Per-list results, ReplicaSets at cluster level, timeout in constants.
-3. The flat list with the NODES column, `a`, `/`, `S`.
-4. The detail pane, events for failing pods, copied commands. (Done: events per pod by UID, at most `WORKLOAD_EVENTS_MAX`, in their own `WORKLOADS_EVENTS_TIMEOUT` after the lists.)
-5. Pods and their logs. (Done: Enter focuses a workload: the list shows it and its pods, the logs pane below the merged logs of the selected row: all pods, one pod's containers, or one container (Enter on a pod lists them). At most `POD_LOG_SOURCES_MAX` containers, `POD_LOG_TOTAL_LINES` shared, read again every `POD_LOG_FOLLOW_INTERVAL` while following. Selecting the node and its kubelet logs were dropped.)
-6. The node grid (`M`).
-7. README: the Workloads row and keys.
+   mapping, with tests (moved from `workloads.rs`, unchanged behavior). (Done)
+2. Per-list results, ReplicaSets at cluster level, timeout in constants. (Done)
+3. The flat list with the NODES column, `A`, `/`, `S`. (Done)
+4. The detail pane, events for failing pods, copied commands. Events are
+   read per pod by UID, at most `WORKLOAD_EVENTS_MAX`, in their own
+   `WORKLOADS_EVENTS_TIMEOUT` after the lists. (Done)
+5. The focused workload and its logs. (Done)
+6. The node grid. (Dropped)
+7. README: the Workloads row and keys. (Done)
+8. Added on the way: the pod list (`P`), namespace warp (`W`), sorting by
+   every column. (Done)
 
 Each step is usable on its own; 1–3 already answer "where".
 
@@ -209,9 +228,15 @@ Each step is usable on its own; 1–3 already answer "where".
 - The same list → detail shape for the Volumes view.
 - PodDisruptionBudgets in the detail pane (Lifecycle reads them already).
 
-## Open questions
+## Decided
 
-1. Detail pane below the list, or to the right on wide terminals?
-2. Should `a` (show healthy) be remembered in the state file, like other
-   view toggles?
-3. Is the grid worth it next to the NODES column, or later?
+1. The detail pane is below the list (the logs need the width).
+2. `A`, `S`, `P`, the pod sort and the warp are remembered in `state.yaml`.
+3. No node grid (see Dropped).
+
+## Still open
+
+- Finished Job pods count as not ready in the READY sort; should they rank
+  as ready?
+- The live failure test (a bad image tag on a test Deployment) hasn't been
+  done: bc has no broken workloads.

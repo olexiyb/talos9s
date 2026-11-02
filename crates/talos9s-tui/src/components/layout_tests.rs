@@ -54,6 +54,17 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
             )),
         ),
         (
+            "containers",
+            Box::new(ContainersComponent::new(
+                ["bc1", "bc2"]
+                    .map(|n| ProcessNode {
+                        hostname: n.into(),
+                        address: a.clone(),
+                    })
+                    .to_vec(),
+            )),
+        ),
+        (
             "node info",
             Box::new(NodeInfoComponent::new(
                 h,

@@ -17,6 +17,50 @@ pub struct LogSource {
     /// The container has a previous run to read (`--previous`): the kubelet
     /// keeps the last terminated one only
     pub has_previous: bool,
+    /// Read through the Talos API instead (the Containers view)
+    pub talos: Option<TalosLog>,
+}
+
+/// A container whose logs are read through the Talos API, from its node
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TalosLog {
+    /// The node's Talos API address
+    pub address: String,
+    pub kind: talos_rs::ContainerKind,
+    /// A service's name, or the CRI container id (`ns/pod:container:id`)
+    pub id: String,
+}
+
+/// A Talos service's line (`2026/11/02 19:23:47.196236 text`, UTC) with
+/// its time in RFC 3339, so it is shown and merged like the others; other
+/// lines unchanged
+pub fn service_time(line: &str) -> std::borrow::Cow<'_, str> {
+    let mut parts = line.splitn(3, ' ');
+    if let (Some(date), Some(time)) = (parts.next(), parts.next())
+        && let Ok(t) =
+            chrono::NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y/%m/%d %H:%M:%S%.f")
+    {
+        let rest = parts.next().unwrap_or_default();
+        return format!(
+            "{} {rest}",
+            t.and_utc()
+                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+        )
+        .into();
+    }
+    line.into()
+}
+
+/// A CRI log line (`<RFC 3339> stdout F text`) as the Kubernetes API gives
+/// it with `timestamps=true` (`<RFC 3339> text`); other lines unchanged
+pub fn strip_cri(line: &str) -> std::borrow::Cow<'_, str> {
+    let mut parts = line.splitn(4, ' ');
+    if let (Some(time), Some("stdout" | "stderr"), Some("F" | "P"), rest) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    {
+        return format!("{time} {}", rest.unwrap_or_default()).into();
+    }
+    line.into()
 }
 
 /// A merged line
@@ -80,6 +124,7 @@ pub fn log_sources(pods: &[&PodFacts], container: Option<&str>) -> Vec<LogSource
                 container: c.name.clone(),
                 label,
                 has_previous: c.last_terminated.is_some(),
+                talos: None,
             });
         }
     }
@@ -179,6 +224,22 @@ mod tests {
         assert!(log_sources(&[&restarted], None)[0].has_previous);
         assert_eq!(tail_per_source(4, 1000), 250);
         assert_eq!(tail_per_source(40, 1000), 50);
+    }
+
+    #[test]
+    fn cri_lines() {
+        assert_eq!(
+            strip_cri("2026-11-02T19:04:49.23Z stderr F {\"level\":\"info\"}"),
+            "2026-11-02T19:04:49.23Z {\"level\":\"info\"}"
+        );
+        assert_eq!(
+            strip_cri("2026-11-02T19:04:49Z stdout F"),
+            "2026-11-02T19:04:49Z "
+        );
+        assert_eq!(
+            strip_cri("2026/11/02 19:10:05 apid line"),
+            "2026/11/02 19:10:05 apid line"
+        );
     }
 
     #[test]
