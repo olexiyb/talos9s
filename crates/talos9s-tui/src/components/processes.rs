@@ -490,7 +490,9 @@ impl ProcessesComponent {
                 fetch.cpu_count.get_or_insert(basics.cpu_count);
                 fetch.load_avg.get_or_insert(basics.load);
             }
-            let stats = &mut data.nodes[idx];
+            let Some(stats) = data.nodes.get_mut(idx) else {
+                continue;
+            };
             if let Some(meminfo) = fetch.meminfo {
                 stats.total_memory = meminfo.mem_total;
                 stats.memory_used = meminfo.mem_total.saturating_sub(meminfo.mem_available);
@@ -537,7 +539,11 @@ impl ProcessesComponent {
                     let e = if self.multi_node() {
                         e
                     } else {
-                        format!("{} (node: {})", e, self.nodes[idx].address)
+                        format!(
+                            "{} (node: {})",
+                            e,
+                            self.nodes.get(idx).map_or("?", |n| n.address.as_str())
+                        )
                     };
                     stats.error = Some(e);
                     // Keep this node's last known processes and CPU figures
@@ -708,7 +714,9 @@ impl ProcessesComponent {
         });
 
         for &idx in &data.filtered_indices {
-            let proc = &data.processes[idx];
+            let Some(proc) = data.processes.get(idx) else {
+                continue;
+            };
 
             // If subtree mode, skip processes not in the subtree
             if let Some(ref desc) = descendants
@@ -764,7 +772,8 @@ impl ProcessesComponent {
                 });
 
                 // Process children
-                if let Some(children) = children_map.get(&processes[idx].key()) {
+                if let Some(children) = processes.get(idx).and_then(|p| children_map.get(&p.key()))
+                {
                     let mut child_ancestors = ancestors_have_siblings.clone();
                     child_ancestors.push(!is_last);
                     add_tree_entries(
@@ -1345,11 +1354,11 @@ impl ProcessesComponent {
             block.inner(area)
         };
 
-        let detail_chunks = Layout::vertical([
+        let [cmd_area, stats_area] = Layout::vertical([
             Constraint::Min(3),    // Command (wrapped)
             Constraint::Length(2), // Stats lines (now 2 lines)
         ])
-        .split(inner_area);
+        .areas(inner_area);
 
         // Draw the block border
         let block = Block::default().title(title).borders(Borders::TOP);
@@ -1359,7 +1368,7 @@ impl ProcessesComponent {
         let cmd_para = Paragraph::new(full_cmd)
             .style(Style::default().fg(Color::White))
             .wrap(Wrap { trim: false });
-        frame.render_widget(cmd_para, detail_chunks[0]);
+        frame.render_widget(cmd_para, cmd_area);
 
         // Stats lines
         let stats_line1 = Line::from(vec![
@@ -1388,7 +1397,7 @@ impl ProcessesComponent {
             Span::styled("[y] yank", Style::default().fg(Color::DarkGray)),
         ]);
         let stats_para = Paragraph::new(vec![stats_line1, stats_line2]);
-        frame.render_widget(stats_para, detail_chunks[1]);
+        frame.render_widget(stats_para, stats_area);
     }
 
     /// Draw the footer with keybindings
@@ -1542,7 +1551,14 @@ impl Component for ProcessesComponent {
         let has_warning = !warnings.is_empty();
         let warning_height = if has_warning { 1 } else { 0 };
 
-        let chunks = Layout::vertical([
+        let [
+            header_area,
+            summary_area,
+            warning_area,
+            filter_area,
+            table_area,
+            detail_area,
+        ] = Layout::vertical([
             Constraint::Length(1),              // Header
             Constraint::Length(1),              // Summary bar
             Constraint::Length(warning_height), // Warning (if any)
@@ -1550,22 +1566,22 @@ impl Component for ProcessesComponent {
             Constraint::Min(5),                 // Process table
             Constraint::Length(7),              // Detail section (increased for wrapped cmd)
         ])
-        .split(area);
+        .areas(area);
 
-        self.draw_header(frame, chunks[0]);
-        self.draw_summary_bar(frame, chunks[1]);
+        self.draw_header(frame, header_area);
+        self.draw_summary_bar(frame, summary_area);
 
         if has_warning {
-            self.draw_warning(frame, chunks[2], &warnings);
+            self.draw_warning(frame, warning_area, &warnings);
         }
 
         // Filter bar or spacer
         if self.mode == Mode::Filtering || self.filter.is_some() {
-            self.draw_filter_bar(frame, chunks[3]);
+            self.draw_filter_bar(frame, filter_area);
         }
 
-        self.draw_process_table(frame, chunks[4]);
-        self.draw_detail_section(frame, chunks[5]);
+        self.draw_process_table(frame, table_area);
+        self.draw_detail_section(frame, detail_area);
 
         Ok(())
     }

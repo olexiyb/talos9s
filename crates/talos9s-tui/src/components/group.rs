@@ -143,6 +143,15 @@ pub struct GroupComponent {
 /// Interfaces hidden by default: loopback, the per-pod ends of the CNI (one
 /// per pod, so they would bury the node interfaces) and kernel stubs that
 /// never carried traffic (dummy0, sit0, tunl0, ...)
+impl GroupData {
+    /// Results come back one per node, so `i` is in range; a stray one is dropped
+    fn set_node_error(&mut self, i: usize, error: String) {
+        if let Some(slot) = self.node_errors.get_mut(i) {
+            *slot = Some(error);
+        }
+    }
+}
+
 fn is_hidden_iface(row: &IfaceRow) -> bool {
     row.name == "lo"
         || ["veth", "lxc", "cali"]
@@ -204,7 +213,9 @@ fn status_counts(checks: &[DiagnosticCheck]) -> [usize; 4] {
             CheckStatus::Fail => 2,
             CheckStatus::Unknown | CheckStatus::Checking => 3,
         };
-        counts[slot] += 1;
+        if let Some(count) = counts.get_mut(slot) {
+            *count += 1;
+        }
     }
     counts
 }
@@ -388,9 +399,9 @@ impl GroupComponent {
             }
         });
         data.diagnostics = futures::future::join_all(runs).await;
-        for (i, result) in data.diagnostics.iter().enumerate() {
+        for (slot, result) in data.node_errors.iter_mut().zip(&data.diagnostics) {
             if let Err(e) = result {
-                data.node_errors[i] = Some(e.clone());
+                *slot = Some(e.clone());
             }
         }
     }
@@ -423,14 +434,14 @@ impl GroupComponent {
                     data.disks.retain(|(n, _)| *n != i);
                     data.disks.extend(disks.into_iter().map(|d| (i, d)));
                 }
-                Err(e) => data.node_errors[i] = Some(e),
+                Err(e) => data.set_node_error(i, e),
             }
             match volumes {
                 Ok(volumes) => {
                     data.volumes.retain(|(n, _)| *n != i);
                     data.volumes.extend(volumes.into_iter().map(|v| (i, v)));
                 }
-                Err(e) => data.node_errors[i] = Some(e),
+                Err(e) => data.set_node_error(i, e),
             }
         }
         data.disks
@@ -454,12 +465,14 @@ impl GroupComponent {
             let devices: Vec<NetDevStats> = match result {
                 Ok(Ok(stats)) => stats.into_iter().flat_map(|s| s.devices).collect(),
                 Ok(Err(e)) => {
-                    data.node_errors[i] = Some(e.to_string());
+                    data.set_node_error(i, e.to_string());
                     continue;
                 }
                 Err(_) => {
-                    data.node_errors[i] =
-                        Some(format!("timed out after {}s", NODE_QUERY_TIMEOUT.as_secs()));
+                    data.set_node_error(
+                        i,
+                        format!("timed out after {}s", NODE_QUERY_TIMEOUT.as_secs()),
+                    );
                     continue;
                 }
             };

@@ -1262,18 +1262,18 @@ impl Component for WorkloadHealthComponent {
         }
 
         // Layout
-        let chunks = Layout::vertical([
+        let [summary, content] = Layout::vertical([
             Constraint::Length(2), // Summary
             Constraint::Fill(1),   // Content (list or drill-down)
         ])
-        .split(inner);
+        .areas(inner);
 
-        self.draw_summary(frame, chunks[0]);
+        self.draw_summary(frame, summary);
 
         if self.drill_down {
-            self.draw_drill_down(frame, chunks[1]);
+            self.draw_drill_down(frame, content);
         } else {
-            self.draw_namespace_list(frame, chunks[1]);
+            self.draw_namespace_list(frame, content);
         }
 
         Ok(())

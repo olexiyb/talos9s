@@ -91,16 +91,16 @@ impl NetworkStatsComponent {
     /// Draw the KubeSpan peer status view
     pub(super) fn draw_kubespan_view(&mut self, frame: &mut Frame, area: Rect) {
         self.hits.peer_rows = Default::default();
-        let chunks = Layout::vertical([
+        let [caption_area, content_area] = Layout::vertical([
             Constraint::Length(1), // Caption
             Constraint::Min(5),    // Content
         ])
-        .split(area);
+        .areas(area);
 
         frame.render_widget(
             Paragraph::new(" WireGuard peers of this node, from its KubeSpanPeerStatus resources")
                 .style(Style::default().fg(Color::DarkGray)),
-            chunks[0],
+            caption_area,
         );
 
         // Check if KubeSpan is enabled
@@ -112,30 +112,30 @@ impl NetworkStatsComponent {
         match kubespan_enabled {
             Some(false) => {
                 // KubeSpan not enabled
-                self.draw_kubespan_disabled(frame, chunks[1]);
+                self.draw_kubespan_disabled(frame, content_area);
             }
             Some(true) if kubespan_peers_empty => {
                 // Enabled but no peers
-                self.draw_kubespan_no_peers(frame, chunks[1]);
+                self.draw_kubespan_no_peers(frame, content_area);
             }
             Some(true) => {
                 // Draw peer table and detail
-                self.draw_kubespan_peers(frame, chunks[1]);
+                self.draw_kubespan_peers(frame, content_area);
             }
             None => {
                 // Loading/checking status
-                self.draw_kubespan_loading(frame, chunks[1]);
+                self.draw_kubespan_loading(frame, content_area);
             }
         }
     }
 
     /// Draw KubeSpan disabled message
     fn draw_kubespan_disabled(&self, frame: &mut Frame, area: Rect) {
-        let content_chunks = Layout::vertical([
+        let [header_area, info_area] = Layout::vertical([
             Constraint::Length(2), // Header
             Constraint::Min(5),    // Info section
         ])
-        .split(area);
+        .areas(area);
 
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
             .style(
@@ -143,7 +143,7 @@ impl NetworkStatsComponent {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             );
-        frame.render_widget(header, content_chunks[0]);
+        frame.render_widget(header, header_area);
 
         let info_lines = vec![
             Line::from(""),
@@ -180,16 +180,16 @@ impl NetworkStatsComponent {
         ];
 
         let info = Paragraph::new(info_lines).block(Block::default().borders(Borders::NONE));
-        frame.render_widget(info, content_chunks[1]);
+        frame.render_widget(info, info_area);
     }
 
     /// Draw KubeSpan no peers message
     fn draw_kubespan_no_peers(&self, frame: &mut Frame, area: Rect) {
-        let content_chunks = Layout::vertical([
+        let [header_area, info_area] = Layout::vertical([
             Constraint::Length(2), // Header
             Constraint::Min(5),    // Info section
         ])
-        .split(area);
+        .areas(area);
 
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
             .style(
@@ -197,7 +197,7 @@ impl NetworkStatsComponent {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             );
-        frame.render_widget(header, content_chunks[0]);
+        frame.render_widget(header, header_area);
 
         let error = self.data().and_then(|d| d.kubespan_error.clone());
         let info_lines = match error {
@@ -232,16 +232,16 @@ impl NetworkStatsComponent {
         };
 
         let info = Paragraph::new(info_lines).block(Block::default().borders(Borders::NONE));
-        frame.render_widget(info, content_chunks[1]);
+        frame.render_widget(info, info_area);
     }
 
     /// Draw KubeSpan loading message
     fn draw_kubespan_loading(&self, frame: &mut Frame, area: Rect) {
-        let content_chunks = Layout::vertical([
+        let [header_area, info_area] = Layout::vertical([
             Constraint::Length(2), // Header
             Constraint::Min(5),    // Info section
         ])
-        .split(area);
+        .areas(area);
 
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
             .style(
@@ -249,7 +249,7 @@ impl NetworkStatsComponent {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             );
-        frame.render_widget(header, content_chunks[0]);
+        frame.render_widget(header, header_area);
 
         let info_lines = vec![
             Line::from(""),
@@ -260,17 +260,17 @@ impl NetworkStatsComponent {
         ];
 
         let info = Paragraph::new(info_lines).block(Block::default().borders(Borders::NONE));
-        frame.render_widget(info, content_chunks[1]);
+        frame.render_widget(info, info_area);
     }
 
     /// Draw KubeSpan peers table and detail
     fn draw_kubespan_peers(&mut self, frame: &mut Frame, area: Rect) {
-        let content_chunks = Layout::vertical([
+        let [header_area, table_area, detail_area] = Layout::vertical([
             Constraint::Length(2), // Header with summary
             Constraint::Min(8),    // Peer table
             Constraint::Length(7), // Detail section
         ])
-        .split(area);
+        .areas(area);
 
         // Get peer data
         let kubespan_peers = self
@@ -299,7 +299,7 @@ impl NetworkStatsComponent {
                 },
             ),
         ]);
-        frame.render_widget(Paragraph::new(header), content_chunks[0]);
+        frame.render_widget(Paragraph::new(header), header_area);
 
         // Peer table
         let header_row = Row::new(vec![
@@ -375,10 +375,10 @@ impl NetworkStatsComponent {
         .header(header_row)
         .block(Block::default().borders(Borders::TOP));
 
-        frame.render_stateful_widget(table, content_chunks[1], &mut self.kubespan_table_state);
+        frame.render_stateful_widget(table, table_area, &mut self.kubespan_table_state);
         // Top border and the header come before the first row
         self.hits.peer_rows = crate::ui_ext::RowHits::new(
-            content_chunks[1],
+            table_area,
             false,
             2,
             self.kubespan_table_state.offset(),
@@ -415,7 +415,7 @@ impl NetworkStatsComponent {
             ];
 
             let detail = Paragraph::new(detail_lines).block(Block::default().borders(Borders::TOP));
-            frame.render_widget(detail, content_chunks[2]);
+            frame.render_widget(detail, detail_area);
         }
     }
 

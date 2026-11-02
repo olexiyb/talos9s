@@ -150,8 +150,10 @@ impl ClusterComponent {
             .iter()
             .position(|i| i == &self.selected_item)
             .unwrap_or(0);
-        let next_pos = (current_pos + 1).min(items.len() - 1);
-        self.selected_item = items[next_pos].clone();
+        let Some(next) = items.get(current_pos + 1).or(items.last()) else {
+            return;
+        };
+        self.selected_item = next.clone();
         // Update active cluster
         if let Some(idx) = self.selected_cluster_index() {
             self.active_cluster = idx;
@@ -168,8 +170,10 @@ impl ClusterComponent {
             .iter()
             .position(|i| i == &self.selected_item)
             .unwrap_or(0);
-        let prev_pos = current_pos.saturating_sub(1);
-        self.selected_item = items[prev_pos].clone();
+        let Some(prev) = items.get(current_pos.saturating_sub(1)) else {
+            return;
+        };
+        self.selected_item = prev.clone();
         // Update active cluster
         if let Some(idx) = self.selected_cluster_index() {
             self.active_cluster = idx;
@@ -417,7 +421,9 @@ impl ClusterComponent {
         };
         self.active_cluster = idx;
         self.selected_item = NodeListItem::ClusterHeader(idx);
-        self.clusters[idx].expanded = true;
+        if let Some(cluster) = self.clusters.get_mut(idx) {
+            cluster.expanded = true;
+        }
         if selection.group.is_some() || selection.node.is_some() {
             self.pending_selection = Some(selection.clone());
         }
@@ -441,8 +447,12 @@ impl ClusterComponent {
             .background_refresh
             .get(idx)
             .is_some_and(std::option::Option::is_some);
-        if self.clusters[idx].versions.is_empty() {
-            if !refreshing && !self.clusters[idx].loading {
+        let Some(cluster) = self.clusters.get(idx) else {
+            self.pending_selection = None;
+            return;
+        };
+        if cluster.versions.is_empty() {
+            if !refreshing && !cluster.loading {
                 self.pending_selection = None;
             }
             return;
@@ -460,8 +470,8 @@ impl ClusterComponent {
             }
             _ => false,
         };
-        if found {
-            self.clusters[idx].expanded = true;
+        if found && let Some(cluster) = self.clusters.get_mut(idx) {
+            cluster.expanded = true;
         }
         if found || !refreshing {
             self.pending_selection = None;

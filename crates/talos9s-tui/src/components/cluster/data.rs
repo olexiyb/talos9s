@@ -586,7 +586,9 @@ impl ClusterData {
                     unpublished = false;
                 }
                 Some((i, fetch)) = pending.next() => {
-                    results[i] = Some(fetch);
+                    if let Some(slot) = results.get_mut(i) {
+                        *slot = Some(fetch);
+                    }
                     unpublished = true;
                     if pending.is_empty() {
                         tracing::debug!(

@@ -95,25 +95,25 @@ impl ClusterComponent {
         dashboard: bool,
         view_hints: Option<Line<'static>>,
     ) -> (Rect, Rect) {
-        let layout = Layout::vertical([
+        let [header, body, footer] = Layout::vertical([
             Constraint::Length(2), // Header
             Constraint::Min(8),    // Nodes pane and view
             Constraint::Length(2), // Footer
         ])
-        .split(area);
-        self.draw_header(frame, layout[0]);
+        .areas(area);
+        self.draw_header(frame, header);
 
-        let (_, nodes_width) = self.resolve_pane_width(layout[1].width, width);
-        let content = Layout::horizontal([Constraint::Length(nodes_width), Constraint::Min(0)])
-            .split(layout[1]);
+        let (_, nodes_width) = self.resolve_pane_width(body.width, width);
+        let [tree, view] =
+            Layout::horizontal([Constraint::Length(nodes_width), Constraint::Min(0)]).areas(body);
 
         self.view_focused = view_focused;
         if self.focused_pane != FocusedPane::Services {
             self.tree_pane = self.focused_pane;
         }
-        self.hits.borrow_mut().tree = content[0];
+        self.hits.borrow_mut().tree = tree;
         if nodes_width > 0 {
-            self.draw_nodes_pane(frame, content[0]);
+            self.draw_nodes_pane(frame, tree);
         } else {
             let mut hits = self.hits.borrow_mut();
             hits.node_list = Rect::default();
@@ -125,8 +125,8 @@ impl ClusterComponent {
             hits.details = Rect::default();
             hits.services = None;
         }
-        self.draw_footer(frame, layout[2], view_focused, dashboard, view_hints);
-        (content[0], content[1])
+        self.draw_footer(frame, footer, view_focused, dashboard, view_hints);
+        (tree, view)
     }
 
     /// Bottom key line: the tree's keys, or the global ones while a view has

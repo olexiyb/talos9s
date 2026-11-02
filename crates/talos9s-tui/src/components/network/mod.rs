@@ -866,12 +866,12 @@ impl Component for NetworkStatsComponent {
 
         // Split area for output pane if shown
         let (main_area, output_area) = if self.show_output_pane {
-            let chunks = Layout::vertical([
+            let [main_part, output_part] = Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(10), // Output pane height
             ])
-            .split(area);
-            (chunks[0], Some(chunks[1]))
+            .areas(area);
+            (main_part, Some(output_part))
         } else {
             (area, None)
         };

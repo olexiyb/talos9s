@@ -91,6 +91,9 @@ talos9s-tui = { path = "crates/talos9s-tui" }
 unwrap_used = "warn"
 expect_used = "warn"
 string_slice = "warn"
+# items[i] / &v[a..b] panic when out of range (a selection outliving a
+# shorter list): use .get(), destructure fixed layouts
+indexing_slicing = "warn"
 # Leftovers and output that would corrupt the terminal
 dbg_macro = "warn"
 todo = "warn"

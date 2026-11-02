@@ -103,6 +103,14 @@ const SERVICE_COLORS: &[Color] = &[
     Color::LightCyan,
 ];
 
+/// The palette color for the `i`th service or node, cycling
+fn service_color(i: usize) -> Color {
+    SERVICE_COLORS
+        .get(i % SERVICE_COLORS.len())
+        .copied()
+        .unwrap_or(Color::White)
+}
+
 /// Color of a level's badge
 fn level_color(level: LogLevel) -> Color {
     match level {
@@ -319,7 +327,7 @@ impl MultiLogsComponent {
                 name: n.name,
                 ip: n.ip,
                 services: n.services.map(|s| s.into_iter().collect()),
-                color: SERVICE_COLORS[(i + 3) % SERVICE_COLORS.len()],
+                color: service_color(i + 3),
                 active: true,
                 entry_count: 0,
             })
@@ -340,7 +348,7 @@ impl MultiLogsComponent {
             .map(|(i, id)| {
                 let is_active = active_set.contains(id.as_str());
                 ServiceState {
-                    color: SERVICE_COLORS[i % SERVICE_COLORS.len()],
+                    color: service_color(i),
                     active: is_active,
                     id,
                     entry_count: 0,
@@ -976,8 +984,10 @@ impl MultiLogsComponent {
             data.visible_indices
                 .iter()
                 .enumerate()
-                .filter(|&(_, entry_idx)| {
-                    data.entries[*entry_idx].search_text.contains(&query_lower)
+                .filter(|&(_, &entry_idx)| {
+                    data.entries
+                        .get(entry_idx)
+                        .is_some_and(|e| e.search_text.contains(&query_lower))
                 })
                 .map(|(vi, _)| vi)
                 .collect()
@@ -989,8 +999,8 @@ impl MultiLogsComponent {
             self.match_order.push(vi);
         }
 
-        if !self.match_order.is_empty() {
-            self.scroll = self.match_order[0] as u16;
+        if let Some(&first) = self.match_order.first() {
+            self.scroll = first as u16;
         }
     }
 
@@ -1000,7 +1010,9 @@ impl MultiLogsComponent {
             return;
         }
         self.current_match = (self.current_match + 1) % self.match_order.len();
-        self.scroll = self.match_order[self.current_match] as u16;
+        if let Some(&vi) = self.match_order.get(self.current_match) {
+            self.scroll = vi as u16;
+        }
         self.following = false;
     }
 
@@ -1014,7 +1026,9 @@ impl MultiLogsComponent {
         } else {
             self.current_match - 1
         };
-        self.scroll = self.match_order[self.current_match] as u16;
+        if let Some(&vi) = self.match_order.get(self.current_match) {
+            self.scroll = vi as u16;
+        }
         self.following = false;
     }
 
@@ -1301,10 +1315,11 @@ impl MultiLogsComponent {
         // At least 1, or wrapping a narrow pane would never end
         let available = content_width.saturating_sub(prefix_width).max(1);
         let rows_of = |vi: usize| {
-            let chars = data.entries[data.visible_indices[vi]]
-                .message
-                .chars()
-                .count();
+            let chars = data
+                .visible_indices
+                .get(vi)
+                .and_then(|&i| data.entries.get(i))
+                .map_or(0, |e| e.message.chars().count());
             if self.wrap {
                 chars.div_ceil(available).max(1)
             } else {
@@ -1327,9 +1342,12 @@ impl MultiLogsComponent {
 
         let mut lines: Vec<Line> = Vec::new();
 
-        for (vi, &entry_idx) in data.visible_indices[start..end].iter().enumerate() {
+        let shown = data.visible_indices.get(start..end).unwrap_or_default();
+        for (vi, &entry_idx) in shown.iter().enumerate() {
             let visible_idx = start + vi;
-            let entry = &data.entries[entry_idx];
+            let Some(entry) = data.entries.get(entry_idx) else {
+                continue;
+            };
             let is_current_match = self.is_current_match(visible_idx);
             let is_match = self.entry_matches(visible_idx);
             let is_selected = self.visual.contains(visible_idx, self.cursor);
@@ -1411,7 +1429,11 @@ impl MultiLogsComponent {
 
                 while chunk_start < msg_chars.len() {
                     let chunk_end = (chunk_start + available).min(msg_chars.len());
-                    let chunk: String = msg_chars[chunk_start..chunk_end].iter().collect();
+                    let chunk: String = msg_chars
+                        .get(chunk_start..chunk_end)
+                        .unwrap_or_default()
+                        .iter()
+                        .collect();
 
                     if chunk_start == 0 {
                         // First line: use the prefix spans we already built
@@ -1525,7 +1547,7 @@ async fn stream_task(
                 if !lines.is_empty() {
                     let _ = tx.send(status(StreamStatus::Streaming));
                 }
-                for l in &lines[skip..] {
+                for l in lines.iter().skip(skip) {
                     if tx.send(line(l.to_string())).is_err() {
                         return;
                     }
@@ -2039,20 +2061,12 @@ impl Component for MultiLogsComponent {
         // Layout: Header, Content (logs with floating services), optional search, footer
         let has_search_bar = self.search_mode != SearchMode::Off;
 
-        let main_layout = if has_search_bar {
-            Layout::vertical([
-                Constraint::Length(2), // Header
-                Constraint::Min(0),    // Content (logs + floating services)
-                Constraint::Length(1), // Search bar
-            ])
-            .split(area)
-        } else {
-            Layout::vertical([
-                Constraint::Length(2), // Header
-                Constraint::Min(0),    // Content
-            ])
-            .split(area)
-        };
+        let [header_area, content_area, search_area] = Layout::vertical([
+            Constraint::Length(2),                         // Header
+            Constraint::Min(0),                            // Content (logs + floating services)
+            Constraint::Length(u16::from(has_search_bar)), // Search bar
+        ])
+        .areas(area);
 
         // Header with title matching mockup
         let follow_indicator = if self.following && self.streaming {
@@ -2138,11 +2152,9 @@ impl Component for MultiLogsComponent {
                 .borders(Borders::BOTTOM)
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
-        frame.render_widget(header, main_layout[0]);
+        frame.render_widget(header, header_area);
 
         // Content area - logs, with floating services panel on top in Full mode
-        let content_area = main_layout[1];
-
         // Update viewport height for half-page scrolling
         self.viewport_height = content_area.height;
 
@@ -2160,7 +2172,6 @@ impl Component for MultiLogsComponent {
 
         // Search bar
         if has_search_bar {
-            let search_area = main_layout[2];
             let cursor = if self.search_mode == SearchMode::Input {
                 "█"
             } else {

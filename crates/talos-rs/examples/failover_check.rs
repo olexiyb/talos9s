@@ -20,12 +20,11 @@ async fn main() {
         .expect("install rustls crypto provider");
 
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
+    let (Some(cfg_arg), Some(ctx_name)) = (args.get(1), args.get(2)) else {
         eprintln!("usage: failover_check <talosconfig_path> <context_name>");
         std::process::exit(2);
-    }
-    let cfg_path = std::path::PathBuf::from(&args[1]);
-    let ctx_name = &args[2];
+    };
+    let cfg_path = std::path::PathBuf::from(cfg_arg);
 
     let config = TalosConfig::load_from(&cfg_path).expect("load talosconfig");
     let ctx = config.get_context(ctx_name).expect("context not found");

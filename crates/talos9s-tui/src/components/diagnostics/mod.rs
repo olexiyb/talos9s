@@ -716,8 +716,9 @@ impl DiagnosticsComponent {
             Constraint::Fill(1),
         ];
 
-        self.category_rows[category_idx] =
-            crate::ui_ext::RowHits::new(inner, false, 0, 0, checks.len());
+        if let Some(hits) = self.category_rows.get_mut(category_idx) {
+            *hits = crate::ui_ext::RowHits::new(inner, false, 0, 0, checks.len());
+        }
         let table = Table::new(rows, widths);
         frame.render_widget(table, inner);
     }
@@ -1059,7 +1060,8 @@ impl Component for DiagnosticsComponent {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         // Only what this frame draws is clickable (e.g. no hidden Addons)
         self.category_rows = Default::default();
-        let chunks = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).split(area);
+        let [header_area, body] =
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
         // Get header info from data
         let (hostname, address, cni_label) = self
@@ -1078,12 +1080,12 @@ impl Component for DiagnosticsComponent {
         let header = Paragraph::new(header_text)
             .style(Style::default().add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::BOTTOM));
-        frame.render_widget(header, chunks[0]);
+        frame.render_widget(header, header_area);
 
         if let Some(error) = self.state.error() {
             let error_msg =
                 Paragraph::new(format!("Error: {error}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error_msg, chunks[1]);
+            frame.render_widget(error_msg, body);
         } else if self.state.is_loading()
             && self
                 .data()
@@ -1091,7 +1093,7 @@ impl Component for DiagnosticsComponent {
         {
             let loading = Paragraph::new("Running diagnostics...")
                 .style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, chunks[1]);
+            frame.render_widget(loading, body);
         } else if let Some(data) = self.data() {
             // Dynamically size Addons section based on whether addons are detected
             let addons_height = if data.detected_addons.any_detected() {
@@ -1100,14 +1102,20 @@ impl Component for DiagnosticsComponent {
                 Constraint::Length(0)
             };
 
-            let content_chunks = Layout::vertical([
+            let [
+                system_area,
+                kubernetes_area,
+                cni_area,
+                services_area,
+                addons_area,
+            ] = Layout::vertical([
                 Constraint::Length(7), // System Health (Memory, CPU, 3 certs = 5 items + 2 border)
                 Constraint::Length(4), // Kubernetes Components (etcd, pod_health = 2 items + 2 border)
                 Constraint::Length(5), // CNI
                 Constraint::Fill(1),   // Services
                 addons_height,         // Addons (if any)
             ])
-            .split(chunks[1]);
+            .areas(body);
 
             // Clone checks for rendering to avoid borrow issues
             let system_checks = data.system_checks.clone();
@@ -1119,28 +1127,22 @@ impl Component for DiagnosticsComponent {
 
             self.render_category(
                 frame,
-                content_chunks[0],
+                system_area,
                 0,
                 &system_checks,
                 self.selected_category == 0,
             );
             self.render_category(
                 frame,
-                content_chunks[1],
+                kubernetes_area,
                 1,
                 &kubernetes_checks,
                 self.selected_category == 1,
             );
+            self.render_category(frame, cni_area, 2, &cni_checks, self.selected_category == 2);
             self.render_category(
                 frame,
-                content_chunks[2],
-                2,
-                &cni_checks,
-                self.selected_category == 2,
-            );
-            self.render_category(
-                frame,
-                content_chunks[3],
+                services_area,
                 3,
                 &service_checks,
                 self.selected_category == 3,
@@ -1150,7 +1152,7 @@ impl Component for DiagnosticsComponent {
             if any_addons {
                 self.render_category(
                     frame,
-                    content_chunks[4],
+                    addons_area,
                     4,
                     &addon_checks,
                     self.selected_category == 4,

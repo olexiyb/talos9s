@@ -37,8 +37,10 @@ impl LogLevel {
     pub fn of_line(line: &str, rest: &str) -> Self {
         // klog: I0109 16:42:01.123456 ...
         let bytes = line.as_bytes();
-        if bytes.len() > 6 && bytes[1..5].iter().all(u8::is_ascii_digit) && bytes[5] == b' ' {
-            match bytes[0] {
+        if let [first, d1, d2, d3, d4, b' ', _, ..] = *bytes
+            && [d1, d2, d3, d4].iter().all(u8::is_ascii_digit)
+        {
+            match first {
                 b'I' => return LogLevel::Info,
                 b'W' => return LogLevel::Warn,
                 b'E' | b'F' => return LogLevel::Error,
@@ -329,19 +331,13 @@ pub fn extract_time_part(ts: &str) -> String {
 
     // Look for HH:MM:SS pattern (must have two colons)
     for i in 0..search_len.saturating_sub(7) {
-        if bytes[i].is_ascii_digit()
-            && bytes[i + 1].is_ascii_digit()
-            && bytes[i + 2] == b':'
-            && bytes[i + 3].is_ascii_digit()
-            && bytes[i + 4].is_ascii_digit()
-            && bytes[i + 5] == b':'
-            && bytes[i + 6].is_ascii_digit()
-            && bytes[i + 7].is_ascii_digit()
+        if let Some(&[h1, h2, b':', m1, m2, b':', s1, s2]) = bytes.get(i..i + 8)
+            && [h1, h2, m1, m2, s1, s2].iter().all(u8::is_ascii_digit)
         {
             // Validate it's a real time (HH < 24, MM < 60, SS < 60)
-            let hh = (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0');
-            let mm = (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0');
-            let ss = (bytes[i + 6] - b'0') * 10 + (bytes[i + 7] - b'0');
+            let hh = (h1 - b'0') * 10 + (h2 - b'0');
+            let mm = (m1 - b'0') * 10 + (m2 - b'0');
+            let ss = (s1 - b'0') * 10 + (s2 - b'0');
             if hh < 24 && mm < 60 && ss < 60 {
                 let result = ts[i..i + 8].to_string();
                 // Reject 00:00:00 - likely Go's zero time from event dumps
@@ -355,15 +351,12 @@ pub fn extract_time_part(ts: &str) -> String {
     // Fallback: look for HH:MM pattern at the start only (first 20 chars)
     let fallback_len = bytes.len().min(20);
     for i in 0..fallback_len.saturating_sub(4) {
-        if bytes[i].is_ascii_digit()
-            && bytes[i + 1].is_ascii_digit()
-            && bytes[i + 2] == b':'
-            && bytes[i + 3].is_ascii_digit()
-            && bytes[i + 4].is_ascii_digit()
+        if let Some(&[h1, h2, b':', m1, m2]) = bytes.get(i..i + 5)
+            && [h1, h2, m1, m2].iter().all(u8::is_ascii_digit)
         {
             // Validate it's a real time (HH < 24, MM < 60)
-            let hh = (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0');
-            let mm = (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0');
+            let hh = (h1 - b'0') * 10 + (h2 - b'0');
+            let mm = (m1 - b'0') * 10 + (m2 - b'0');
             if hh < 24 && mm < 60 {
                 let result = ts[i..i + 5].to_string();
                 // Reject 00:00 - likely Go's zero time

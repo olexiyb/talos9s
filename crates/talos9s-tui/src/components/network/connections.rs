@@ -717,19 +717,19 @@ impl NetworkStatsComponent {
 
     /// Draw the connection drill-down view
     pub(super) fn draw_connections_view(&mut self, frame: &mut Frame, area: Rect) {
-        let chunks = Layout::vertical([
+        let [header_area, summary_area, table_area, detail_area] = Layout::vertical([
             Constraint::Length(1), // Header
             Constraint::Length(1), // Summary bar
             Constraint::Min(5),    // Connection table
             Constraint::Length(5), // Detail section (4 lines + border)
         ])
-        .split(area);
+        .areas(area);
 
-        self.hits.breadcrumb = chunks[0];
-        self.draw_conn_header(frame, chunks[0]);
-        self.draw_conn_summary_bar(frame, chunks[1]);
-        self.draw_conn_table(frame, chunks[2]);
-        self.draw_conn_detail(frame, chunks[3]);
+        self.hits.breadcrumb = header_area;
+        self.draw_conn_header(frame, header_area);
+        self.draw_conn_summary_bar(frame, summary_area);
+        self.draw_conn_table(frame, table_area);
+        self.draw_conn_detail(frame, detail_area);
     }
 
     /// Handle key events in Connections view

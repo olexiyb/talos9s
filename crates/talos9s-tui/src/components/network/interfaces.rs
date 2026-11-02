@@ -824,44 +824,38 @@ impl NetworkStatsComponent {
         constraints.push(Constraint::Min(5)); // Device table (takes remaining space)
         constraints.push(Constraint::Length(4)); // Detail section
 
+        // One area per constraint pushed above, taken in the same order
         let chunks = Layout::vertical(constraints).split(area);
-
-        let mut idx = 0;
+        let mut areas = chunks.iter().copied();
+        let mut next_area = || areas.next().unwrap_or_default();
 
         // Header
-        self.draw_header(frame, chunks[idx]);
-        idx += 1;
+        self.draw_header(frame, next_area());
 
         // Traffic summary
-        self.draw_summary_bar(frame, chunks[idx]);
-        idx += 1;
+        self.draw_summary_bar(frame, next_area());
 
         // Capture status bar (when capturing)
         if is_capturing {
-            self.draw_capture_status(frame, chunks[idx]);
-            idx += 1;
+            self.draw_capture_status(frame, next_area());
         }
 
         // Connection data (if available)
         if has_connections {
-            self.draw_connection_summary(frame, chunks[idx]);
-            idx += 1;
-            self.draw_service_health(frame, chunks[idx]);
-            idx += 1;
+            self.draw_connection_summary(frame, next_area());
+            self.draw_service_health(frame, next_area());
         }
 
         // Warning (if any)
         if has_warning {
-            self.draw_warning(frame, chunks[idx]);
-            idx += 1;
+            self.draw_warning(frame, next_area());
         }
 
         // Device table
-        self.draw_device_table(frame, chunks[idx]);
-        idx += 1;
+        self.draw_device_table(frame, next_area());
 
         // Detail section
-        self.draw_detail_section(frame, chunks[idx]);
+        self.draw_detail_section(frame, next_area());
     }
 }
 
