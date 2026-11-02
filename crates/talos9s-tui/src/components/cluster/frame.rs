@@ -340,7 +340,7 @@ impl ClusterComponent {
             label(" next window  "),
             key("[Z]"),
             label(" zoom  "),
-            key("[ [ ] ]"),
+            key("[ ]"),
             label(" pane width  "),
             key("[Ctrl+C]"),
             label(" quit  "),
