@@ -719,7 +719,7 @@ impl VolumesComponent {
 
         if empty {
             let message = if !self.show_all && self.filter.is_empty() {
-                "No volumes with issues ([a] shows all)"
+                "No volumes with issues ([A] shows all)"
             } else {
                 "No volumes match"
             };
@@ -779,7 +779,7 @@ impl VolumesComponent {
                     "  Suggested fix: review, run by hand, one volume at a time ",
                     Style::default().fg(Color::Cyan).bold(),
                 ),
-                Span::styled("[c] copy", dim),
+                Span::styled("[y] copy", dim),
             ]));
             for remedy in &remedies {
                 lines.push(Line::from(Span::styled(
@@ -868,7 +868,7 @@ impl VolumesComponent {
             let mut spans = vec![
                 key("[j/k]"),
                 Span::raw(" select  "),
-                key("[a]"),
+                key("[A]"),
                 Span::raw(if self.show_all {
                     " issues only  "
                 } else {
@@ -882,7 +882,7 @@ impl VolumesComponent {
                 Span::raw(" refresh"),
             ];
             if !self.remedies().is_empty() {
-                spans.extend([Span::raw("  "), key("[c]"), Span::raw(" copy fix")]);
+                spans.extend([Span::raw("  "), key("[y]"), Span::raw(" copy fix")]);
             }
             if self
                 .copied_at
@@ -1097,7 +1097,7 @@ impl Component for VolumesComponent {
             KeyCode::PageUp => self.selected = self.selected.saturating_sub(10),
             KeyCode::Home | KeyCode::Char('g') => self.selected = 0,
             KeyCode::End | KeyCode::Char('G') => self.selected = usize::MAX,
-            KeyCode::Char('a') => {
+            KeyCode::Char('A') => {
                 self.show_all = !self.show_all;
                 self.selected = 0;
             }
@@ -1107,7 +1107,7 @@ impl Component for VolumesComponent {
             }
             KeyCode::Char('/') => self.filter_editing = true,
             KeyCode::Char('r') => return Ok(Some(Action::Refresh)),
-            KeyCode::Char('c') => self.copy_remedies(),
+            KeyCode::Char('y') => self.copy_remedies(),
             _ => return Ok(None),
         }
         self.clamp_selection();
@@ -1335,9 +1335,9 @@ mod tests {
         assert!(screen.contains("50%"));
         assert!(screen.contains("3/3"));
 
-        key(&mut c, KeyCode::Char('a'));
+        key(&mut c, KeyCode::Char('A'));
         assert!(!render(&mut c).contains("monitoring/grafana"));
-        key(&mut c, KeyCode::Char('a'));
+        key(&mut c, KeyCode::Char('A'));
 
         key(&mut c, KeyCode::Char('/'));
         for ch in "graf".chars() {

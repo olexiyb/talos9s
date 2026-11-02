@@ -940,7 +940,7 @@ impl Component for DiagnosticsComponent {
             vec![
                 key("[←/→]"),
                 Span::raw(" choose  "),
-                key("[c]"),
+                key("[y]"),
                 Span::raw(" copy  "),
                 key("[Esc]"),
                 Span::raw(" close"),
@@ -996,7 +996,7 @@ impl Component for DiagnosticsComponent {
                     self.pending_action = None;
                     return Ok(None);
                 }
-                KeyCode::Enter | KeyCode::Char('c' | 'y') => {
+                KeyCode::Enter | KeyCode::Char('y') => {
                     if let Some(cmd) = self.pending_command() {
                         // Kept alive briefly on its own thread so clipboard
                         // managers can read it

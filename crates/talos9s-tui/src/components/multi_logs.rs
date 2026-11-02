@@ -1628,7 +1628,7 @@ impl MultiLogsComponent {
                 Span::raw(" [Space]").fg(Color::Yellow),
                 Span::raw(" toggle").dim(),
                 Span::raw("  "),
-                Span::raw("[a]").fg(Color::Yellow),
+                Span::raw("[0]").fg(Color::Yellow),
                 Span::raw(" all").dim(),
                 Span::raw("  "),
                 Span::raw("[n]").fg(Color::Yellow),
@@ -1763,7 +1763,12 @@ impl Component for MultiLogsComponent {
 
         if let Some(hotkey) = LevelHotkey::from_key(&key) {
             match hotkey {
-                LevelHotkey::All => self.activate_all_levels(),
+                // 0 is "all" for the open pane, else for the levels
+                LevelHotkey::All => match self.floating_pane {
+                    FloatingPane::Services => self.activate_all(),
+                    FloatingPane::Nodes => self.set_all_nodes(true),
+                    FloatingPane::Levels | FloatingPane::None => self.activate_all_levels(),
+                },
                 LevelHotkey::Only(idx) => self.show_only_level(idx),
                 LevelHotkey::Toggle(idx) => self.toggle_level(idx),
             }
@@ -1959,16 +1964,6 @@ impl Component for MultiLogsComponent {
                 }
                 Ok(None)
             }
-            KeyCode::Char('a') => {
-                match self.floating_pane {
-                    FloatingPane::Services => self.activate_all(),
-                    FloatingPane::Levels => self.activate_all_levels(),
-                    FloatingPane::Nodes => self.set_all_nodes(true),
-                    FloatingPane::None => {}
-                }
-                Ok(None)
-            }
-
             // Search
             KeyCode::Char('/') => {
                 self.search_mode = SearchMode::Input;

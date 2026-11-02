@@ -1164,7 +1164,7 @@ impl EtcdComponent {
             Span::raw(" select  "),
             Span::styled("[r]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" refresh  "),
-            Span::styled("[c]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("[y]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" copy defrag  "),
             Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
@@ -1201,7 +1201,7 @@ impl Component for EtcdComponent {
                 Ok(None)
             }
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
-            KeyCode::Char('c') => {
+            KeyCode::Char('y') => {
                 self.copy_defrag();
                 Ok(None)
             }

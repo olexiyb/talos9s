@@ -148,6 +148,7 @@ impl NetworkStatsComponent {
         };
 
         self.status_message = Some((format!("Restarting {service_id}..."), Instant::now()));
+        crate::audit::audit_start("SERVICE_RESTART", &self.hostname, &service_id);
         self.tasks.restart = Some(tokio::spawn(async move {
             let result = with_timeout(client.service_restart(&service_id)).await;
             (service_id, result)
@@ -162,6 +163,7 @@ impl NetworkStatsComponent {
     ) {
         match result {
             Ok(results) => {
+                crate::audit::audit_success("SERVICE_RESTART", &self.hostname, &service_id);
                 let mut lines = Vec::new();
                 lines.push(format!("Restarting service: {service_id}"));
                 lines.push(String::new());
@@ -191,6 +193,11 @@ impl NetworkStatsComponent {
                 self.status_message = None; // Clear status message, using output pane instead
             }
             Err(e) => {
+                crate::audit::audit_failure(
+                    "SERVICE_RESTART",
+                    &self.hostname,
+                    &format!("{service_id}: {e}"),
+                );
                 let lines = vec![
                     format!("Restarting service: {}", service_id),
                     String::new(),

@@ -584,9 +584,9 @@ impl NetworkStatsComponent {
                 Span::raw(" "),
                 Span::styled(bpf_label, Style::default().fg(bpf_color)),
                 Span::raw("  "),
-                Span::styled("[l]", Style::default().fg(Color::Cyan)),
+                Span::styled("[L]", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" {listen_label}  ")),
-                Span::styled("[a]", Style::default().fg(Color::Cyan)),
+                Span::styled("[A]", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" {all_label}  ")),
                 Span::styled("[Esc/q]", Style::default().fg(Color::Cyan)),
                 Span::raw(" interfaces"),
@@ -846,7 +846,7 @@ impl NetworkStatsComponent {
             }
 
             // Filter
-            KeyCode::Char('l') => {
+            KeyCode::Char('L') => {
                 self.listening_only = !self.listening_only;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
@@ -855,7 +855,7 @@ impl NetworkStatsComponent {
             }
 
             // Toggle show all connections (bypass interface filter)
-            KeyCode::Char('a') => {
+            KeyCode::Char('A') => {
                 self.show_all_connections = !self.show_all_connections;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));

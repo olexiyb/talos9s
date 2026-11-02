@@ -648,9 +648,9 @@ impl GroupComponent {
 
     fn footer_line(&self) -> Line<'static> {
         let all = if self.show_all {
-            "  [a] hide virtual"
+            "  [A] hide virtual"
         } else {
-            "  [a] show all"
+            "  [A] show all"
         };
         let toggle = match self.kind {
             GroupKind::Storage | GroupKind::Partitions | GroupKind::Network => all.to_string(),
@@ -953,7 +953,7 @@ impl Component for GroupComponent {
             }
             KeyCode::Enter => self.open_selected(),
             KeyCode::Char('r') => Some(Action::Refresh),
-            KeyCode::Char('a') if self.kind != GroupKind::Diagnostics => {
+            KeyCode::Char('A') if self.kind != GroupKind::Diagnostics => {
                 self.show_all = !self.show_all;
                 self.table_state.select(Some(0));
                 None

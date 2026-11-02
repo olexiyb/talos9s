@@ -162,7 +162,7 @@ LINSTOR alone doesn't show:
   replicas, resync progress with an ETA, filesystems filling up;
 - orphaned volumes: no PersistentVolume uses them, or their claim is gone.
 
-Where a fix is provably safe, it suggests the exact commands to copy (`c`).
+Where a fix is provably safe, it suggests the exact commands to copy (`y`).
 talos9s never runs them.
 
 ### Operations
@@ -194,7 +194,7 @@ mouse do the same):
 | `C` / `m` / `x` | Containers / machine config / extensions | |
 | `o` | Operations (drain, reboot, shutdown) | |
 | `v` / `w` | Volumes / workloads on this node | Volumes / workloads on those nodes |
-| `e` `y` `c` | etcd, lifecycle, security (cluster-wide) | same |
+| `e` `b` `c` | etcd, lifecycle (boot and upgrades), security (cluster-wide) | same |
 | `O` | Rolling operations | Rolling operations |
 
 Moving around:
@@ -212,8 +212,13 @@ Moving around:
   to switch. In the logs panels a click toggles a service, level
   or node. In Network, clicking a sortable column header sorts by it and
   "Interfaces" in the connections breadcrumb goes back.
-- `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh,
-  `q` in the tree quits, `Ctrl+C` quits from anywhere.
+- `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh.
+- `q` in the tree returns to the Dashboard; on the Dashboard it asks before
+  quitting (`y`). `Ctrl+C` quits from anywhere at once.
+- The same letter means the same thing in every view: `a` auto-refresh (where a view has it),
+  `A` show all (or issues only), `0` all levels, services or nodes in logs,
+  `y` copy, `/` filter or search, `g`/`G` top and bottom. Uppercase in the
+  tree (`L`, `O`) is the across-nodes version of a view.
 - `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
 - talos9s starts where you left it: the selected cluster, group or node, the
   view, the pane width, folded groups, log levels, sort orders and view

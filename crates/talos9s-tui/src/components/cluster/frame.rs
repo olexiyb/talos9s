@@ -213,10 +213,12 @@ impl ClusterComponent {
                     if !self.clusters.is_empty() {
                         spans.extend([sep(), key("[O]"), label(" rolling")]);
                     }
-                    if !dashboard {
-                        spans.extend([sep(), key("[Esc]"), label(" dashboard")]);
+                    // q returns to the dashboard first, and quits from there
+                    if dashboard {
+                        spans.extend([sep(), key("[q]"), label(" quit")]);
+                    } else {
+                        spans.extend([sep(), key("[Esc/q]"), label(" dashboard")]);
                     }
-                    spans.extend([sep(), key("[q]"), label(" quit")]);
                     spans
                 }
             }
@@ -228,8 +230,9 @@ impl ClusterComponent {
         frame.render_widget(block, area);
         let line = Line::from(spans);
         match view_hints {
-            // The view's keys on the left, the workspace keys on the right
-            Some(hints) if view_focused => {
+            // The view's keys (or a question such as quitting) on the left,
+            // the workspace keys on the right
+            Some(hints) => {
                 let global_width = (line.width() as u16).min(inner.width);
                 let hints_area = Rect {
                     width: inner.width.saturating_sub(global_width + 1),

@@ -163,7 +163,7 @@ impl NavMenuItem {
             NavMenuItem::Processes => "p",
             NavMenuItem::Diagnostics => "d",
             NavMenuItem::Certs => "c",
-            NavMenuItem::Lifecycle => "y",
+            NavMenuItem::Lifecycle => "b",
             NavMenuItem::Workloads => "w",
             NavMenuItem::Volumes => "v",
             NavMenuItem::Containers => "C",

@@ -22,7 +22,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 use std::time::{Duration, Instant};
@@ -36,6 +36,18 @@ fn is_ctrl_c(key: &KeyEvent) -> bool {
     key.kind == KeyEventKind::Press
         && key.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(key.code, KeyCode::Char('c' | 'C'))
+}
+
+/// Bottom line while `q` on the dashboard waits for an answer
+fn quit_question() -> Line<'static> {
+    let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+    Line::from(vec![
+        Span::raw("Quit talos9s?  "),
+        key("[y]"),
+        Span::raw(" yes  "),
+        key("[n]"),
+        Span::raw(" no"),
+    ])
 }
 
 /// Two clicks on the same cell within this long open the row, like Enter
@@ -63,6 +75,8 @@ pub struct App {
     pane: NavMenuItem,
     /// The keyboard is in the view on the right rather than the tree
     view_has_focus: bool,
+    /// `q` on the dashboard asked "Quit talos9s?"; the next key answers
+    confirm_quit: bool,
     /// Nodes pane width chosen with `[` `]` `Z`; `None` fits it to the screen
     pane_width: Option<PaneWidth>,
     /// Width to return to when zoom is turned off
@@ -154,6 +168,7 @@ impl App {
             view: View::Cluster,
             pane: NavMenuItem::Dashboard,
             view_has_focus: false,
+            confirm_quit: false,
             pane_width: None,
             width_before_zoom: None,
             applied_target: String::new(),
@@ -909,6 +924,11 @@ impl App {
             self.cluster.focused_pane(),
             self.view_captures_text()
         );
+        if self.confirm_quit {
+            self.confirm_quit = false;
+            let yes = matches!(key.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter);
+            return Ok(yes.then_some(Action::Quit));
+        }
         if self.view.is_overlay() {
             return self.dispatch_view_key(key);
         }
@@ -1040,6 +1060,20 @@ impl App {
         };
         if into_view {
             self.focus_view();
+            return Ok(None);
+        }
+        // q backs out like Esc, so pressing it a few times to leave a view
+        // doesn't quit: in the services list it gives the keyboard back,
+        // elsewhere it returns to the dashboard, and there it asks first
+        if key.code == KeyCode::Char('q') {
+            if self.view != View::Cluster {
+                return Ok(Some(Action::ShowDashboard));
+            }
+            if pane == FocusedPane::Services {
+                self.cluster.leave_services();
+            } else {
+                self.confirm_quit = true;
+            }
             return Ok(None);
         }
         self.focus_after_show =
@@ -1176,7 +1210,9 @@ impl App {
         };
         let dashboard = base == View::Cluster;
         let view_focused = self.view_has_focus && !dashboard && !overlay;
-        let hints = if view_focused {
+        let hints = if self.confirm_quit {
+            Some(quit_question())
+        } else if view_focused {
             self.view_key_hints()
         } else {
             None
@@ -2163,9 +2199,10 @@ mod tests {
     }
 
     /// q in a view goes back like Esc (Esc never arrives in some
-    /// terminals); q in the tree quits
+    /// terminals); q in the tree returns to the dashboard, and there it
+    /// asks before quitting
     #[tokio::test]
-    async fn q_is_back_in_a_view_and_quit_in_the_tree() {
+    async fn q_backs_out_and_asks_before_quitting() {
         let mut app = app_with_view(View::Hint);
         app.view_has_focus = true;
         assert!(matches!(
@@ -2176,6 +2213,18 @@ mod tests {
         assert!(!app.view_has_focus);
         assert!(matches!(
             app.dispatch_key(key(KeyCode::Char('q'))).unwrap(),
+            Some(Action::ShowDashboard)
+        ));
+        app.handle_action(Action::ShowDashboard).await.unwrap();
+        app.cluster.set_focused_pane(FocusedPane::Nodes);
+        assert!(app.dispatch_key(key(KeyCode::Char('q'))).unwrap().is_none());
+        assert!(app.confirm_quit);
+        // Any other key says no
+        assert!(app.dispatch_key(key(KeyCode::Char('n'))).unwrap().is_none());
+        assert!(!app.confirm_quit);
+        app.dispatch_key(key(KeyCode::Char('q'))).unwrap();
+        assert!(matches!(
+            app.dispatch_key(key(KeyCode::Char('y'))).unwrap(),
             Some(Action::Quit)
         ));
     }
