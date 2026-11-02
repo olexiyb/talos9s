@@ -16,7 +16,7 @@ helpers).
 | `formatting` | `format_bytes`, `format_kib` (storage, KiB/GiB), `format_eta`, `format_duration_human`, `truncate_string`, `pluralize` |
 | `selection` | `SelectableList<T>`, `VisualSelection` (anchor + cursor, for `V`/`y`) |
 | `errors` | `format_talos_error`: user-facing error text |
-| `namespaces` | namespace warp (`W`): recent namespaces (`push_recent`), picker entries |
+| `namespaces` | namespace warp (`W`): a set of names and `prefix*`es (`matches`), stored comma-joined, recent warps (`push_recent`), picker entries |
 | `network` | port → service names, `cidr_contains`, route table and resolv.conf formatting |
 | `diagnostics` | `CheckStatus`, `CniType`, `CniInfo`, `PodHealthInfo` |
 | `constants` | thresholds, CRD lists, refresh intervals |
@@ -26,7 +26,7 @@ helpers).
 | `stats` | `most_common`, `used_of_total`, `used_pct`, `gib` |
 | `version` | `is_newer`, `check_due` (update check) |
 | `pod_logs` | which containers' logs to read for a workload, pod or container (`log_sources`), merging timestamped lines (`merge_logs`) |
-| `workloads` | workload and pod health (`PodFacts::issue`), pod → workload (`pod_workload`, `place_pods`), the nodes of failures, the Workloads list rows and summary; detail pane helpers (`workload_pods`, `state_text`, `latest_event`, copied commands) |
+| `workloads` | workload and pod health (`PodFacts::issue`, `pod_health`), pod → workload (`pod_workload`, `place_pods`, `pod_owner`), the nodes of failures, the Workloads rows (`list_rows`, `pod_rows` + `PodSort`, `focus_rows`) and summary; detail pane helpers (`workload_pods`, `state_text`, `latest_event`, copied commands) |
 
 If logic in the TUI can be tested without a terminal or a cluster, it belongs
 here.

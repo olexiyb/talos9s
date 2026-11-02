@@ -1,8 +1,11 @@
-//! The namespace picker (`W`): warp a view into one namespace, or all
+//! The namespace picker (`W`): warp a view into namespaces, or all
 //!
-//! Lists all namespaces, the recent ones (`1`-`4` pick them), then the
-//! others the view has, with how many of its items each holds. Typing
-//! filters; `↑`/`↓` move (letters type), Enter warps, Esc cancels.
+//! Lists all namespaces, the recent warps (`1`-`4` pick them), then the
+//! namespaces the view has, with how many of its items each holds. Typing
+//! filters; a filter ending in `*` is a prefix and offered as a warp
+//! (`kolmena-staging*`). `Space` marks several namespaces, Enter warps into
+//! the marked ones or the selected entry, Esc cancels. `↑`/`↓` move:
+//! letters type.
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -19,27 +22,29 @@ use talos9s_core::namespaces::{PickerEntry, picker_entries};
 pub enum PickerEvent {
     Stay,
     Close,
-    /// Warp into this namespace (`None`: all)
-    Pick(Option<String>),
+    /// Warp into these namespaces and prefixes (empty: all)
+    Pick(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
 pub struct NamespacePicker {
     counts: Vec<(String, usize)>,
     recent: Vec<String>,
-    /// The namespace warped into now, marked
-    current: Option<String>,
+    /// The warp now, marked
+    current: Vec<String>,
     /// What the counts count, e.g. `pods`
     what: &'static str,
     filter: String,
     selected: usize,
+    /// Namespaces marked with `Space`
+    marked: Vec<String>,
 }
 
 impl NamespacePicker {
     pub fn new(
         counts: Vec<(String, usize)>,
         recent: Vec<String>,
-        current: Option<String>,
+        current: Vec<String>,
         what: &'static str,
     ) -> Self {
         let mut picker = Self {
@@ -49,12 +54,13 @@ impl NamespacePicker {
             what,
             filter: String::new(),
             selected: 0,
+            marked: Vec::new(),
         };
-        // Start on the namespace warped into
+        // Start on the warp now
         picker.selected = picker
             .entries()
             .iter()
-            .position(|e| e.namespace == picker.current)
+            .position(|e| e.warp == picker.current)
             .unwrap_or(0);
         picker
     }
@@ -69,19 +75,39 @@ impl NamespacePicker {
         match key.code {
             KeyCode::Esc => return PickerEvent::Close,
             KeyCode::Enter => {
-                return entries.get(self.selected).map_or(PickerEvent::Close, |e| {
-                    PickerEvent::Pick(e.namespace.clone())
-                });
+                if !self.marked.is_empty() {
+                    let mut marked = self.marked.clone();
+                    marked.sort();
+                    return PickerEvent::Pick(marked);
+                }
+                return entries
+                    .get(self.selected)
+                    .map_or(PickerEvent::Close, |e| PickerEvent::Pick(e.warp.clone()));
             }
             KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down => {
                 self.selected = (self.selected + 1).min(entries.len().saturating_sub(1));
             }
-            // Before typing, a digit picks a recent namespace
+            // Mark one namespace, or unmark; on "all", unmark them all
+            KeyCode::Char(' ') => match entries.get(self.selected) {
+                Some(e) if e.warp.is_empty() => self.marked.clear(),
+                Some(e) => {
+                    if let Some(ns) = e.single() {
+                        if let Some(i) = self.marked.iter().position(|m| m == ns) {
+                            self.marked.remove(i);
+                        } else {
+                            self.marked.push(ns.to_string());
+                        }
+                        self.selected = (self.selected + 1).min(entries.len().saturating_sub(1));
+                    }
+                }
+                None => {}
+            },
+            // Before typing, a digit picks a recent warp
             KeyCode::Char(c @ '1'..='4') if self.filter.is_empty() => {
                 let n = usize::from(u8::try_from(c).unwrap_or(b'1') - b'0');
                 if let Some(e) = entries.iter().find(|e| e.recent == Some(n)) {
-                    return PickerEvent::Pick(e.namespace.clone());
+                    return PickerEvent::Pick(e.warp.clone());
                 }
             }
             _ => {
@@ -96,9 +122,13 @@ impl NamespacePicker {
     pub fn key_hints(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         Line::from(vec![
-            Span::raw("type to filter  "),
+            Span::raw("type to filter ("),
+            key("*"),
+            Span::raw(" prefix)  "),
             key("<↑/↓>"),
             Span::raw(" select  "),
+            key("<Space>"),
+            Span::raw(" mark  "),
             key("<Enter>"),
             Span::raw(" warp  "),
             key("<1-4>"),
@@ -110,54 +140,71 @@ impl NamespacePicker {
 
     pub fn draw(&self, frame: &mut Frame, area: Rect) {
         let entries = self.entries();
-        let width = 56.min(area.width);
+        let width = 60.min(area.width);
         let height = talos9s_core::convert::to_u16(entries.len() + 3)
             .clamp(5, 22)
             .min(area.height);
         let popup = crate::ui_ext::centered(area, width, height);
         frame.render_widget(Clear, popup);
         let filter = if self.filter.is_empty() {
-            Span::styled(" type to filter ", Style::default().dim())
+            Span::styled(" type to filter, * for a prefix ", Style::default().dim())
         } else {
             Span::styled(
                 format!(" /{}█ ", self.filter),
                 Style::default().fg(Color::Cyan),
             )
         };
+        let mut title = vec![Span::styled(
+            " Warp to namespaces ",
+            Style::default().add_modifier(Modifier::BOLD),
+        )];
+        if !self.marked.is_empty() {
+            title.push(Span::styled(
+                format!("· {} marked, Enter warps ", self.marked.len()),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
-            .title(Line::from(Span::styled(
-                " Warp to namespace ",
-                Style::default().add_modifier(Modifier::BOLD),
-            )))
+            .title(Line::from(title))
             .title_bottom(Line::from(filter));
-        // Borders, the recent digit and the mark take 6; the count 12
-        let name_width = usize::from(width.saturating_sub(18));
+        // Borders, the digit and the marks take 7; the count 12
+        let name_width = usize::from(width.saturating_sub(19));
+        let singular = self.what.strip_suffix('s').unwrap_or(self.what);
         let items: Vec<ListItem> = entries
             .iter()
             .map(|e| {
-                let current = e.namespace == self.current;
-                let mark = match e.recent {
+                let digit = match e.recent {
                     Some(n) => Span::styled(format!("{n} "), crate::ui_ext::KEY),
                     None => Span::raw("  "),
                 };
-                let name = e.namespace.as_deref().unwrap_or("all namespaces");
-                let singular = self.what.strip_suffix('s').unwrap_or(self.what);
+                let marked = e
+                    .single()
+                    .is_some_and(|ns| self.marked.iter().any(|m| m == ns));
+                let current = e.warp == self.current;
+                let mark = match (marked, current) {
+                    (true, _) => Span::styled("■ ", Style::default().fg(Color::Magenta)),
+                    (false, true) => Span::styled("● ", Style::default().fg(Color::Green)),
+                    (false, false) => Span::raw("  "),
+                };
+                let name = if e.warp.is_empty() {
+                    "all namespaces".to_string()
+                } else {
+                    e.warp.join(", ")
+                };
+                let name: String = name.chars().take(name_width).collect();
                 let count = e.count.map_or_else(String::new, |c| {
                     talos9s_core::pluralize(c, singular, self.what)
                 });
-                let style = if e.namespace.is_none() {
+                let style = if e.warp.is_empty() || e.warp.iter().any(|w| w.ends_with('*')) {
                     Style::default().add_modifier(Modifier::ITALIC)
                 } else {
                     Style::default()
                 };
                 ListItem::new(Line::from(vec![
+                    digit,
                     mark,
-                    Span::styled(
-                        if current { "● " } else { "  " },
-                        Style::default().fg(Color::Green),
-                    ),
                     Span::styled(format!("{name:name_width$}"), style),
                     Span::styled(format!(" {count:>11}"), Style::default().dim()),
                 ]))
@@ -181,36 +228,62 @@ mod tests {
         p.handle_key(&KeyEvent::from(code))
     }
 
-    /// Starts on the current warp; a digit picks a recent one; typing
-    /// filters (then digits type); Enter warps into the selected one
-    #[test]
-    fn pick_recent_filter_and_enter() {
+    fn picker() -> NamespacePicker {
         let counts = vec![
             ("db".to_string(), 1),
             ("web".to_string(), 2),
             ("web2".to_string(), 1),
         ];
-        let recent = vec!["web".to_string()];
-        let mut p = NamespacePicker::new(counts, recent, Some("web".into()), "pods");
+        NamespacePicker::new(counts, vec!["web".to_string()], vec!["web".into()], "pods")
+    }
+
+    /// Starts on the warp now; a digit picks a recent one; typing filters
+    /// (then digits type); Enter warps into the selected one
+    #[test]
+    fn pick_recent_filter_and_enter() {
+        let mut p = picker();
         assert_eq!(p.selected, 1);
         assert_eq!(
             press(&mut p, KeyCode::Char('1')),
-            PickerEvent::Pick(Some("web".into()))
+            PickerEvent::Pick(vec!["web".into()])
         );
-        press(&mut p, KeyCode::Char('w'));
-        press(&mut p, KeyCode::Char('e'));
-        press(&mut p, KeyCode::Char('b'));
-        press(&mut p, KeyCode::Char('2'));
+        for c in "web2".chars() {
+            press(&mut p, KeyCode::Char(c));
+        }
         assert_eq!(
             press(&mut p, KeyCode::Enter),
-            PickerEvent::Pick(Some("web2".into()))
+            PickerEvent::Pick(vec!["web2".into()])
         );
-        let mut p = NamespacePicker::new(Vec::new(), Vec::new(), Some("x".into()), "pods");
+        let mut p = NamespacePicker::new(Vec::new(), Vec::new(), vec!["x".into()], "pods");
         assert_eq!(
             press(&mut p, KeyCode::Enter),
-            PickerEvent::Pick(None),
+            PickerEvent::Pick(Vec::new()),
             "all"
         );
         assert_eq!(press(&mut p, KeyCode::Esc), PickerEvent::Close);
+    }
+
+    /// Space marks several, Enter warps into them; a `*` filter warps into
+    /// the prefix
+    #[test]
+    fn mark_several_or_a_prefix() {
+        let mut p = picker();
+        // all, 1 web, db, web2: mark db and web2
+        press(&mut p, KeyCode::Down);
+        press(&mut p, KeyCode::Char(' '));
+        press(&mut p, KeyCode::Char(' '));
+        assert_eq!(p.marked, ["db", "web2"]);
+        assert_eq!(
+            press(&mut p, KeyCode::Enter),
+            PickerEvent::Pick(vec!["db".into(), "web2".into()])
+        );
+        let mut p = picker();
+        for c in "we*".chars() {
+            press(&mut p, KeyCode::Char(c));
+        }
+        assert_eq!(
+            press(&mut p, KeyCode::Enter),
+            PickerEvent::Pick(vec!["we*".into()])
+        );
     }
 }

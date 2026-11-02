@@ -321,7 +321,7 @@ pub struct VolumesComponent {
     /// When the view opened, to show how long the first scan is taking
     opened_at: std::time::Instant,
     /// Only the volumes of this PVC namespace (the warp, `W`)
-    namespace: Option<String>,
+    namespace: Vec<String>,
     recent_namespaces: Vec<String>,
     /// The namespace picker, drawn over the view while open
     picker: Option<crate::components::namespace_picker::NamespacePicker>,
@@ -351,7 +351,7 @@ impl VolumesComponent {
             pending_select: None,
             copied_at: None,
             opened_at: std::time::Instant::now(),
-            namespace: None,
+            namespace: Vec::new(),
             recent_namespaces: Vec::new(),
             picker: None,
         }
@@ -359,7 +359,7 @@ impl VolumesComponent {
 
     /// The namespace warped into (`None`: all) and the recent ones for the
     /// picker; from the app, per cluster
-    pub fn set_warp(&mut self, namespace: Option<String>, recent: Vec<String>) {
+    pub fn set_warp(&mut self, namespace: Vec<String>, recent: Vec<String>) {
         self.recent_namespaces = recent;
         if self.namespace != namespace {
             self.namespace = namespace;
@@ -371,9 +371,10 @@ impl VolumesComponent {
     /// The row is in the namespace warped into: its PVC's (a volume without
     /// a PVC is in none)
     fn in_warp(&self, row: &VolumeRow) -> bool {
-        self.namespace
-            .as_deref()
-            .is_none_or(|ns| row.pvc_namespace() == Some(ns))
+        self.namespace.is_empty()
+            || row
+                .pvc_namespace()
+                .is_some_and(|ns| talos9s_core::namespaces::matches(&self.namespace, ns))
     }
 
     /// `W`: the picker, with how many volumes each PVC namespace has
@@ -394,19 +395,7 @@ impl VolumesComponent {
 
     /// `<W> ns: …` at the right of the summary line
     fn warp_hint(&self) -> Line<'static> {
-        Line::from(vec![
-            Span::styled("<W>", crate::ui_ext::KEY),
-            Span::styled(" ns: ", Style::default().dim()),
-            match &self.namespace {
-                Some(ns) => Span::styled(
-                    ns.clone(),
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None => Span::styled("all", Style::default().dim()),
-            },
-        ])
+        crate::components::workloads::warp_hint(&self.namespace)
     }
 
     /// Toggles, filter and selection to keep for the next visit

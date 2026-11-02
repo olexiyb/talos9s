@@ -40,6 +40,8 @@ below.
 | `0` | set a filter to all (logs: all levels, or all services/nodes with that pane open). It sets, never toggles |
 | `1`, `2`, ... | in tables: sort column. In logs: levels |
 | `y` | copy (a line, a selection, a fix or defrag command) |
+| `W` | warp into namespaces (Workloads, Volumes): the picker, shared by both views and saved per cluster |
+| `w` | wrap long lines (logs); one saved setting for every logs pane |
 | `V` | visual (line) selection |
 | `Space` | toggle the selected entry or fold a group |
 
@@ -72,6 +74,25 @@ filter of the same kind (`L` listening only next to `A` all in connections).
 - Always a confirmation (`<y>` / `<n/Esc>`) and `audit_start` /
   `audit_success` / `audit_failure` (`crate::audit`), as drain, reboot and
   service restart do.
+
+## Keys that only sometimes act
+
+- Show a key only while it does something: `<p>` (previous run) only when a
+  container shown has one, `<n/N>` instead of `</>` once a search is kept.
+  A key that can't act is ignored, not an error.
+- A view with modes (a focused view, a picker, a search being typed) has a
+  key line per mode. `layout_tests` checks only the default one; test every
+  mode's width yourself (`focus_key_line_fits`, `p_lists_pods`).
+- When the line is full, leave out keys that mean the same in every view
+  (`<j/k>`, `<r>`, `<PgUp/PgDn/g/G>`) before shortening the view's own.
+
+## Pickers and text input
+
+- While a picker or a text input is open the view `captures_text()`, so
+  letters type and layout keys wait. Move with `↑`/`↓` there (`j`/`k`
+  are letters), `Esc` closes, `Enter` picks.
+- In the namespace picker `Space` marks several, a filter ending in `*` is
+  a prefix, and `1`-`4` pick a recent warp until something is typed.
 
 ## When a key changes
 

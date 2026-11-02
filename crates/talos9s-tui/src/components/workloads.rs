@@ -92,6 +92,25 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     options.open(path)?.write_all(text.as_bytes())
 }
 
+/// `<W> ns: …` for the summary line of a view that warps
+pub(crate) fn warp_hint(warp: &[String]) -> Line<'static> {
+    let label = talos9s_core::namespaces::label(warp, 40);
+    Line::from(vec![
+        Span::styled("<W>", crate::ui_ext::KEY),
+        Span::styled(" ns: ", Style::default().dim()),
+        if warp.is_empty() {
+            Span::styled(label, Style::default().dim())
+        } else {
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            )
+        },
+    ])
+}
+
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]
 pub struct WorkloadsData {
@@ -789,10 +808,10 @@ impl WorkloadHealthComponent {
 
     /// The namespace warped into (`None`: all) and the recent ones for the
     /// picker; from the app, per cluster
-    pub fn set_warp(&mut self, namespace: Option<String>, recent: Vec<String>) {
+    pub fn set_warp(&mut self, warp: Vec<String>, recent: Vec<String>) {
         self.recent_namespaces = recent;
-        if self.options.namespace != namespace {
-            self.options.namespace = namespace;
+        if self.options.namespaces != warp {
+            self.options.namespaces = warp;
             self.options_changed();
         }
     }
@@ -817,27 +836,14 @@ impl WorkloadHealthComponent {
         self.picker = Some(crate::components::namespace_picker::NamespacePicker::new(
             counts,
             self.recent_namespaces.clone(),
-            self.options.namespace.clone(),
+            self.options.namespaces.clone(),
             what,
         ));
     }
 
     /// `<W> ns: …` at the right of the summary line
     fn warp_hint(&self) -> Line<'static> {
-        let ns = self.options.namespace.clone();
-        Line::from(vec![
-            Span::styled("<W>", crate::ui_ext::KEY),
-            Span::styled(" ns: ", Style::default().dim()),
-            match ns {
-                Some(ns) => Span::styled(
-                    ns,
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None => Span::styled("all", Style::default().dim()),
-            },
-        ])
+        warp_hint(&self.options.namespaces)
     }
 
     /// The summary line, and the lists that couldn't be read below it
@@ -846,8 +852,7 @@ impl WorkloadHealthComponent {
             return Vec::new();
         };
         // Counts for the namespace warped into
-        let warp = self.options.namespace.as_deref();
-        let in_warp = |ns: &str| warp.is_none_or(|w| w == ns);
+        let in_warp = |ns: &str| talos9s_core::namespaces::matches(&self.options.namespaces, ns);
         let workloads: Vec<WorkloadInfo> = data
             .workloads
             .iter()
@@ -1793,8 +1798,8 @@ impl Component for WorkloadHealthComponent {
                 }
                 PickerEvent::Pick(namespace) => {
                     self.picker = None;
-                    if self.options.namespace != namespace {
-                        self.options.namespace = namespace.clone();
+                    if self.options.namespaces != namespace {
+                        self.options.namespaces = namespace.clone();
                         self.options_changed();
                     }
                     Some(Action::WarpNamespace(namespace))
@@ -2213,10 +2218,10 @@ mod tests {
         }
         assert!(matches!(
             press(&mut c, KeyCode::Enter),
-            Some(Action::WarpNamespace(Some(ns))) if ns == "apps"
+            Some(Action::WarpNamespace(ns)) if ns == ["apps"]
         ));
         assert_eq!(c.list_rows().len(), 2);
-        c.set_warp(Some("other".into()), Vec::new());
+        c.set_warp(vec!["other".into()], Vec::new());
         assert!(c.list_rows().is_empty());
         assert!(!c.captures_text());
     }

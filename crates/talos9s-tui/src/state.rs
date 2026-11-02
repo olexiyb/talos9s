@@ -50,10 +50,28 @@ pub struct UiState {
 #[serde(default)]
 pub struct NamespaceState {
     pub context: String,
-    /// The namespace the views are warped into; none for all
-    pub warp: Option<String>,
-    /// Newest first, at most `RECENT_NAMESPACES`
+    /// The namespaces and prefixes (`web*`) the views are warped into;
+    /// empty for all. A single name (the first format) reads as one.
+    #[serde(deserialize_with = "one_or_many")]
+    pub warp: Vec<String>,
+    /// Newest first, at most `RECENT_NAMESPACES`; each a warp joined with
+    /// commas
     pub recent: Vec<String>,
+}
+
+/// A list, or a single string as a list of one, or nothing
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(d)? {
+        Some(OneOrMany::One(one)) => vec![one],
+        Some(OneOrMany::Many(many)) => many,
+        None => Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -201,6 +219,16 @@ mod tests {
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), state);
+
+        // A warp saved as one name (the first format) reads as a list of one
+        std::fs::write(
+            &path,
+            "namespaces:\n- context: bc\n  warp: kube-system\n- context: k\n  warp: [a, b*]\n",
+        )
+        .unwrap();
+        let namespaces = load(&path).namespaces;
+        assert_eq!(namespaces[0].warp, ["kube-system"]);
+        assert_eq!(namespaces[1].warp, ["a", "b*"]);
 
         // Unknown keys are ignored, a garbled file means defaults
         std::fs::write(&path, "view: Logs\nsomething_new: 1\n").unwrap();

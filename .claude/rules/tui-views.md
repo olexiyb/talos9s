@@ -58,9 +58,25 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
   14-22 columns), Hidden. `[` narrows, `]` widens, `Z` toggles Hidden.
   Default is Full when the view keeps at least 100 columns.
 - **Pop-ups** (operations `o`, rolling operations `O`, confirmations) draw
-  over the whole screen.
+  over the whole screen. A picker that belongs to one view (the namespace
+  picker, `components/namespace_picker.rs`) is the view's: it draws over
+  the view, takes its keys, and tells the app the result through an action
+  (`WarpNamespace`).
+- **Focused view:** a view may focus one item (Workloads: Enter on a
+  workload) and draw it with its own panes; Esc returns to the list with
+  the selection, filter and warp where they were. Keep it in the component
+  (`Focus`), not in the app: the view cache and retargeting stay simple.
+- **External programs** (the log viewer, `v`): the view returns
+  `Action::OpenInViewer`; the loop, which owns the terminal, suspends the
+  TUI, runs it and restores. Views never touch the terminal. Files handed
+  over are private (0600) temp files, removed after.
 - **Persisted:** selection, view, pane width, folds and view settings in
-  `~/.talos9s/state.yaml` (`state.rs`); text filters are not.
+  `~/.talos9s/state.yaml` (`state.rs`); text filters are not. Settings that
+  mean the same in several views are one setting (`log_wrap`); what
+  depends on the cluster is kept per talosconfig context (namespace warp).
+  When a saved field changes shape, keep reading the old one (`warp` was
+  one name, now a list: `one_or_many`): a field that fails to parse resets
+  the whole file to defaults.
 - Not doing: `Alt+<hotkey>` to switch views from inside one. `Esc`/`q`
   first is enough, and views keep all their letters.
 
@@ -118,6 +134,11 @@ What each view shows per target:
   nodes.
 - Visual selection and copying: `talos9s_core::VisualSelection` and
   `clipboard::copy_lines`.
+- Logs from the Kubernetes API (`components/pod_logs.rs`): read with
+  `timestamps=true` to merge sources by time, bounded (sources, lines,
+  timeout), read again only while following the end, and after the
+  selection rests (300 ms). Lines are shown through `logparse` (level,
+  JSON/logfmt as message and fields), the same as the Logs view.
 - Streams: never drop a backlog wholesale (status events go with it); wrap
   counts drawn rows, not entries, when following the bottom.
 - Pull decisions out of `async` handlers into pure functions to test them

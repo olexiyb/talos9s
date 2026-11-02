@@ -1387,9 +1387,10 @@ impl App {
         if let Some(i) = self.pane_title.find(" · ns ") {
             self.pane_title.truncate(i);
         }
-        if warpable && let Some(ns) = &here.warp {
+        if warpable && !here.warp.is_empty() {
             self.pane_title.push_str(" · ns ");
-            self.pane_title.push_str(ns);
+            self.pane_title
+                .push_str(&talos9s_core::namespaces::label(&here.warp, 40));
         }
     }
 
@@ -1624,9 +1625,7 @@ impl App {
             Action::OpenInViewer(path) => self.open_in_viewer = Some(path),
             Action::WarpNamespace(namespace) => {
                 let here = self.namespaces_here();
-                if let Some(ns) = &namespace {
-                    talos9s_core::namespaces::push_recent(&mut here.recent, ns);
-                }
+                talos9s_core::namespaces::push_recent(&mut here.recent, &namespace);
                 here.warp = namespace;
                 self.apply_warp();
             }
@@ -2401,21 +2400,37 @@ mod tests {
             false,
         );
         for ns in ["web", "db", "web"] {
-            app.handle_action(Action::WarpNamespace(Some(ns.into())))
+            app.handle_action(Action::WarpNamespace(vec![ns.into()]))
                 .await
                 .unwrap();
         }
         assert!(app.pane_title.ends_with(" · ns web"), "{}", app.pane_title);
         let saved = app.current_state().namespaces;
         assert_eq!(saved.len(), 1);
-        assert_eq!(saved[0].warp.as_deref(), Some("web"));
+        assert_eq!(saved[0].warp, ["web"]);
         assert_eq!(saved[0].recent, ["web", "db"]);
+        // Several at once: one recent entry, a short title
+        app.handle_action(Action::WarpNamespace(vec!["db".into(), "web*".into()]))
+            .await
+            .unwrap();
+        assert!(
+            app.pane_title.ends_with(" · ns db, web*"),
+            "{}",
+            app.pane_title
+        );
+        assert_eq!(
+            app.current_state().namespaces[0].recent,
+            ["db,web*", "web", "db"]
+        );
         // All again: no warp in the title, the recent ones stay
-        app.handle_action(Action::WarpNamespace(None))
+        app.handle_action(Action::WarpNamespace(Vec::new()))
             .await
             .unwrap();
         assert!(!app.pane_title.contains(" · ns "));
-        assert_eq!(app.current_state().namespaces[0].recent, ["web", "db"]);
+        assert_eq!(
+            app.current_state().namespaces[0].recent,
+            ["db,web*", "web", "db"]
+        );
     }
 
     /// `A` in the disks view is remembered for the next view and run

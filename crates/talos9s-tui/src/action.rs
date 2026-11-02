@@ -63,8 +63,9 @@ pub enum Action {
     ShowHint(crate::components::cluster::NavMenuItem, String),
     /// Move the keyboard from the tree into the view on the right
     FocusView,
-    /// A view warped into a namespace (`None`: all), to remember per cluster
-    WarpNamespace(Option<String>),
+    /// A view warped into namespaces and prefixes (empty: all), to remember
+    /// per cluster
+    WarpNamespace(Vec<String>),
     /// Suspend the TUI and open this file in the log viewer (`v`)
     OpenInViewer(std::path::PathBuf),
     /// Show node operations overlay: (hostname, address, is_controlplane)

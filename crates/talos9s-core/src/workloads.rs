@@ -584,8 +584,8 @@ pub struct ListOptions {
     pub by_namespace: bool,
     /// Keep rows whose namespace, name or node contains this (any case)
     pub filter: Option<String>,
-    /// Only this namespace, exactly (the warp, `W`)
-    pub namespace: Option<String>,
+    /// Only these namespaces and prefixes (the warp, `W`); empty is all
+    pub namespaces: Vec<String>,
 }
 
 /// A row of the Workloads list
@@ -712,10 +712,7 @@ pub fn list_rows<'a>(
         .filter(|f| !f.is_empty())
         .map(str::to_lowercase);
     groups.retain(|g| {
-        options
-            .namespace
-            .as_deref()
-            .is_none_or(|ns| g.namespace() == ns)
+        crate::namespaces::matches(&options.namespaces, g.namespace())
             && (options.show_healthy || g.health() != WorkloadHealth::Healthy)
             && needle.as_deref().is_none_or(|n| g.matches(n))
     });
@@ -835,10 +832,7 @@ pub fn pod_rows<'a>(
         .iter()
         .map(|p| (p, pod_health(p, now)))
         .filter(|(p, health)| {
-            options
-                .namespace
-                .as_deref()
-                .is_none_or(|ns| p.namespace == ns)
+            crate::namespaces::matches(&options.namespaces, &p.namespace)
                 && (options.show_healthy || *health != WorkloadHealth::Healthy)
                 && needle.as_deref().is_none_or(|n| {
                     let hit = |s: &str| s.to_lowercase().contains(n);
@@ -1210,7 +1204,7 @@ mod tests {
         assert!(list_rows(&workloads, &[], &filter("nothing")).is_empty());
         // The warp is exact: "app" isn't "apps"
         let warp = |ns: &str| ListOptions {
-            namespace: Some(ns.into()),
+            namespaces: vec![ns.into()],
             ..Default::default()
         };
         assert_eq!(list_rows(&workloads, &[], &warp("apps")).len(), 2);
@@ -1411,7 +1405,7 @@ mod tests {
         );
         let warped = ListOptions {
             show_healthy: true,
-            namespace: Some("web".into()),
+            namespaces: vec!["web".into()],
             ..Default::default()
         };
         assert_eq!(
