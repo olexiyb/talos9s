@@ -52,26 +52,6 @@ nix run github:olexiyb/talos9s           # try it
 nix shell github:olexiyb/talos9s         # put it on PATH
 ```
 
-<details>
-<summary>NixOS flake</summary>
-
-```nix
-{
-  inputs.talos9s.url = "github:olexiyb/talos9s";
-  outputs = { nixpkgs, talos9s, ... }: {
-    nixosConfigurations.mymachine = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        { nixpkgs.overlays = [ talos9s.overlays.default ]; }
-        ({ pkgs, ... }: { environment.systemPackages = [ pkgs.talos9s ]; })
-      ];
-    };
-  };
-}
-```
-
-</details>
-
 ## Quick start
 
 You need a talosconfig (`~/.talos/config` or `$TALOSCONFIG`) and network
@@ -97,16 +77,14 @@ talos9s --insecure --endpoint <node-ip>
 
 ## Features
 
-### One workspace
+### Workspace and Dashboard
 
 The cluster tree and the menu stay on the left; the chosen view fills the
 right side for whatever is selected. Move the selection and the view follows
 (a node's network, then the next node's, or the whole group's on a group
-row); pick another menu entry and the selection stays. Recently shown views
-come back instantly. `[` / `]` narrow or widen the left pane, `Z` zooms the
-view to the full width.
+row). Recently shown views come back instantly.
 
-### Cluster overview (Dashboard)
+The Dashboard shows:
 
 - All contexts at once, each with its control plane and workers, node health
   and etcd quorum.
@@ -148,7 +126,7 @@ warning listed once with its nodes.
 | etcd | Quorum, members, leader, alarms, advertised and listen addresses (running vs config), live member log |
 | Volumes | LINSTOR/DRBD and ZFS LocalPV volumes, with problems first (see below) |
 | Workloads | Deployments, StatefulSets and pod problems by namespace |
-| Lifecycle | Talos and Kubernetes versions across nodes, config drift |
+| Lifecycle | Talos and Kubernetes versions across nodes; a saved config that differs from the one in effect is flagged "staged, reboot" |
 | Security | Certificate expiry, encryption status |
 
 **Volumes** compares LINSTOR's view with each node's kernel and flags what
@@ -197,43 +175,27 @@ mouse do the same):
 | `e` `b` `c` | etcd, lifecycle (boot and upgrades), security (cluster-wide) | same |
 | `O` | Rolling operations | Rolling operations |
 
-Moving around:
+Everywhere:
 
-- `j`/`k` or arrows move the selection; the view follows after a moment.
-- `→` or `Enter` (or a click) puts the keyboard in the view; `←`, `Esc` or
-  `q` gives it back to the side of the tree you came from (after closing the
-  view's own menu, filter or search). `q` doubles for `Esc` because some
-  terminals, IntelliJ's among them, never pass `Esc` to the app. In the tree,
-  `Esc` returns to the Dashboard.
-- `Tab` moves to the next window: Nodes → menu → view → Nodes (`Shift+Tab`
-  the other way).
-- Mouse: click a row to select it in any view, double-click to open it (a
-  node from a group table, an interface's connections), click a menu entry
-  to switch. In the logs panels a click toggles a service, level
-  or node. In Network, clicking a sortable column header sorts by it and
-  "Interfaces" in the connections breadcrumb goes back.
-- `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh.
-- In a view's lists, `g`/`G` or `Home`/`End` jump to the top or bottom and
-  `PageUp`/`PageDown` move a page; the selection stops at the ends.
-- `q` in the tree returns to the Dashboard; on the Dashboard it asks before
-  quitting (`y`). `Ctrl+C` quits from anywhere at once.
-- The same letter means the same thing in every view: `a` auto-refresh (where a view has it),
-  `A` show all (or issues only), `0` all levels, services or nodes in logs,
-  `y` copy, `/` filter or search, `g`/`G` top and bottom. Uppercase in the
-  tree (`L`, `O`) is the across-nodes version of a view.
-- `[` / `]` narrow or widen the left pane (full, compact, hidden), `Z` zooms.
-- talos9s starts where you left it: the selected cluster, group or node, the
-  view, the pane width, folded groups, log levels, sort orders and view
-  toggles are kept in `~/.talos9s/state.yaml`. Text filters are not. Delete
-  the file to start fresh.
-- The top line shows the version, and a newer release when the daily check
-  found one (shortened or left out on a narrow screen). `talos9s --version`
-  prints both.
-- The top line lists the keys that work everywhere (`Tab`, `Z`, `[` `]`,
-  `Ctrl+C`); the bottom line lists only what acts in the focused window
-  right now, so `Space` fold appears on an expandable row, `o` ops on a
-  node, and a view's own keys (filters, search, submodes) while it has the
-  keyboard.
+- `j`/`k` or arrows move the selection and the view follows; `g`/`G` or
+  `Home`/`End` jump to top or bottom, `PageUp`/`PageDown` move a page.
+- `→`, `Enter` or a click puts the keyboard in the view; `←`, `Esc` or `q`
+  gives it back (`q` doubles for `Esc` because some terminals, IntelliJ's
+  among them, never pass `Esc`). `Tab` / `Shift+Tab` cycle Nodes → menu → view.
+- `q` in a view returns to the Dashboard; there it asks before quitting
+  (`y`). `Ctrl+C` quits at once.
+- `/` filter or search, `r` refresh, `a` auto-refresh, `A` show all (or issues
+  only), `0` all levels, services or nodes in logs, `y` copy, `Space` fold.
+  The same letter means the same thing in every view; uppercase in the tree
+  (`L`, `O`) is the across-nodes version of a view.
+- `[` / `]` narrow or widen the left pane, `Z` zooms the view to full width.
+- Mouse: click a row to select it, double-click to open it, click a menu
+  entry or a sortable column header (Network) to switch or sort; the wheel
+  scrolls the pane under the pointer.
+- The top line lists the keys that work everywhere; the bottom line only
+  what acts in the focused window right now.
+
+talos9s starts where you left it (see [Safety](#safety) for the state file).
 
 ## Safety
 
@@ -248,7 +210,9 @@ node, so it is careful about what it changes:
 - **Never shows secrets.** The machine config viewer masks keys, tokens,
   passwords, private keys and Secret data before anything is drawn.
 - **Writes only:** the audit log, the remembered view state
-  (`~/.talos9s/state.yaml`, no cluster data), its debug log (temp dir or
+  (`~/.talos9s/state.yaml`: selection, view, pane width, folded groups, sort
+  orders and toggles, no cluster data, no text filters; delete it to start
+  fresh), its debug log (temp dir or
   `--log-file`), packet captures you save (`/tmp`, owner-only) and the
   wizard's output directory. It has no configuration file.
 - **No in-cluster access needed.** Nothing runs in the cluster and no
@@ -262,42 +226,31 @@ node, so it is careful about what it changes:
 
 - **State over logs.** Health comes from current state (files, Talos and
   Kubernetes APIs), not from log lines, so an old error in a log doesn't
-  raise an alarm. When a log is used to explain a state, it counts only if it
-  matches what the API reports now.
+  raise an alarm.
 - **Unknown over wrong.** If a source can't be read, a check says unknown
   instead of guessing; nothing crashes, the rest of the screen keeps working.
 - **Nodes, not the VIP.** The Talos API is addressed at each node; the
   cluster VIP needs a healthy control plane, so it fails exactly when you
-  need diagnostics.
-- **talosctl for COSI.** Talos resources (COSI) aren't exposed on `:50000`;
-  talos9s reads them through `talosctl get`.
-- **Works without discovery.** With the Talos discovery service disabled,
-  nodes are found through the Kubernetes API.
-- **Bounded everything.** Every API call has a timeout and slow refreshes run
-  in the background, so a dead node never freezes the UI.
+  need diagnostics. Talos resources (COSI) aren't exposed on `:50000`, so
+  they are read through `talosctl get`. Every call has a timeout, so a dead
+  node never freezes the UI.
 
 ## Development
 
 ```bash
 cargo test --all
 cargo clippy --all --all-targets -- -D warnings
-cargo fmt --all -- --check
-RUST_LOG=debug cargo run
 TALOS9S_CONTEXT=my-cluster cargo dev   # rebuild and restart on every change (needs cargo-watch)
-lefthook install                       # once per clone: rustfmt before commits, clippy and tests before pushes
-cargo deny check                       # dependencies: advisories, licenses, sources (deny.toml; CI runs it)
 ```
 
 The workspace has three crates: `talos-rs` (Talos client), `talos9s-core`
 (logic, unit-tested without a terminal or cluster) and `talos9s-tui` (the
-ratatui app). `protoc` is needed only to regenerate the Talos API client
-(`cargo build -p talos-rs --features regenerate`) after changing
-`crates/talos-rs/proto/`.
+ratatui app). Git hooks, `cargo deny`, regenerating the Talos API client and
+the other conventions are in [CLAUDE.md](CLAUDE.md).
 
 - Local Talos clusters for testing: [test-clusters/](test-clusters/README.md)
 - Design plans, e.g. [rolling upgrades](plans/upgrades.md): [plans/](plans/)
-- Conventions for contributors and AI assistants: [CLAUDE.md](CLAUDE.md) and
-  [.claude/rules/](.claude/rules/)
+- Rules per area: [.claude/rules/](.claude/rules/)
 
 Contributions are welcome. Keep changes in line with
 [How it works](#how-it-works): check real state, degrade gracefully, and
