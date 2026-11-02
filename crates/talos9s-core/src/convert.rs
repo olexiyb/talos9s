@@ -39,6 +39,43 @@ pub fn float_to_u16(x: f64) -> u16 {
     if x.is_nan() || x <= 0.0 { 0 } else { x as u16 }
 }
 
+/// A Kubernetes quantity such as `838259748Ki` or `1G` in bytes; `None`
+/// for a suffix it doesn't know (milli, exa, exponents)
+///
+/// ```
+/// use talos9s_core::convert::parse_quantity;
+///
+/// assert_eq!(parse_quantity("838259748Ki"), Some(838_259_748 * 1024));
+/// assert_eq!(parse_quantity("1.5Gi"), Some(1_610_612_736));
+/// assert_eq!(parse_quantity("2G"), Some(2_000_000_000));
+/// assert_eq!(parse_quantity("512"), Some(512));
+/// assert_eq!(parse_quantity("12Xi"), None);
+/// assert_eq!(parse_quantity(""), None);
+/// ```
+pub fn parse_quantity(q: &str) -> Option<u64> {
+    let q = q.trim();
+    let split = q
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(q.len());
+    let (number, suffix) = q.split_at(split);
+    let multiplier: u64 = match suffix {
+        "" => 1,
+        "Ki" => 1 << 10,
+        "Mi" => 1 << 20,
+        "Gi" => 1 << 30,
+        "Ti" => 1 << 40,
+        "Pi" => 1 << 50,
+        "k" => 1_000,
+        "M" => 1_000_000,
+        "G" => 1_000_000_000,
+        "T" => 1_000_000_000_000,
+        "P" => 1_000_000_000_000_000,
+        _ => return None,
+    };
+    let value: f64 = number.parse().ok()?;
+    Some(float_to_u64(value * multiplier as f64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

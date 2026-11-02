@@ -13,16 +13,16 @@ helpers).
 |--------|-------|
 | `indicators` | `HealthIndicator`, `HasHealth`, `QuorumState`, `SafetyStatus` |
 | `async_state` | `AsyncState<T>`: loading, data, error, retry, auto-refresh timing |
-| `formatting` | `format_bytes`, `format_duration_human`, `truncate_string`, `pluralize` |
+| `formatting` | `format_bytes`, `format_kib` (storage, KiB/GiB), `format_eta`, `format_duration_human`, `truncate_string`, `pluralize` |
 | `selection` | `SelectableList<T>`, `VisualSelection` (anchor + cursor, for `V`/`y`) |
 | `errors` | `format_talos_error`: user-facing error text |
 | `network` | port → service names, `cidr_contains`, route table and resolv.conf formatting |
 | `diagnostics` | `CheckStatus`, `CniType`, `CniInfo`, `PodHealthInfo` |
 | `constants` | thresholds, CRD lists, refresh intervals |
-| `convert` | saturating numeric conversions (`to_u16`, `float_to_u64`, …) instead of `as` |
+| `convert` | saturating numeric conversions (`to_u16`, `float_to_u64`, …) instead of `as`; `parse_quantity` (Kubernetes quantities) |
 | `etcd` | `EtcdQuorum`: quorum and whether a node can go down |
 | `logparse` | log line timestamp, level and message; search match ranges |
-| `stats` | `most_common`, `used_of_total`, `gib` |
+| `stats` | `most_common`, `used_of_total`, `used_pct`, `gib` |
 | `version` | `is_newer`, `check_due` (update check) |
 
 If logic in the TUI can be tested without a terminal or a cluster, it belongs

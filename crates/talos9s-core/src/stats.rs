@@ -28,6 +28,18 @@ pub fn used_of_total(used: u64, total: u64) -> String {
     }
 }
 
+/// Percent of `total` in use, `None` when `total` is 0
+///
+/// ```
+/// use talos9s_core::stats::used_pct;
+///
+/// assert_eq!(used_pct(1, 4), Some(25.0));
+/// assert_eq!(used_pct(5, 0), None);
+/// ```
+pub fn used_pct(used: u64, total: u64) -> Option<f32> {
+    (total > 0).then(|| used as f32 / total as f32 * 100.0)
+}
+
 /// Bytes to GiB, for display
 pub fn gib(bytes: u64) -> f64 {
     bytes as f64 / 1024.0 / 1024.0 / 1024.0

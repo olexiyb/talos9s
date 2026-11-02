@@ -53,7 +53,7 @@ impl StoragePool {
     /// Percentage of the pool in use, `None` without capacity data
     pub fn used_pct(&self) -> Option<f32> {
         let (free, total) = (self.free?, self.total?);
-        (total > 0).then(|| total.saturating_sub(free) as f32 / total as f32 * 100.0)
+        talos9s_core::stats::used_pct(total.saturating_sub(free), total)
     }
 }
 

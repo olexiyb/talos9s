@@ -230,6 +230,54 @@ pub fn pluralize(count: usize, singular: &str, plural: &str) -> String {
     }
 }
 
+/// KiB as a human size in binary units, e.g. `11.0 GiB`, `924 KiB`.
+///
+/// Not [`format_bytes`]: that labels binary sizes `KB`/`GB`, while DRBD,
+/// LINSTOR and their remedies speak KiB/GiB, and storage sizes are compared
+/// against those tools' output.
+///
+/// ```
+/// use talos9s_core::formatting::format_kib;
+///
+/// assert_eq!(format_kib(924), "924 KiB");
+/// assert_eq!(format_kib(1536), "1.5 MiB");
+/// assert_eq!(format_kib(11 * 1024 * 1024), "11.0 GiB");
+/// ```
+pub fn format_kib(kib: u64) -> String {
+    const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+    let mut value = kib as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{kib} KiB")
+    } else {
+        format!("{value:.1} {}", UNITS.get(unit).unwrap_or(&"PiB"))
+    }
+}
+
+/// Seconds left as `1h 05m`, `4m 12s` or `9s`
+///
+/// ```
+/// use talos9s_core::formatting::format_eta;
+///
+/// assert_eq!(format_eta(3_900), "1h 05m");
+/// assert_eq!(format_eta(252), "4m 12s");
+/// assert_eq!(format_eta(9), "9s");
+/// ```
+pub fn format_eta(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

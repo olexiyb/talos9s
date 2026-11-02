@@ -33,8 +33,7 @@ impl ZfsPool {
 
     /// Percentage of the pool in use, `None` for an empty pool
     pub fn used_pct(&self) -> Option<f32> {
-        let size = self.size();
-        (size > 0).then(|| self.used as f32 / size as f32 * 100.0)
+        talos9s_core::stats::used_pct(self.used, self.size())
     }
 }
 
@@ -188,7 +187,8 @@ pub fn apply_zfs_mounts(
 
 /// Problems of a ZFS LocalPV volume, worst first
 pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issue> {
-    use crate::linstor_volumes::{Issue, format_kib, usage_issue};
+    use crate::linstor_volumes::{Issue, usage_issue};
+    use talos9s_core::format_kib;
     let mut issues = Vec::new();
     match volume.state.as_str() {
         "Ready" => {}
@@ -243,8 +243,8 @@ fn pools_from(pools: &Value) -> Vec<ZfsPool> {
     items::<ZfsPoolJson>(pools)
         .filter_map(|p| {
             Some(ZfsPool {
-                free: parse_quantity(&p.free)?,
-                used: parse_quantity(&p.used)?,
+                free: talos9s_core::convert::parse_quantity(&p.free)?,
+                used: talos9s_core::convert::parse_quantity(&p.used)?,
                 name: p.name,
             })
         })
@@ -257,33 +257,6 @@ struct ZfsPoolJson {
     name: String,
     free: String,
     used: String,
-}
-
-/// Parse a Kubernetes quantity such as `838259748Ki` or `1G` into bytes
-fn parse_quantity(q: &str) -> Option<u64> {
-    let q = q.trim();
-    let split = q
-        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .unwrap_or(q.len());
-    let (number, suffix) = q.split_at(split);
-    let multiplier: u64 = match suffix {
-        "" => 1,
-        "Ki" => 1 << 10,
-        "Mi" => 1 << 20,
-        "Gi" => 1 << 30,
-        "Ti" => 1 << 40,
-        "Pi" => 1 << 50,
-        "k" => 1_000,
-        "M" => 1_000_000,
-        "G" => 1_000_000_000,
-        "T" => 1_000_000_000_000,
-        "P" => 1_000_000_000_000_000,
-        _ => return None,
-    };
-    let value: f64 = number.parse().ok()?;
-    Some(talos9s_core::convert::float_to_u64(
-        value * multiplier as f64,
-    ))
 }
 
 #[cfg(test)]
@@ -380,16 +353,6 @@ mod tests {
 
         let not_resized = zfs_volume_issues(&zfs_volume("Ready", 2 * gib, Some((gib, 0))));
         assert!(not_resized[0].text.contains("resize not applied"));
-    }
-
-    #[test]
-    fn quantities() {
-        assert_eq!(parse_quantity("838259748Ki"), Some(838_259_748 * 1024));
-        assert_eq!(parse_quantity("1.5Gi"), Some(1_610_612_736));
-        assert_eq!(parse_quantity("2G"), Some(2_000_000_000));
-        assert_eq!(parse_quantity("512"), Some(512));
-        assert_eq!(parse_quantity("12Xi"), None);
-        assert_eq!(parse_quantity(""), None);
     }
 
     #[test]

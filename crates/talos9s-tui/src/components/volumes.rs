@@ -19,7 +19,7 @@ use crate::components::Component;
 use crate::components::diagnostics::k8s::KubeconfigSource;
 use crate::linstor_volumes::{
     Issue, LinstorVolume, Remedy, Replica, SatellitePod, Severity, apply_mounts, fetch_mounts,
-    fetch_satellites, fetch_volumes, format_kib, linstor_mount_nodes, observe_drbd, remediation,
+    fetch_satellites, fetch_volumes, linstor_mount_nodes, observe_drbd, remediation,
     usage_severity, volume_issues,
 };
 use crate::orphans::{Orphan, PvIndex, fetch_pv_index};
@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::time::Duration;
 use talos_rs::TalosClient;
-use talos9s_core::{AsyncState, HasHealth, HealthIndicator};
+use talos9s_core::{AsyncState, HasHealth, HealthIndicator, format_kib};
 
 /// Auto-refresh interval: a full scan reads a few hundred kernel files
 const AUTO_REFRESH_INTERVAL: Duration = talos9s_core::constants::refresh_intervals::RARE;
