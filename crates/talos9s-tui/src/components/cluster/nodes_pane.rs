@@ -1,6 +1,7 @@
 //! The nodes pane: the node list and the navigation menu
 
 use super::*;
+use talos9s_core::convert::to_u16;
 
 impl ClusterComponent {
     /// Draw the nodes pane (left column) with navigation menu below
@@ -286,7 +287,7 @@ impl ClusterComponent {
             .map(|item| 1 + item.hotkey().len() + 1 + item.label().len())
             .max()
             .unwrap_or(0);
-        (list.max(menu) + 3) as u16
+        to_u16(list.max(menu) + 3)
     }
 
     pub(super) fn draw_nodes_pane(&mut self, frame: &mut Frame, area: Rect) {
@@ -308,7 +309,7 @@ impl ClusterComponent {
         frame.render_widget(block, area);
 
         // Split inner area: nodes list at top, nav menu at bottom
-        let menu_height = NavMenuItem::ALL.len() as u16 + 1; // +1 for separator
+        let menu_height = to_u16(NavMenuItem::ALL.len()).saturating_add(1); // +1 for separator
         let [list, menu] = Layout::vertical([
             Constraint::Min(3),              // Nodes list
             Constraint::Length(menu_height), // Navigation menu (vertical)
@@ -340,12 +341,12 @@ impl ClusterComponent {
                 }
             }
             scroll = scroll.min(total.saturating_sub(height));
-            frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list);
+            frame.render_widget(Paragraph::new(lines).scroll((to_u16(scroll), 0)), list);
             crate::ui_ext::draw_scrollbar(
                 frame,
                 Rect::new(area.x + area.width - 1, list.y, 1, list.height),
-                total as u16,
-                scroll as u16,
+                to_u16(total),
+                to_u16(scroll),
             );
             self.tree_scroll = scroll;
             let mut hits = self.hits.borrow_mut();

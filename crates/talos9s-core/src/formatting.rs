@@ -45,7 +45,7 @@ pub fn format_bytes_signed(bytes: i64) -> String {
     if bytes < 0 {
         "0 B".to_string()
     } else {
-        format_bytes(bytes as u64)
+        format_bytes(crate::convert::non_negative(bytes))
     }
 }
 

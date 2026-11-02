@@ -908,8 +908,8 @@ impl NodeInfoComponent {
             if len == 0 {
                 return;
             }
-            let i = table.selected().unwrap_or(0) as isize + delta;
-            table.select(Some(i.clamp(0, len as isize - 1) as usize));
+            let i = table.selected().unwrap_or(0).saturating_add_signed(delta);
+            table.select(Some(i.min(len - 1)));
         };
         match self.tab {
             NodeInfoTab::Containers => {
@@ -922,15 +922,20 @@ impl NodeInfoComponent {
             }
             NodeInfoTab::Config if self.config_in_content => {
                 let (start, end) = self.section_range();
-                let last = end.saturating_sub(1).max(start) as isize;
-                self.config_scroll =
-                    (self.config_scroll as isize + delta).clamp(start as isize, last) as usize;
+                let last = end.saturating_sub(1).max(start);
+                self.config_scroll = self
+                    .config_scroll
+                    .saturating_add_signed(delta)
+                    .clamp(start, last);
             }
             NodeInfoTab::Config => {
-                let count = self.config_sections().len() as isize;
+                let count = self.config_sections().len();
                 if count > 0 {
-                    let i = (self.config_section as isize + delta).clamp(0, count - 1);
-                    self.select_section(i as usize);
+                    let i = self
+                        .config_section
+                        .saturating_add_signed(delta)
+                        .min(count - 1);
+                    self.select_section(i);
                 }
             }
         }
@@ -1118,7 +1123,8 @@ impl NodeInfoComponent {
             .map(|s| s.label.chars().count() + 2 * s.depth as usize)
             .max()
             .unwrap_or(10);
-        let outline_width = ((label_width + 9) as u16).clamp(20, (inner.width / 3).max(20));
+        let outline_width =
+            talos9s_core::convert::to_u16(label_width + 9).clamp(20, (inner.width / 3).max(20));
         let [outline_area, content_area] =
             Layout::horizontal([Constraint::Length(outline_width), Constraint::Min(10)])
                 .areas(inner);
@@ -1502,7 +1508,7 @@ impl Component for NodeInfoComponent {
             self.extensions_table.select(Some(0));
             return Ok(None);
         }
-        let page = self.config_page as isize;
+        let page = isize::try_from(self.config_page).unwrap_or(isize::MAX);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 if !self.query().text.is_empty() {

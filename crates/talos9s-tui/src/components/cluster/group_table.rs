@@ -1,6 +1,7 @@
 //! The group table and the KubeSpan / services matrices of a group of nodes
 
 use super::*;
+use talos9s_core::convert::to_u16;
 
 impl ClusterComponent {
     /// The KubeSpan peer matrix of `nodes` of the active cluster, from the
@@ -10,7 +11,7 @@ impl ClusterComponent {
             Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
         // The node × node matrix shows asymmetric failures but needs a column
         // per node, so past the pane's width it becomes one row per node
-        let fits = kubespan_matrix_width(nodes) <= body.width && (nodes.len() as u16) < body.height;
+        let fits = kubespan_matrix_width(nodes) <= body.width && to_u16(nodes.len()) < body.height;
         let text = if fits {
             " Each row: the node's WireGuard peers (● up, ✗ down, · not a peer, … not read yet)"
         } else {
@@ -83,12 +84,14 @@ impl ClusterComponent {
                 Row::new(vec![Cell::from(node.clone()), up, down])
             })
             .collect();
-        let name_width = nodes
-            .iter()
-            .map(|n| n.chars().count())
-            .max()
-            .unwrap_or(0)
-            .max(4) as u16;
+        let name_width = to_u16(
+            nodes
+                .iter()
+                .map(|n| n.chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(4),
+        );
         let header = Row::new(vec!["Node", "Peers up", "Not up"])
             .style(Style::default().fg(Color::Gray).bold());
         Table::new(
@@ -181,13 +184,15 @@ impl ClusterComponent {
         let cols = GroupCol::shown(has_zfs, wide, has_kubespan, has_tailscale);
         let name_width = nodes.iter().map(|n| n.chars().count()).max().unwrap_or(0);
         let version_width = |versions: Vec<Option<&str>>| {
-            versions
-                .into_iter()
-                .flatten()
-                .map(|v| v.chars().count())
-                .max()
-                .unwrap_or(0)
-                .max(5) as u16
+            to_u16(
+                versions
+                    .into_iter()
+                    .flatten()
+                    .map(|v| v.chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    .max(5),
+            )
         };
         let talos_width = version_width(
             nodes
@@ -394,7 +399,7 @@ impl ClusterComponent {
 
         let header = cols.iter().map(|c| c.title());
         let widths = cols.iter().map(|c| match c {
-            GroupCol::Node => Constraint::Length(name_width.max(4) as u16),
+            GroupCol::Node => Constraint::Length(to_u16(name_width.max(4))),
             GroupCol::Talos => Constraint::Length(talos_width),
             GroupCol::K8s => Constraint::Length(k8s_width),
             GroupCol::Gw => Constraint::Fill(1),
@@ -412,7 +417,7 @@ impl ClusterComponent {
         }
         let linstor = self.linstor_rows_for(cluster_idx, &nodes);
         let linstor_height = match &linstor {
-            Some(Ok(rows)) => rows.len() as u16 + 2, // header + rows + spacer
+            Some(Ok(rows)) => to_u16(rows.len()).saturating_add(2), // header + rows + spacer
             Some(Err(_)) => 2,
             None => 0,
         };
@@ -421,7 +426,7 @@ impl ClusterComponent {
         } else {
             Vec::new()
         };
-        let kubespan_height = kubespan.len() as u16;
+        let kubespan_height = to_u16(kubespan.len());
         // One row per service seen on any node, plus the header
         let services_height = {
             let mut ids: Vec<&str> = nodes
@@ -431,10 +436,10 @@ impl ClusterComponent {
                 .collect();
             ids.sort_unstable();
             ids.dedup();
-            ids.len() as u16 + 1
+            to_u16(ids.len()).saturating_add(1)
         };
         let heights = [
-            nodes.len() as u16 + 2, // header + rows + spacer
+            to_u16(nodes.len()).saturating_add(2), // header + rows + spacer
             linstor_height,
             services_height + u16::from(kubespan_height > 0), // spacer before KubeSpan
             kubespan_height,
@@ -443,7 +448,7 @@ impl ClusterComponent {
             frame,
             inner,
             heights.iter().sum(),
-            self.details_scroll as u16,
+            to_u16(self.details_scroll),
             |buf, full| {
                 let [table_area, linstor_area, services_area, kubespan_area] =
                     Layout::vertical(heights.map(Constraint::Length)).areas(full);
@@ -611,11 +616,11 @@ impl ClusterComponent {
             .max()
             .unwrap_or(0)
             .max(title.chars().count());
-        let mut widths = vec![Constraint::Length(name_width as u16)];
+        let mut widths = vec![Constraint::Length(to_u16(name_width))];
         widths.extend(
             nodes
                 .iter()
-                .map(|n| Constraint::Length(n.chars().count().max(1) as u16)),
+                .map(|n| Constraint::Length(to_u16(n.chars().count().max(1)))),
         );
         let mut header = vec![Cell::from(Span::styled(
             title,
@@ -746,7 +751,7 @@ impl ClusterComponent {
             Table::new(
                 rows,
                 [
-                    Constraint::Length(name_width as u16),
+                    Constraint::Length(to_u16(name_width)),
                     Constraint::Length(7),
                     Constraint::Fill(1),
                 ],
@@ -783,11 +788,11 @@ impl ClusterComponent {
             })
             .collect();
 
-        let mut widths = vec![Constraint::Length(name_width as u16)];
+        let mut widths = vec![Constraint::Length(to_u16(name_width))];
         widths.extend(
             nodes
                 .iter()
-                .map(|n| Constraint::Length(n.chars().count().max(1) as u16)),
+                .map(|n| Constraint::Length(to_u16(n.chars().count().max(1)))),
         );
         let mut header = vec![Cell::from(title)];
         header.extend(nodes.iter().map(|n| Cell::from(n.clone())));

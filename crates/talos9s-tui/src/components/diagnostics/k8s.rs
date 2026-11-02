@@ -1159,7 +1159,10 @@ pub async fn drain_node_with_progress(
                         }
 
                         let delete_params = if let Some(grace) = options.grace_period_secs {
-                            DeleteParams::default().grace_period(grace as u32)
+                            DeleteParams::default().grace_period(
+                                u32::try_from(talos9s_core::convert::non_negative(grace))
+                                    .unwrap_or(u32::MAX),
+                            )
                         } else {
                             DeleteParams::default().grace_period(0)
                         };
@@ -1220,7 +1223,10 @@ pub async fn drain_node_with_progress(
                 }
 
                 let delete_params = if let Some(grace) = options.grace_period_secs {
-                    DeleteParams::default().grace_period(grace as u32)
+                    DeleteParams::default().grace_period(
+                        u32::try_from(talos9s_core::convert::non_negative(grace))
+                            .unwrap_or(u32::MAX),
+                    )
                 } else {
                     DeleteParams::default().grace_period(0)
                 };

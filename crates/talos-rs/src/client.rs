@@ -351,11 +351,17 @@ impl TalosClient {
             .map(|(i, msg)| {
                 let local_time = msg.localtime.map(|t| {
                     std::time::UNIX_EPOCH
-                        + std::time::Duration::new(t.seconds as u64, t.nanos as u32)
+                        + std::time::Duration::new(
+                            u64::try_from(t.seconds).unwrap_or(0),
+                            u32::try_from(t.nanos).unwrap_or(0),
+                        )
                 });
                 let remote_time = msg.remotetime.map(|t| {
                     std::time::UNIX_EPOCH
-                        + std::time::Duration::new(t.seconds as u64, t.nanos as u32)
+                        + std::time::Duration::new(
+                            u64::try_from(t.seconds).unwrap_or(0),
+                            u32::try_from(t.nanos).unwrap_or(0),
+                        )
                 });
 
                 // Calculate offset
@@ -1640,7 +1646,9 @@ impl CpuStat {
         // A counter going back (reboot, PID namespace) gives a negative or
         // impossible busy share: clamp to 0-100
         let delta_busy = curr.busy() - prev.busy();
-        ((delta_busy / delta_total) * 100.0).clamp(0.0, 100.0) as f32
+        #[allow(clippy::cast_possible_truncation)] // clamped to 0-100, exact enough in f32
+        let pct = ((delta_busy / delta_total) * 100.0).clamp(0.0, 100.0) as f32;
+        pct
     }
 }
 
@@ -1819,12 +1827,12 @@ impl ProcessInfo {
         if self.cpu_time < 60.0 {
             format!("{:.1}s", self.cpu_time)
         } else if self.cpu_time < 3600.0 {
-            let mins = (self.cpu_time / 60.0) as u32;
-            let secs = (self.cpu_time % 60.0) as u32;
+            let mins = float_to_u64(self.cpu_time / 60.0);
+            let secs = float_to_u64(self.cpu_time % 60.0);
             format!("{mins}m {secs}s")
         } else {
-            let hours = (self.cpu_time / 3600.0) as u32;
-            let mins = ((self.cpu_time % 3600.0) / 60.0) as u32;
+            let hours = float_to_u64(self.cpu_time / 3600.0);
+            let mins = float_to_u64((self.cpu_time % 3600.0) / 60.0);
             format!("{hours}h {mins}m")
         }
     }
@@ -2063,12 +2071,12 @@ impl NetDevRate {
         Self {
             name: curr.name.clone(),
             rx_bytes_per_sec: if elapsed_secs > 0.0 {
-                (rx_delta as f64 / elapsed_secs) as u64
+                float_to_u64(rx_delta as f64 / elapsed_secs)
             } else {
                 0
             },
             tx_bytes_per_sec: if elapsed_secs > 0.0 {
-                (tx_delta as f64 / elapsed_secs) as u64
+                float_to_u64(tx_delta as f64 / elapsed_secs)
             } else {
                 0
             },
@@ -2424,6 +2432,13 @@ fn stream_lines(
     });
 
     rx
+}
+
+/// A float as a whole non-negative number, toward zero: NaN and negatives
+/// give 0, values past the range `u64::MAX` (float-to-int `as` saturates)
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn float_to_u64(x: f64) -> u64 {
+    if x.is_nan() || x <= 0.0 { 0 } else { x as u64 }
 }
 
 #[cfg(test)]

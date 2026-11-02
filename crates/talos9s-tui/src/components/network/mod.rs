@@ -711,7 +711,9 @@ impl NetworkStatsComponent {
             }
             ViewMode::Connections => {
                 let crumb = self.hits.breadcrumb;
-                if contains(crumb, column, row) && column < crumb.x + "Interfaces".len() as u16 {
+                if contains(crumb, column, row)
+                    && column < crumb.x + talos9s_core::convert::to_u16("Interfaces".len())
+                {
                     self.exit_connections_view();
                     return;
                 }

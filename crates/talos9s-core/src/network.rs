@@ -89,10 +89,7 @@ pub fn port_to_service(port: u16) -> Option<&'static str> {
 
 /// Get service name for a u32 port (for compatibility)
 pub fn port_to_service_u32(port: u32) -> Option<&'static str> {
-    if port > u16::MAX as u32 {
-        return None;
-    }
-    port_to_service(port as u16)
+    port_to_service(u16::try_from(port).ok()?)
 }
 
 /// `/etc/resolv.conf` for display: nameservers, search domains and options,

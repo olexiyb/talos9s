@@ -19,6 +19,7 @@ helpers).
 | `network` | port → service names |
 | `diagnostics` | `CheckStatus`, `CniType`, `CniInfo`, `PodHealthInfo` |
 | `constants` | thresholds, CRD lists, refresh intervals |
+| `convert` | saturating numeric conversions (`to_u16`, `float_to_u64`, …) instead of `as` |
 | `etcd` | `EtcdQuorum`: quorum and whether a node can go down |
 | `logparse` | log line timestamp, level and message; search match ranges |
 

@@ -1,6 +1,7 @@
 //! Free functions shared by the cluster tree, group table and dashboard
 
 use super::*;
+use talos9s_core::convert::to_u16;
 
 /// Wrap a cluster warning into indented lines so it reads as part of the
 /// cluster's expanded tray rather than a detached block clipped at the pane
@@ -108,7 +109,7 @@ pub(super) fn kubespan_matrix_width(nodes: &[String]) -> u16 {
 /// then one per node (two spaces apart)
 pub(super) fn matrix_width(name_width: usize, nodes: &[String]) -> u16 {
     let columns: usize = nodes.iter().map(|n| n.chars().count().max(1) + 2).sum();
-    (name_width + columns) as u16
+    to_u16(name_width + columns)
 }
 
 /// What the service symbols mean, for a window's bottom border: it stays while
@@ -156,7 +157,9 @@ pub(super) fn unix_now_secs() -> u64 {
 
 /// Format an uptime in seconds, e.g. "5d 17h"
 pub(super) fn format_uptime(secs: u64) -> String {
-    talos9s_core::format_duration_detailed(chrono::Duration::seconds(secs as i64))
+    talos9s_core::format_duration_detailed(chrono::Duration::seconds(
+        i64::try_from(secs).unwrap_or(i64::MAX),
+    ))
 }
 
 /// Color for a memory usage percentage
@@ -290,10 +293,10 @@ pub(super) fn draw_linstor_table(
         .unwrap_or(0)
         .max(5);
     let widths = [
-        Constraint::Length(name_width as u16),
+        Constraint::Length(to_u16(name_width)),
         Constraint::Length(9),
-        Constraint::Length(state_width as u16),
-        Constraint::Length(pools_width as u16),
+        Constraint::Length(to_u16(state_width)),
+        Constraint::Length(to_u16(pools_width)),
         Constraint::Fill(1),
     ];
     let header = Row::new(vec![title.as_str(), "Type", "State", "Pools", "Addresses"])

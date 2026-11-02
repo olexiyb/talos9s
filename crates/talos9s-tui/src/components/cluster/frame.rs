@@ -1,6 +1,7 @@
 //! The workspace frame: header, nodes pane width, key line and hit testing
 
 use super::*;
+use talos9s_core::convert::to_u16;
 
 impl ClusterComponent {
     /// What a click at (column, row) in the nodes pane lands on
@@ -80,7 +81,7 @@ impl ClusterComponent {
             .map(|item| 1 + item.hotkey().len() + 1 + item.label().len() + 2)
             .max()
             .unwrap_or(0);
-        (node.max(menu) as u16).clamp(COMPACT_PANE_MIN_WIDTH, COMPACT_PANE_MAX_WIDTH)
+        to_u16(node.max(menu)).clamp(COMPACT_PANE_MIN_WIDTH, COMPACT_PANE_MAX_WIDTH)
     }
 
     /// Draw the header, the nodes pane at `width` and the bottom key line,
@@ -233,7 +234,7 @@ impl ClusterComponent {
             // The view's keys (or a question such as quitting) on the left,
             // the workspace keys on the right
             Some(hints) => {
-                let global_width = (line.width() as u16).min(inner.width);
+                let global_width = to_u16(line.width()).min(inner.width);
                 let hints_area = Rect {
                     width: inner.width.saturating_sub(global_width + 1),
                     ..inner
@@ -292,14 +293,14 @@ impl ClusterComponent {
         if let Some(newer) = &self.newer_version {
             let room = area
                 .width
-                .saturating_sub(active_name.chars().count() as u16 + 3);
-            let used = Line::from(header_spans.clone()).width() as u16;
+                .saturating_sub(to_u16(active_name.chars().count()).saturating_add(3));
+            let used = to_u16(Line::from(header_spans.clone()).width());
             let long = format!("· {newer} available ");
             let short = format!("↑{newer} ");
             let style = Style::default().fg(Color::Green);
-            if used + long.chars().count() as u16 <= room {
+            if used.saturating_add(to_u16(long.chars().count())) <= room {
                 header_spans.push(Span::styled(long, style));
-            } else if used + short.chars().count() as u16 <= room {
+            } else if used.saturating_add(to_u16(short.chars().count())) <= room {
                 header_spans.push(Span::styled(short, style));
             }
         }
@@ -317,11 +318,11 @@ impl ClusterComponent {
 
         let inner = header_block.inner(area);
         frame.render_widget(header_block, area);
-        let left_width = left_content.width() as u16;
+        let left_width = to_u16(left_content.width());
         frame.render_widget(Paragraph::new(left_content), inner);
 
         // Right-align active cluster name
-        let name_width = active_name.chars().count() as u16 + 3;
+        let name_width = to_u16(active_name.chars().count()).saturating_add(3);
         let right_area = Rect {
             x: area.x + area.width.saturating_sub(name_width),
             y: area.y,
@@ -348,7 +349,7 @@ impl ClusterComponent {
             key("[⌥/⇧+drag]"),
             label(" select text "),
         ]);
-        let global_width = global.width() as u16;
+        let global_width = to_u16(global.width());
         if left_width + 2 + global_width + name_width <= area.width {
             let global_area = Rect {
                 x: right_area.x - global_width,

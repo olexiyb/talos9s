@@ -1163,11 +1163,13 @@ impl WizardComponent {
         ]));
         let width = lines
             .iter()
-            .map(|l| l.width() as u16 + 4)
+            .map(|l| talos9s_core::convert::to_u16(l.width()).saturating_add(4))
             .max()
             .unwrap_or(40)
             .min(area.width);
-        let height = (lines.len() as u16 + 2).min(area.height);
+        let height = talos9s_core::convert::to_u16(lines.len())
+            .saturating_add(2)
+            .min(area.height);
         let dialog = crate::ui_ext::centered(area, width, height);
         frame.render_widget(ratatui::widgets::Clear, dialog);
         frame.render_widget(
