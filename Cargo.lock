@@ -3241,7 +3241,7 @@ dependencies = [
 
 [[package]]
 name = "talos-rs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "dirs-next",
@@ -3267,7 +3267,7 @@ dependencies = [
 
 [[package]]
 name = "talos9s"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -3280,7 +3280,7 @@ dependencies = [
 
 [[package]]
 name = "talos9s-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -3290,7 +3290,7 @@ dependencies = [
 
 [[package]]
 name = "talos9s-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "base64 0.23.1",
