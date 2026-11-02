@@ -311,6 +311,28 @@ pub struct MultiLogsComponent {
 }
 
 impl MultiLogsComponent {
+    /// Move the log cursor by `delta` lines, kept inside the visible
+    /// entries, scrolling to keep it on screen; stops following the tail
+    fn move_cursor(&mut self, delta: isize) {
+        let max_idx = self
+            .data()
+            .map_or(0, |d| d.visible_indices.len())
+            .saturating_sub(1);
+        self.cursor = self.cursor.saturating_add_signed(delta).min(max_idx);
+        let viewport = self.viewport_height as usize;
+        if self.cursor < self.scroll as usize {
+            self.scroll = to_u16(self.cursor);
+        } else if self.cursor >= self.scroll as usize + viewport {
+            self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
+        }
+        self.following = false;
+    }
+
+    /// Lines moved by `Ctrl+U`/`Ctrl+D`
+    fn half_page(&self) -> isize {
+        isize::try_from((self.viewport_height / 2).max(1)).unwrap_or(1)
+    }
+
     /// Create a new multi-logs component
     /// - active_services: services to initially show logs for
     /// - all_services: all available services (inactive ones shown greyed out in sidebar)
@@ -1843,15 +1865,7 @@ impl Component for MultiLogsComponent {
                         self.selected_node = self.selected_node.saturating_sub(1);
                         self.nodes_state.select(Some(self.selected_node));
                     }
-                    FloatingPane::None => {
-                        // Always move cursor up
-                        self.cursor = self.cursor.saturating_sub(1);
-                        // Scroll viewport if cursor goes above visible area
-                        if self.cursor < self.scroll as usize {
-                            self.scroll = to_u16(self.cursor);
-                        }
-                        self.following = false;
-                    }
+                    FloatingPane::None => self.move_cursor(-1),
                 }
                 Ok(None)
             }
@@ -1872,79 +1886,25 @@ impl Component for MultiLogsComponent {
                             (self.selected_node + 1).min(self.nodes.len().saturating_sub(1));
                         self.nodes_state.select(Some(self.selected_node));
                     }
-                    FloatingPane::None => {
-                        // Always move cursor down
-                        let max_idx = self
-                            .data()
-                            .map(|d| d.visible_indices.len())
-                            .unwrap_or(0)
-                            .saturating_sub(1);
-                        self.cursor = (self.cursor + 1).min(max_idx);
-                        // Scroll viewport if cursor goes below visible area
-                        let viewport = self.viewport_height as usize;
-                        let visible_end = self.scroll as usize + viewport;
-                        if self.cursor >= visible_end {
-                            self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
-                        }
-                        self.following = false;
-                    }
+                    FloatingPane::None => self.move_cursor(1),
                 }
                 Ok(None)
             }
             KeyCode::PageUp => {
-                // Always move cursor
-                self.cursor = self.cursor.saturating_sub(20);
-                if self.cursor < self.scroll as usize {
-                    self.scroll = to_u16(self.cursor);
-                }
-                self.following = false;
+                self.move_cursor(-20);
                 Ok(None)
             }
             KeyCode::PageDown => {
-                // Always move cursor
-                let max_idx = self
-                    .data()
-                    .map(|d| d.visible_indices.len())
-                    .unwrap_or(0)
-                    .saturating_sub(1);
-                self.cursor = (self.cursor + 20).min(max_idx);
-                let viewport = self.viewport_height as usize;
-                let visible_end = self.scroll as usize + viewport;
-                if self.cursor >= visible_end {
-                    self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
-                }
-                self.following = false;
+                self.move_cursor(20);
                 Ok(None)
             }
-
             // Vim-style half-page scroll
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let half = (self.viewport_height / 2).max(1) as usize;
-                // Always move cursor up by half page
-                self.cursor = self.cursor.saturating_sub(half);
-                // Scroll to keep cursor visible
-                if self.cursor < self.scroll as usize {
-                    self.scroll = to_u16(self.cursor);
-                }
-                self.following = false;
+                self.move_cursor(-self.half_page());
                 Ok(None)
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let half = (self.viewport_height / 2).max(1) as usize;
-                // Always move cursor down by half page
-                let max_idx = self
-                    .data()
-                    .map(|d| d.visible_indices.len())
-                    .unwrap_or(0)
-                    .saturating_sub(1);
-                self.cursor = (self.cursor + half).min(max_idx);
-                // Scroll to keep cursor visible
-                let viewport = self.viewport_height as usize;
-                let visible_end = self.scroll as usize + viewport;
-                if self.cursor >= visible_end {
-                    self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
-                }
-                self.following = false;
+                self.move_cursor(self.half_page());
                 Ok(None)
             }
             KeyCode::Home | KeyCode::Char('g') => {
