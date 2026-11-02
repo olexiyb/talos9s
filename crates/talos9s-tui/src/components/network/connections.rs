@@ -13,6 +13,16 @@ use ratatui::{
 };
 use talos_rs::{ConnectionCounts, ConnectionInfo, ConnectionState};
 
+/// Interfaces that only carry pod traffic: flannel's bridge and overlay,
+/// veth pairs, Cilium's per-pod `lxc*` and its `cilium_host`/`cilium_net`/
+/// `cilium_vxlan` devices
+fn is_pod_interface(name: &str) -> bool {
+    name == "cni0"
+        || ["flannel", "veth", "lxc", "cilium_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
 impl NetworkStatsComponent {
     /// Update connections and calculate counts
     pub(super) fn update_connections(&mut self, connections: Vec<ConnectionInfo>) {
@@ -163,10 +173,11 @@ impl NetworkStatsComponent {
                     || conn.remote_ip.starts_with("127.")
                     || conn.remote_ip == "::1"
             }
-            // CNI bridge, flannel overlay and veth pairs carry pod traffic:
-            // addresses in the cluster's pod networks. Nodes often sit on
-            // 10.x too, and their traffic doesn't cross these interfaces.
-            name if name == "cni0" || name.starts_with("flannel") || name.starts_with("veth") => {
+            // CNI bridge, flannel overlay, veth pairs and Cilium's lxc /
+            // cilium_* devices carry pod traffic: addresses in the cluster's
+            // pod networks. Nodes often sit on 10.x too, and their traffic
+            // doesn't cross these interfaces.
+            name if is_pod_interface(name) => {
                 let is_pod = |ip: &str| {
                     pod_subnets
                         .iter()
@@ -985,5 +996,20 @@ mod tests {
         assert!(matches(&conn("fd00:44::9", "fd00::1")));
         // Talos' default range is not a pod network here
         assert!(!matches(&conn("10.244.1.5", "10.0.0.11")));
+        // Cilium's devices count as pod interfaces; node traffic stays off them
+        let node = conn("37.27.227.99", "65.21.130.10");
+        for iface in ["lxc11e671568111", "cilium_host", "cilium_vxlan"] {
+            assert!(NetworkStatsComponent::connection_matches_interface(
+                &conn("10.44.2.9", "10.44.0.1"),
+                iface,
+                &custom
+            ));
+            assert!(!NetworkStatsComponent::connection_matches_interface(
+                &node, iface, &custom
+            ));
+        }
+        assert!(NetworkStatsComponent::connection_matches_interface(
+            &node, "enp5s0", &custom
+        ));
     }
 }
