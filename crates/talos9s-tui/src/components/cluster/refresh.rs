@@ -4,7 +4,7 @@ use super::*;
 
 impl ClusterComponent {
     /// Initialize connection to all Talos clusters from talosconfig
-    pub async fn connect(&mut self) -> Result<()> {
+    pub fn connect(&mut self) -> Result<()> {
         // Install crypto provider (needed for rustls)
         let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -85,7 +85,7 @@ impl ClusterComponent {
     /// Refresh all cluster data now (`r`): restart every cluster's
     /// background refresh. Returns immediately; results land as each cluster
     /// finishes.
-    pub async fn refresh(&mut self) -> Result<()> {
+    pub fn refresh(&mut self) -> Result<()> {
         // Older in-flight snapshots would overwrite the fresh results
         self.abort_background_refresh();
         self.cluster_refreshed_at.fill(None);

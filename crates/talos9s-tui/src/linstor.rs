@@ -14,6 +14,7 @@ use kube::api::{Api, ListParams};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 /// Name of the LINSTOR controller Service created by the Piraeus operator
 const CONTROLLER_SERVICE: &str = "linstor-controller";
@@ -312,7 +313,7 @@ fn nodes_from(json: &Value, pools: Option<&Value>) -> Vec<LinstorNode> {
                         None => nic.address,
                     };
                     if let Some(enc) = nic.satellite_encryption_type {
-                        text.push_str(&format!(" ({enc})"));
+                        let _ = write!(text, " ({enc})");
                     }
                     text
                 })

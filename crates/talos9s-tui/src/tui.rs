@@ -53,6 +53,8 @@ pub fn exit_on_signal() {
             _ = terminate => {}
         }
         let _ = restore();
+        // Deliberate: the terminal is restored, and the signal must end the process
+        #[allow(clippy::exit)]
         std::process::exit(130);
     });
 }

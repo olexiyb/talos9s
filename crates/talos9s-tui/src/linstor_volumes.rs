@@ -26,6 +26,7 @@ use futures::StreamExt;
 use k8s_openapi::serde_json::Value;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use talos_rs::{MountUsage, TalosClient};
 use talos9s_core::constants::{
     FS_OVERHEAD_FIXED_KIB, FS_OVERHEAD_PERCENT, USAGE_ERROR_PCT, USAGE_WARNING_PCT,
@@ -170,13 +171,15 @@ impl SyncProgress {
         let what = if self.verify { "verify" } else { "resync" };
         let mut text = format!("{what} {:.1}%", self.percent);
         if let Some(speed) = self.speed_kib {
-            text.push_str(&format!(", {}/s", format_kib(speed)));
+            let _ = write!(text, ", {}/s", format_kib(speed));
         }
         if self.stalled {
             text.push_str(", stalled for over 3 min");
         } else {
             match self.finish_secs {
-                Some(secs) => text.push_str(&format!(", ~{} left", format_eta(secs))),
+                Some(secs) => {
+                    let _ = write!(text, ", ~{} left", format_eta(secs));
+                }
                 None => text.push_str(", not converging under the current writes"),
             }
         }
@@ -1272,7 +1275,7 @@ fn drbdadm_on(
     satellites: &HashMap<String, SatellitePod>,
     kubectl: &str,
     node: &str,
-    drbdadm: String,
+    drbdadm: &str,
 ) -> String {
     match satellites.get(node) {
         Some(pod) => format!(
@@ -1307,7 +1310,7 @@ fn standalone_remedies(
     satellites: &HashMap<String, SatellitePod>,
     kubectl: &str,
 ) -> Vec<Remedy> {
-    let exec = |node: &str, drbdadm: String| drbdadm_on(satellites, kubectl, node, drbdadm);
+    let exec = |node: &str, drbdadm: &str| drbdadm_on(satellites, kubectl, node, drbdadm);
     let target = |peer: &str| drbdadm_target(volume, peer);
     let replica = |node: &str| volume.replicas.iter().find(|r| r.node == node);
     let primary = volume.replicas.iter().find(|r| r.in_use);
@@ -1371,7 +1374,7 @@ fn standalone_remedies(
             ),
             commands: standalone_ends
                 .iter()
-                .map(|n| exec(n, format!("connect {}", target(other(n)))))
+                .map(|n| exec(n, &format!("connect {}", target(other(n)))))
                 .collect(),
         });
         let diskful = [a, b]
@@ -1387,9 +1390,9 @@ fn standalone_remedies(
                 commands: vec![
                     exec(
                         victim,
-                        format!("connect --discard-my-data {}", target(keep)),
+                        &format!("connect --discard-my-data {}", target(keep)),
                     ),
-                    exec(keep, format!("connect {}", target(victim))),
+                    exec(keep, &format!("connect {}", target(victim))),
                 ],
             });
         }
@@ -1407,7 +1410,7 @@ fn stale_bit_remedies(
         return Vec::new();
     };
     let target = |peer: &str| drbdadm_target(volume, peer);
-    let exec = |node: &str, drbdadm: String| drbdadm_on(satellites, kubectl, node, drbdadm);
+    let exec = |node: &str, drbdadm: &str| drbdadm_on(satellites, kubectl, node, drbdadm);
 
     // Established links with stale bits: (holder, peer)
     let mut stale: Vec<(&str, &str)> = Vec::new();
@@ -1453,8 +1456,11 @@ fn stale_bit_remedies(
                 primary.node
             ),
             commands: vec![
-                exec(&primary.node, format!("verify {}", target(peer))),
-                exec(&primary.node, format!("invalidate-remote {}", target(peer))),
+                exec(&primary.node, &format!("verify {}", target(peer))),
+                exec(
+                    &primary.node,
+                    &format!("invalidate-remote {}", target(peer)),
+                ),
             ],
         });
     }
@@ -1465,8 +1471,8 @@ fn stale_bit_remedies(
                  without copying data"
             ),
             commands: vec![
-                exec(a, format!("disconnect {}", target(b))),
-                exec(a, format!("connect {}", target(b))),
+                exec(a, &format!("disconnect {}", target(b))),
+                exec(a, &format!("connect {}", target(b))),
             ],
         });
     }

@@ -131,17 +131,17 @@ impl StorageComponent {
         let mut volume_table_state = TableState::default();
         volume_table_state.select(Some(0));
 
-        let initial_data = StorageData {
-            hostname,
-            address: address.clone(),
-            ..Default::default()
-        };
-
         let node_address = if address.is_empty() {
             None
         } else {
             // Extract IP from address (remove port if present)
             Some(talos_rs::host_of(&address).to_string())
+        };
+
+        let initial_data = StorageData {
+            hostname,
+            address,
+            ..Default::default()
         };
 
         Self {

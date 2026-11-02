@@ -3,6 +3,7 @@
 //! Provides shared state abstractions for async-loading TUI components,
 //! eliminating duplicated loading/error/refresh patterns.
 
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 /// Shared state for async-loading components
@@ -148,21 +149,19 @@ impl<T> AsyncState<T> {
     ///
     /// Increments retry count and clears loading state.
     /// Preserves existing data for continued display.
-    pub fn set_error(&mut self, error: impl ToString) {
-        self.error = Some(error.to_string());
+    pub fn set_error(&mut self, error: impl Into<String>) {
+        self.error = Some(error.into());
         self.loading = false;
         self.retry_count += 1;
         self.last_error_at = Some(Instant::now());
     }
 
     /// Set an error with context about retry count
-    pub fn set_error_with_retry(&mut self, error: impl ToString) {
+    pub fn set_error_with_retry(&mut self, error: impl Into<String>) {
         self.retry_count += 1;
-        self.error = Some(format!(
-            "{} (retry {})",
-            error.to_string(),
-            self.retry_count
-        ));
+        let mut error: String = error.into();
+        let _ = write!(error, " (retry {})", self.retry_count);
+        self.error = Some(error);
         self.loading = false;
         self.last_error_at = Some(Instant::now());
     }

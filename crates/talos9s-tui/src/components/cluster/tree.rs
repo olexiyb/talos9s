@@ -130,13 +130,13 @@ impl ClusterComponent {
     }
 
     /// Get the cluster index for the currently selected item
-    pub(super) fn selected_cluster_index(&self) -> Option<usize> {
+    pub(super) fn selected_cluster_index(&self) -> usize {
         match &self.selected_item {
-            NodeListItem::ClusterHeader(idx) => Some(*idx),
-            NodeListItem::ControlPlaneHeader(idx) => Some(*idx),
-            NodeListItem::ControlPlaneNode(idx, _) => Some(*idx),
-            NodeListItem::WorkersHeader(idx) => Some(*idx),
-            NodeListItem::WorkerNode(idx, _) => Some(*idx),
+            NodeListItem::ClusterHeader(idx) => *idx,
+            NodeListItem::ControlPlaneHeader(idx) => *idx,
+            NodeListItem::ControlPlaneNode(idx, _) => *idx,
+            NodeListItem::WorkersHeader(idx) => *idx,
+            NodeListItem::WorkerNode(idx, _) => *idx,
         }
     }
 
@@ -155,9 +155,7 @@ impl ClusterComponent {
         };
         self.selected_item = next.clone();
         // Update active cluster
-        if let Some(idx) = self.selected_cluster_index() {
-            self.active_cluster = idx;
-        }
+        self.active_cluster = self.selected_cluster_index();
     }
 
     /// Navigate to the previous item in the node list
@@ -175,9 +173,7 @@ impl ClusterComponent {
         };
         self.selected_item = prev.clone();
         // Update active cluster
-        if let Some(idx) = self.selected_cluster_index() {
-            self.active_cluster = idx;
-        }
+        self.active_cluster = self.selected_cluster_index();
     }
 
     /// Toggle expand/collapse of the currently selected group header
@@ -381,7 +377,7 @@ impl ClusterComponent {
 
     /// Name of the cluster the selection belongs to
     pub fn cluster_key(&self) -> String {
-        let idx = self.selected_cluster_index().unwrap_or(self.active_cluster);
+        let idx = self.selected_cluster_index();
         self.clusters
             .get(idx)
             .map(|c| c.name.clone())
@@ -492,7 +488,7 @@ impl ClusterComponent {
         if let Some(pending) = &self.pending_selection {
             return Some(pending.clone());
         }
-        let idx = self.selected_cluster_index()?;
+        let idx = self.selected_cluster_index();
         let cluster = self.clusters.get(idx)?.name.clone();
         let (group, node) = match &self.selected_item {
             NodeListItem::ClusterHeader(_) => (None, None),
@@ -547,9 +543,7 @@ impl ClusterComponent {
 
     pub fn restore_selection(&mut self, selection: TreeSelection) {
         self.selected_item = selection.0;
-        if let Some(idx) = self.selected_cluster_index() {
-            self.active_cluster = idx;
-        }
+        self.active_cluster = self.selected_cluster_index();
     }
 
     /// What Esc in the view returns to, shown in the key line (a group view

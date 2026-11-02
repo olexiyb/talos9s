@@ -36,6 +36,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::time::Duration;
 use talos_rs::TalosClient;
 use talos9s_core::{AsyncState, HasHealth, HealthIndicator};
@@ -923,7 +924,7 @@ fn replica_lines(volume: &LinstorVolume) -> Vec<Line<'static>> {
             None => "DRBD state unknown".to_string(),
         };
         if let Some(fs) = r.drbd.as_ref().and_then(|d| d.fs_size_kib) {
-            drbd_size.push_str(&format!("  filesystem {}", format_kib(fs)));
+            let _ = write!(drbd_size, "  filesystem {}", format_kib(fs));
         }
         lines.push(Line::from(vec![
             Span::raw(format!("  {:<10}", r.node)),

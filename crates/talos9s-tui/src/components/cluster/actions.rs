@@ -243,15 +243,12 @@ impl ClusterComponent {
     }
 
     /// Navigate to the currently selected menu item (1-based index, 0 = on node)
-    pub(super) fn navigate_to_selected_menu(&self) -> Result<Option<Action>> {
-        let Some(item) = self
+    pub(super) fn navigate_to_selected_menu(&self) -> Option<Action> {
+        let item = self
             .selected_menu_item
             .checked_sub(1)
-            .and_then(|i| NavMenuItem::ALL.get(i))
-        else {
-            return Ok(None);
-        };
-        Ok(self.action_for(*item))
+            .and_then(|i| NavMenuItem::ALL.get(i))?;
+        self.action_for(*item)
     }
 
     /// The view a menu item shows for the current selection. Views of a

@@ -165,7 +165,7 @@ pub async fn get_volume_status_for_node(
     config_path: Option<&str>,
 ) -> Result<Vec<VolumeStatus>, TalosError> {
     let output = get_resource_yaml(Some(context), node_ip, config_path, &["volumestatus"]).await?;
-    parse_volume_status_yaml(&output)
+    Ok(parse_volume_status_yaml(&output))
 }
 
 /// Kinds of the encryption keys of a volume (`static`, `nodeID`, `kms`,
@@ -208,7 +208,7 @@ pub async fn get_disks_for_node(
     config_path: Option<&str>,
 ) -> Result<Vec<DiskInfo>, TalosError> {
     let output = get_resource_yaml(Some(context), node_ip, config_path, &["disks"]).await?;
-    parse_disks_yaml(&output)
+    Ok(parse_disks_yaml(&output))
 }
 
 // ============================================================================
@@ -226,7 +226,7 @@ pub async fn get_disks_for_node(
 pub async fn get_disks_insecure(endpoint: &str) -> Result<Vec<DiskInfo>, TalosError> {
     let output =
         exec_talosctl_async(&["get", "disks", "--insecure", "-n", endpoint, "-o", "yaml"]).await?;
-    parse_disks_yaml(&output)
+    Ok(parse_disks_yaml(&output))
 }
 
 /// Get volume status from a node in insecure mode (no TLS client auth)
@@ -243,7 +243,7 @@ pub async fn get_volume_status_insecure(endpoint: &str) -> Result<Vec<VolumeStat
         "yaml",
     ])
     .await?;
-    parse_volume_status_yaml(&output)
+    Ok(parse_volume_status_yaml(&output))
 }
 
 /// Result of generating Talos configuration
@@ -433,7 +433,7 @@ async fn get_discovery_members_for_node_async(
                 DISCOVERY_TIMEOUT.as_secs()
             ))
         })??;
-    parse_discovery_members_yaml(&output)
+    Ok(parse_discovery_members_yaml(&output))
 }
 
 /// Build the `talosctl ... get members` argument list.
@@ -661,7 +661,7 @@ pub async fn get_kubespan_peers_for_node(
     config_path: Option<&str>,
 ) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
     let output = get_resource_yaml(context, node_ip, config_path, &["kubespanpeerstatus"]).await?;
-    parse_kubespan_peers_yaml(&output)
+    Ok(parse_kubespan_peers_yaml(&output))
 }
 
 /// Whether KubeSpan is enabled on a node in `context` (async, with timeout).
@@ -777,9 +777,7 @@ pub async fn get_node_network_info(
 
     Ok(NodeNetworkInfo {
         tailscale,
-        kubespan_peers: kubespan
-            .ok()
-            .and_then(|y| parse_kubespan_peers_yaml(&y).ok()),
+        kubespan_peers: kubespan.ok().map(|y| parse_kubespan_peers_yaml(&y)),
         addresses: addresses
             .map(|y| parse_spec_string_list(&y, "addresses"))
             .unwrap_or_default(),
@@ -974,8 +972,8 @@ struct MountSpec {
 }
 
 /// Parse volume status YAML output from talosctl
-fn parse_volume_status_yaml(yaml_str: &str) -> Result<Vec<VolumeStatus>, TalosError> {
-    Ok(resources::<VolumeStatusSpec>(yaml_str)
+fn parse_volume_status_yaml(yaml_str: &str) -> Vec<VolumeStatus> {
+    resources::<VolumeStatusSpec>(yaml_str)
         .map(|(id, spec)| {
             // Volumes without a size or filesystem (directories, symlinks)
             // show their type instead
@@ -997,7 +995,7 @@ fn parse_volume_status_yaml(yaml_str: &str) -> Result<Vec<VolumeStatus>, TalosEr
                 id,
             }
         })
-        .collect())
+        .collect()
 }
 
 /// `spec` of Disks.block.talos.dev (snake_case keys, unlike most resources)
@@ -1018,9 +1016,9 @@ struct DiskSpec {
 }
 
 /// Parse disks YAML output from talosctl
-fn parse_disks_yaml(yaml_str: &str) -> Result<Vec<DiskInfo>, TalosError> {
+fn parse_disks_yaml(yaml_str: &str) -> Vec<DiskInfo> {
     let non_empty = |s: Option<String>| s.filter(|s| !s.is_empty());
-    Ok(resources::<DiskSpec>(yaml_str)
+    resources::<DiskSpec>(yaml_str)
         .map(|(id, spec)| DiskInfo {
             id,
             dev_path: spec.dev_path.unwrap_or_default(),
@@ -1035,7 +1033,7 @@ fn parse_disks_yaml(yaml_str: &str) -> Result<Vec<DiskInfo>, TalosError> {
             wwid: non_empty(spec.wwid),
             bus_path: non_empty(spec.bus_path),
         })
-        .collect())
+        .collect()
 }
 
 /// Parse machine config YAML output from talosctl.
@@ -1239,8 +1237,8 @@ struct KubeSpanPeerSpec {
 }
 
 /// Parse KubeSpan peer status YAML output from talosctl
-fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
-    Ok(resources::<KubeSpanPeerSpec>(yaml_str)
+fn parse_kubespan_peers_yaml(yaml_str: &str) -> Vec<KubeSpanPeerStatus> {
+    resources::<KubeSpanPeerSpec>(yaml_str)
         .map(|(id, spec)| KubeSpanPeerStatus {
             label: spec.label.unwrap_or_else(|| id.clone()),
             id,
@@ -1250,7 +1248,7 @@ fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, 
             rx_bytes: spec.receive_bytes.unwrap_or(0),
             tx_bytes: spec.transmit_bytes.unwrap_or(0),
         })
-        .collect())
+        .collect()
 }
 
 /// `spec` of Members.cluster.talos.dev
@@ -1264,8 +1262,8 @@ struct MemberSpec {
 }
 
 /// Parse discovery members YAML output from talosctl
-fn parse_discovery_members_yaml(yaml_str: &str) -> Result<Vec<DiscoveryMember>, TalosError> {
-    Ok(resources::<MemberSpec>(yaml_str)
+fn parse_discovery_members_yaml(yaml_str: &str) -> Vec<DiscoveryMember> {
+    resources::<MemberSpec>(yaml_str)
         .map(|(id, spec)| DiscoveryMember {
             id,
             addresses: spec.addresses.unwrap_or_default(),
@@ -1273,7 +1271,7 @@ fn parse_discovery_members_yaml(yaml_str: &str) -> Result<Vec<DiscoveryMember>, 
             machine_type: spec.machine_type.unwrap_or_else(|| "unknown".to_string()),
             operating_system: spec.operating_system.unwrap_or_default(),
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1493,7 +1491,7 @@ spec:
     prettySize: 10 GiB
 "#;
 
-        let volumes = parse_volume_status_yaml(yaml).unwrap();
+        let volumes = parse_volume_status_yaml(yaml);
         assert_eq!(volumes.len(), 2);
         assert_eq!(volumes[0].id, "STATE");
         assert_eq!(volumes[0].encryption_provider, Some("luks2".to_string()));
@@ -1545,7 +1543,7 @@ metadata:
     id: META
 spec: {}
 ";
-        let volumes = parse_volume_status_yaml(yaml).unwrap();
+        let volumes = parse_volume_status_yaml(yaml);
         let ids: Vec<_> = volumes.iter().map(|v| v.id.as_str()).collect();
         assert_eq!(ids, ["/var/lib", "/var/log/audit", "META"]);
 
@@ -1689,7 +1687,7 @@ spec:
     rotational: false
 "#;
 
-        let disks = parse_disks_yaml(yaml).unwrap();
+        let disks = parse_disks_yaml(yaml);
         assert_eq!(disks.len(), 2);
 
         // First disk - virtio HDD
@@ -1749,7 +1747,7 @@ spec:
     operatingSystem: Talos (v1.9.2)
 "#;
 
-        let members = parse_discovery_members_yaml(yaml).unwrap();
+        let members = parse_discovery_members_yaml(yaml);
         assert_eq!(members.len(), 2);
 
         // Control plane node
@@ -1770,7 +1768,7 @@ spec:
     #[test]
     fn test_parse_discovery_members_empty() {
         let yaml = "";
-        let members = parse_discovery_members_yaml(yaml).unwrap();
+        let members = parse_discovery_members_yaml(yaml);
         assert!(members.is_empty());
     }
 
@@ -1846,7 +1844,7 @@ spec:
     hostname: valid-host
     machineType: controlplane
 "#;
-        let members = parse_discovery_members_yaml(yaml).unwrap();
+        let members = parse_discovery_members_yaml(yaml);
         // Should have parsed the valid document
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].id, "valid");
@@ -1901,7 +1899,7 @@ spec:
     receiveBytes: 0
     transmitBytes: 0
 ";
-        let peers = parse_kubespan_peers_yaml(yaml).unwrap();
+        let peers = parse_kubespan_peers_yaml(yaml);
         assert_eq!(peers.len(), 2);
         assert_eq!(peers[0].id, "AAAAkeyOne+/=");
         assert_eq!(peers[0].label, "node2");
@@ -1943,7 +1941,7 @@ spec:
     type: partition
     prettySize: 10 GiB
 ";
-        let volumes = parse_volume_status_yaml(yaml).unwrap();
+        let volumes = parse_volume_status_yaml(yaml);
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].id, "EPHEMERAL");
         // A real size wins over the type fallback
@@ -1955,18 +1953,14 @@ spec:
 
     #[test]
     fn volume_status_without_spec_or_input() {
-        let volumes = parse_volume_status_yaml("metadata:\n    id: META\n").unwrap();
+        let volumes = parse_volume_status_yaml("metadata:\n    id: META\n");
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].phase, "unknown");
         assert_eq!(volumes[0].size, "");
 
-        assert!(parse_volume_status_yaml("").unwrap().is_empty());
-        assert!(
-            parse_volume_status_yaml("\n---\n\n---\n")
-                .unwrap()
-                .is_empty()
-        );
-        assert!(parse_volume_status_yaml(": : :").unwrap().is_empty());
+        assert!(parse_volume_status_yaml("").is_empty());
+        assert!(parse_volume_status_yaml("\n---\n\n---\n").is_empty());
+        assert!(parse_volume_status_yaml(": : :").is_empty());
     }
 
     #[test]

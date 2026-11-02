@@ -2,7 +2,6 @@
 
 use super::{ConnSortBy, NetworkStatsComponent, ViewMode, port_to_service};
 use crate::action::Action;
-use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -254,10 +253,10 @@ impl NetworkStatsComponent {
     /// Yank (copy) the selected connections, or the current one
     fn yank_conn_selection(&self) -> (bool, usize) {
         let conns = self.get_filtered_connections();
-        let lines = (self.conn_visual.rows(self.conn_selected))
+        let lines: Vec<String> = (self.conn_visual.rows(self.conn_selected))
             .filter_map(|idx| conns.get(idx).map(Self::format_connection))
             .collect();
-        crate::clipboard::copy_lines(lines)
+        crate::clipboard::copy_lines(&lines)
     }
 
     /// Page up in connection list
@@ -786,12 +785,12 @@ impl NetworkStatsComponent {
     }
 
     /// Handle key events in Connections view
-    pub(super) fn handle_connections_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    pub(super) fn handle_connections_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             // Quit/back
             KeyCode::Char('q') => {
                 self.exit_connections_view();
-                Ok(None)
+                None
             }
             KeyCode::Esc => {
                 if self.conn_visual.active() {
@@ -799,45 +798,45 @@ impl NetworkStatsComponent {
                 } else {
                     self.exit_connections_view();
                 }
-                Ok(None)
+                None
             }
 
             // Navigation
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_connection(crate::ui_ext::Move::Next);
-                Ok(None)
+                None
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.move_connection(crate::ui_ext::Move::Prev);
-                Ok(None)
+                None
             }
             KeyCode::Char('g') => {
                 self.move_connection(crate::ui_ext::Move::First);
-                Ok(None)
+                None
             }
             KeyCode::Char('G') => {
                 self.move_connection(crate::ui_ext::Move::Last);
-                Ok(None)
+                None
             }
 
             // Page navigation
             KeyCode::PageUp => {
                 self.conn_page_up();
-                Ok(None)
+                None
             }
             KeyCode::PageDown => {
                 self.conn_page_down();
-                Ok(None)
+                None
             }
 
             // Half-page scroll (Ctrl+U / Ctrl+D)
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.conn_half_page_up();
-                Ok(None)
+                None
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.conn_half_page_down();
-                Ok(None)
+                None
             }
 
             // Sorting
@@ -846,14 +845,14 @@ impl NetworkStatsComponent {
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
                 self.conn_visual.clear();
-                Ok(None)
+                None
             }
             KeyCode::Char('2') => {
                 self.conn_sort_by = ConnSortBy::Port;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
                 self.conn_visual.clear();
-                Ok(None)
+                None
             }
 
             // Filter
@@ -862,7 +861,7 @@ impl NetworkStatsComponent {
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
                 self.conn_visual.clear();
-                Ok(None)
+                None
             }
 
             // Toggle show all connections (bypass interface filter)
@@ -871,13 +870,13 @@ impl NetworkStatsComponent {
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
                 self.conn_visual.clear();
-                Ok(None)
+                None
             }
 
             // Visual line selection mode
             KeyCode::Char('V') => {
                 self.conn_visual.toggle(self.conn_selected);
-                Ok(None)
+                None
             }
 
             // Yank selection or current line to clipboard
@@ -888,11 +887,11 @@ impl NetworkStatsComponent {
                 }
                 // Clear visual selection after yank
                 self.conn_visual.clear();
-                Ok(None)
+                None
             }
 
             // Refresh
-            KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+            KeyCode::Char('r') => Some(Action::Refresh),
 
             // Open service logs (for known service ports)
             KeyCode::Char('o') => self.open_service_logs(),
@@ -900,37 +899,37 @@ impl NetworkStatsComponent {
             // Restart service (for known service ports) - requires confirmation
             KeyCode::Char('R') => {
                 self.initiate_service_restart();
-                Ok(None)
+                None
             }
 
             // Show DNS config (/etc/resolv.conf)
             KeyCode::Char('d') => {
                 self.show_dns_config();
-                Ok(Some(Action::Refresh)) // Trigger fetch immediately
+                Some(Action::Refresh) // Trigger fetch immediately
             }
 
             // Show routing table (/proc/net/route)
             KeyCode::Char('t') => {
                 self.show_routing_table();
-                Ok(Some(Action::Refresh)) // Trigger fetch immediately
+                Some(Action::Refresh) // Trigger fetch immediately
             }
 
             // Packet capture (uses BPF filter to exclude port 50000, preventing feedback loop)
             KeyCode::Char('c') => {
                 self.toggle_capture();
-                Ok(None)
+                None
             }
             KeyCode::Char('s') => {
                 self.save_capture();
-                Ok(None)
+                None
             }
             // Toggle BPF filter for packet capture
             KeyCode::Char('f') => {
                 self.toggle_bpf_filter();
-                Ok(None)
+                None
             }
 
-            _ => Ok(None),
+            _ => None,
         }
     }
 }

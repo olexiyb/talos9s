@@ -19,7 +19,7 @@ pub fn poll_finished<T>(handle: JoinHandle<T>) -> Option<Result<T, JoinError>> {
 mod tests {
     use super::*;
 
-    async fn finished(value: u32) -> JoinHandle<u32> {
+    fn finished(value: u32) -> JoinHandle<u32> {
         let handle = tokio::spawn(async move { value });
         while !handle.is_finished() {
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -31,7 +31,7 @@ mod tests {
     async fn finished_tasks_are_collected_past_the_coop_budget() {
         // Far past tokio's budget of 128 for a task that never yields
         for i in 0..300 {
-            let handle = finished(i).await;
+            let handle = finished(i);
             assert_eq!(
                 poll_finished(handle).map(Result::unwrap),
                 Some(i),

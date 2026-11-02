@@ -2,7 +2,6 @@
 
 use super::NetworkStatsComponent;
 use crate::action::Action;
-use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -420,18 +419,18 @@ impl NetworkStatsComponent {
     }
 
     /// Handle key events in KubeSpan view
-    pub(super) fn handle_kubespan_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    pub(super) fn handle_kubespan_key(&mut self, key: KeyEvent) -> Option<Action> {
         let peer_count = self.data().map(|d| d.kubespan_peers.len()).unwrap_or(0);
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
-            KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+            KeyCode::Char('q') | KeyCode::Esc => Some(Action::Back),
+            KeyCode::Char('r') => Some(Action::Refresh),
             KeyCode::Char('j') | KeyCode::Down => {
                 if peer_count > 0 {
                     self.kubespan_selected = (self.kubespan_selected + 1) % peer_count;
                     self.kubespan_table_state
                         .select(Some(self.kubespan_selected));
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 if peer_count > 0 {
@@ -443,14 +442,14 @@ impl NetworkStatsComponent {
                     self.kubespan_table_state
                         .select(Some(self.kubespan_selected));
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('g') => {
                 if peer_count > 0 {
                     self.kubespan_selected = 0;
                     self.kubespan_table_state.select(Some(0));
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('G') => {
                 if peer_count > 0 {
@@ -458,9 +457,9 @@ impl NetworkStatsComponent {
                     self.kubespan_table_state
                         .select(Some(self.kubespan_selected));
                 }
-                Ok(None)
+                None
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 }

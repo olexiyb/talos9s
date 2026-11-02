@@ -88,7 +88,7 @@ pub async fn run_cni_checks(
     match ctx.cni_type {
         CniType::Flannel => flannel::run_flannel_checks(client, ctx).await,
         CniType::Cilium => cilium::run_cilium_checks(ctx, k8s_client).await,
-        CniType::Calico => run_calico_checks(client, ctx).await,
+        CniType::Calico => run_calico_checks(client, ctx),
         CniType::Unknown | CniType::None => run_generic_cni_checks(client, ctx).await,
     }
 }
@@ -117,7 +117,7 @@ async fn run_generic_cni_checks(
 }
 
 /// Calico-specific checks
-async fn run_calico_checks(_client: &TalosClient, ctx: &DiagnosticContext) -> Vec<DiagnosticCheck> {
+fn run_calico_checks(_client: &TalosClient, ctx: &DiagnosticContext) -> Vec<DiagnosticCheck> {
     let mut checks = Vec::new();
 
     // Check Calico pod health if we have K8s API info

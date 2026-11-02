@@ -201,7 +201,7 @@ pub enum PendingAction {
 }
 
 /// File viewer overlay type
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FileViewerType {
     /// DNS configuration (/etc/resolv.conf)
     DnsConfig,
@@ -561,7 +561,7 @@ impl NetworkStatsComponent {
             self.apply_stats(fetch);
         }
         if let Some((service_id, result)) = take_finished(&mut self.tasks.restart) {
-            self.apply_restart(service_id, result);
+            self.apply_restart(&service_id, result);
         }
         if let Some((viewer_type, path, result)) = take_finished(&mut self.tasks.file) {
             self.apply_file_content(viewer_type, path, result);
@@ -798,7 +798,7 @@ impl Component for NetworkStatsComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // If file viewer is shown, handle its keys
         if self.file_viewer.is_some() {
-            return self.handle_file_viewer_key(key);
+            return Ok(self.handle_file_viewer_key(key));
         }
 
         // If output pane is shown, Esc closes it
@@ -809,13 +809,13 @@ impl Component for NetworkStatsComponent {
 
         // If there's a pending confirmation, handle that first
         if self.pending_action.is_some() {
-            return self.handle_confirmation_key(key);
+            return Ok(self.handle_confirmation_key(key));
         }
 
         match self.view_mode {
-            ViewMode::Interfaces => self.handle_interfaces_key(key),
-            ViewMode::Connections => self.handle_connections_key(key),
-            ViewMode::KubeSpan => self.handle_kubespan_key(key),
+            ViewMode::Interfaces => Ok(self.handle_interfaces_key(key)),
+            ViewMode::Connections => Ok(self.handle_connections_key(key)),
+            ViewMode::KubeSpan => Ok(self.handle_kubespan_key(key)),
         }
     }
 

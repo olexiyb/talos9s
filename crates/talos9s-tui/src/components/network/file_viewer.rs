@@ -2,7 +2,6 @@
 
 use super::{FileViewerOverlay, FileViewerType, NetworkStatsComponent, with_timeout};
 use crate::action::Action;
-use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -23,19 +22,19 @@ impl NetworkStatsComponent {
     }
 
     /// Handle key events when file viewer is open
-    pub(super) fn handle_file_viewer_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    pub(super) fn handle_file_viewer_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             // Close the viewer
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.file_viewer = None;
-                Ok(None)
+                None
             }
             // Scroll up
             KeyCode::Char('k') | KeyCode::Up => {
                 if let Some(ref mut viewer) = self.file_viewer {
                     viewer.scroll = viewer.scroll.saturating_sub(1);
                 }
-                Ok(None)
+                None
             }
             // Scroll down
             KeyCode::Char('j') | KeyCode::Down => {
@@ -43,20 +42,20 @@ impl NetworkStatsComponent {
                     let max_scroll = viewer.lines.len().saturating_sub(10);
                     viewer.scroll = (viewer.scroll + 1).min(max_scroll);
                 }
-                Ok(None)
+                None
             }
             // Page up / Ctrl+U (half page)
             KeyCode::PageUp => {
                 if let Some(ref mut viewer) = self.file_viewer {
                     viewer.scroll = viewer.scroll.saturating_sub(10);
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(ref mut viewer) = self.file_viewer {
                     viewer.scroll = viewer.scroll.saturating_sub(10);
                 }
-                Ok(None)
+                None
             }
             // Page down / Ctrl+D (half page)
             KeyCode::PageDown => {
@@ -64,30 +63,30 @@ impl NetworkStatsComponent {
                     let max_scroll = viewer.lines.len().saturating_sub(10);
                     viewer.scroll = (viewer.scroll + 10).min(max_scroll);
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(ref mut viewer) = self.file_viewer {
                     let max_scroll = viewer.lines.len().saturating_sub(10);
                     viewer.scroll = (viewer.scroll + 10).min(max_scroll);
                 }
-                Ok(None)
+                None
             }
             // Go to top
             KeyCode::Char('g') => {
                 if let Some(ref mut viewer) = self.file_viewer {
                     viewer.scroll = 0;
                 }
-                Ok(None)
+                None
             }
             // Go to bottom
             KeyCode::Char('G') => {
                 if let Some(ref mut viewer) = self.file_viewer {
                     viewer.scroll = viewer.lines.len().saturating_sub(10);
                 }
-                Ok(None)
+                None
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 
@@ -114,7 +113,7 @@ impl NetworkStatsComponent {
 
     /// Fetch file content for the file viewer in the background
     pub(super) fn fetch_file_content(&mut self) {
-        let Some(viewer_type) = self.file_viewer.as_ref().map(|v| v.viewer_type.clone()) else {
+        let Some(viewer_type) = self.file_viewer.as_ref().map(|v| v.viewer_type) else {
             return;
         };
         let path = match viewer_type {
