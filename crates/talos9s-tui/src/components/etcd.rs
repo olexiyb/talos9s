@@ -1252,13 +1252,14 @@ impl Component for EtcdComponent {
             return Ok(());
         };
 
-        let table_height = (data.members.len().max(1) + 2) as u16; // header + members + padding
+        let table_height = talos9s_core::convert::to_u16(data.members.len().max(1) + 2); // header + members + padding
         // Alarms line, member errors, then one line per check (or "Checks:
         // OK"), plus borders
-        let alarm_height = (1
-            + member_errors(data.members.items()).len()
-            + member_checks(data.members.items()).len().max(1)
-            + 2) as u16;
+        let alarm_height = talos9s_core::convert::to_u16(
+            1 + member_errors(data.members.items()).len()
+                + member_checks(data.members.items()).len().max(1)
+                + 2,
+        );
 
         let [status, table, alarms, log] = Layout::vertical([
             Constraint::Length(2),

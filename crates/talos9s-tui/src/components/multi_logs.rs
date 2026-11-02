@@ -22,6 +22,7 @@ use ratatui::{
 use std::collections::{HashMap, HashSet};
 use talos9s_core::AsyncState;
 use talos9s_core::constants::MAX_LOG_ENTRIES;
+use talos9s_core::convert::to_u16;
 use talos9s_core::logparse::{self, LogLevel, bottom_start, match_ranges};
 
 /// Maximum lines to process per tick during streaming
@@ -772,7 +773,7 @@ impl MultiLogsComponent {
 
         // Clamp scroll to valid range (max is where last entry is at viewport bottom)
         let viewport = self.viewport_height as usize;
-        let max_scroll = total.saturating_sub(viewport) as u16;
+        let max_scroll = to_u16(total.saturating_sub(viewport));
         if self.scroll > max_scroll {
             self.scroll = max_scroll;
         }
@@ -918,7 +919,7 @@ impl MultiLogsComponent {
         let total = self.data().map(|d| d.visible_indices.len()).unwrap_or(0);
         let viewport = self.viewport_height as usize;
         // Position scroll so last entry is at bottom of viewport
-        self.scroll = total.saturating_sub(viewport) as u16;
+        self.scroll = to_u16(total.saturating_sub(viewport));
         // Move cursor to last entry
         self.cursor = total.saturating_sub(1);
         self.following = true;
@@ -1000,7 +1001,7 @@ impl MultiLogsComponent {
         }
 
         if let Some(&first) = self.match_order.first() {
-            self.scroll = first as u16;
+            self.scroll = to_u16(first);
         }
     }
 
@@ -1011,7 +1012,7 @@ impl MultiLogsComponent {
         }
         self.current_match = (self.current_match + 1) % self.match_order.len();
         if let Some(&vi) = self.match_order.get(self.current_match) {
-            self.scroll = vi as u16;
+            self.scroll = to_u16(vi);
         }
         self.following = false;
     }
@@ -1027,7 +1028,7 @@ impl MultiLogsComponent {
             self.current_match - 1
         };
         if let Some(&vi) = self.match_order.get(self.current_match) {
-            self.scroll = vi as u16;
+            self.scroll = to_u16(vi);
         }
         self.following = false;
     }
@@ -1112,10 +1113,12 @@ impl MultiLogsComponent {
             .map(|(_, s)| s.id.len())
             .max()
             .unwrap_or(8);
-        let panel_width = (max_name_len + 4)
-            .max(16)
-            .min((area.width as usize).saturating_sub(4)) as u16;
-        let panel_height = (filtered_services.len() + 2).min(area.height as usize - 2) as u16;
+        let panel_width = to_u16(
+            (max_name_len + 4)
+                .max(16)
+                .min((area.width as usize).saturating_sub(4)),
+        );
+        let panel_height = to_u16((filtered_services.len() + 2).min(area.height as usize - 2));
 
         // Position in top-left with small margin
         let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
@@ -1176,7 +1179,7 @@ impl MultiLogsComponent {
     /// Draw the levels filter panel
     fn draw_levels_panel(&mut self, frame: &mut Frame, area: Rect) {
         let panel_width = 20u16;
-        let panel_height = (self.levels.len() + 2).min(area.height as usize - 2) as u16;
+        let panel_height = to_u16((self.levels.len() + 2).min(area.height as usize - 2));
 
         // Position in top-left with small margin
         let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
@@ -1245,7 +1248,7 @@ impl MultiLogsComponent {
             .collect();
 
         let panel_width = (area.width.saturating_sub(4)).min(100);
-        let panel_height = (self.nodes.len() + 2).min(area.height as usize - 2) as u16;
+        let panel_height = to_u16((self.nodes.len() + 2).min(area.height as usize - 2));
         let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
         frame.render_widget(ratatui::widgets::Clear, panel_area);
 
@@ -1493,7 +1496,7 @@ impl MultiLogsComponent {
         } else {
             0
         };
-        let logs = Paragraph::new(lines).scroll((skip as u16, 0));
+        let logs = Paragraph::new(lines).scroll((to_u16(skip), 0));
         frame.render_widget(logs, area);
 
         // Scrollbar
@@ -1543,7 +1546,9 @@ async fn stream_task(
         match history {
             Ok(Ok(text)) => {
                 let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-                let skip = lines.len().saturating_sub(tail as usize);
+                let skip = lines
+                    .len()
+                    .saturating_sub(usize::try_from(tail).unwrap_or(usize::MAX));
                 if !lines.is_empty() {
                     let _ = tx.send(status(StreamStatus::Streaming));
                 }
@@ -1837,7 +1842,7 @@ impl Component for MultiLogsComponent {
                         self.cursor = self.cursor.saturating_sub(1);
                         // Scroll viewport if cursor goes above visible area
                         if self.cursor < self.scroll as usize {
-                            self.scroll = self.cursor as u16;
+                            self.scroll = to_u16(self.cursor);
                         }
                         self.following = false;
                     }
@@ -1873,7 +1878,7 @@ impl Component for MultiLogsComponent {
                         let viewport = self.viewport_height as usize;
                         let visible_end = self.scroll as usize + viewport;
                         if self.cursor >= visible_end {
-                            self.scroll = (self.cursor + 1).saturating_sub(viewport) as u16;
+                            self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
                         }
                         self.following = false;
                     }
@@ -1884,7 +1889,7 @@ impl Component for MultiLogsComponent {
                 // Always move cursor
                 self.cursor = self.cursor.saturating_sub(20);
                 if self.cursor < self.scroll as usize {
-                    self.scroll = self.cursor as u16;
+                    self.scroll = to_u16(self.cursor);
                 }
                 self.following = false;
                 Ok(None)
@@ -1900,7 +1905,7 @@ impl Component for MultiLogsComponent {
                 let viewport = self.viewport_height as usize;
                 let visible_end = self.scroll as usize + viewport;
                 if self.cursor >= visible_end {
-                    self.scroll = (self.cursor + 1).saturating_sub(viewport) as u16;
+                    self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
                 }
                 self.following = false;
                 Ok(None)
@@ -1913,7 +1918,7 @@ impl Component for MultiLogsComponent {
                 self.cursor = self.cursor.saturating_sub(half);
                 // Scroll to keep cursor visible
                 if self.cursor < self.scroll as usize {
-                    self.scroll = self.cursor as u16;
+                    self.scroll = to_u16(self.cursor);
                 }
                 self.following = false;
                 Ok(None)
@@ -1931,7 +1936,7 @@ impl Component for MultiLogsComponent {
                 let viewport = self.viewport_height as usize;
                 let visible_end = self.scroll as usize + viewport;
                 if self.cursor >= visible_end {
-                    self.scroll = (self.cursor + 1).saturating_sub(viewport) as u16;
+                    self.scroll = to_u16((self.cursor + 1).saturating_sub(viewport));
                 }
                 self.following = false;
                 Ok(None)
@@ -1949,7 +1954,7 @@ impl Component for MultiLogsComponent {
                 let max_idx = len.saturating_sub(1);
                 self.cursor = max_idx;
                 let viewport = self.viewport_height as usize;
-                self.scroll = len.saturating_sub(viewport) as u16;
+                self.scroll = to_u16(len.saturating_sub(viewport));
                 self.following = true;
                 Ok(None)
             }

@@ -692,12 +692,12 @@ impl VolumesComponent {
 
         let widths = [
             Constraint::Length(1),
-            Constraint::Length(label_width as u16),
+            Constraint::Length(talos9s_core::convert::to_u16(label_width)),
             Constraint::Length(7),
             Constraint::Length(10),
             Constraint::Length(4),
             Constraint::Length(6),
-            Constraint::Length(nodes_width as u16),
+            Constraint::Length(talos9s_core::convert::to_u16(nodes_width)),
             Constraint::Fill(1),
         ];
         let header = Row::new(vec![
@@ -1167,7 +1167,9 @@ impl Component for VolumesComponent {
             .iter()
             .map(|line| line.width().max(1).div_ceil(width))
             .sum();
-        let detail_height = (wrapped_rows as u16 + 1).min(inner.height * 3 / 5);
+        let detail_height = talos9s_core::convert::to_u16(wrapped_rows)
+            .saturating_add(1)
+            .min(inner.height * 3 / 5);
         let [summary_area, table_area, detail_area] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Fill(1),

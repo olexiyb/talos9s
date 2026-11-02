@@ -290,7 +290,9 @@ fn parse_quantity(q: &str) -> Option<u64> {
         _ => return None,
     };
     let value: f64 = number.parse().ok()?;
-    Some((value * multiplier as f64) as u64)
+    Some(talos9s_core::convert::float_to_u64(
+        value * multiplier as f64,
+    ))
 }
 
 #[cfg(test)]

@@ -285,7 +285,9 @@ impl NetworkStatsComponent {
         };
 
         // Create a floating notification centered near the top
-        let msg_width = (message.len() as u16 + 4).min(area.width.saturating_sub(4));
+        let msg_width = talos9s_core::convert::to_u16(message.len())
+            .saturating_add(4)
+            .min(area.width.saturating_sub(4));
         let msg_height = 3u16;
         let x = area.x + (area.width.saturating_sub(msg_width)) / 2;
         let y = area.y + 2; // Near the top, below header

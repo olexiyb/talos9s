@@ -825,10 +825,12 @@ impl DiagnosticsComponent {
         let content_lines: Vec<&str> = self.details_content.lines().collect();
         let max_line_len = content_lines.iter().map(|l| l.len()).max().unwrap_or(40);
 
-        let dialog_width = (max_line_len as u16 + 6)
+        let dialog_width = talos9s_core::convert::to_u16(max_line_len)
+            .saturating_add(6)
             .clamp(50, 80)
             .min(area.width.saturating_sub(4));
-        let dialog_height = (content_lines.len() as u16 + 6)
+        let dialog_height = talos9s_core::convert::to_u16(content_lines.len())
+            .saturating_add(6)
             .min(20)
             .min(area.height.saturating_sub(4));
         let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);

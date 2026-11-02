@@ -94,6 +94,11 @@ string_slice = "warn"
 # items[i] / &v[a..b] panic when out of range (a selection outliving a
 # shorter list): use .get(), destructure fixed layouts
 indexing_slicing = "warn"
+# `as` wraps silently: a list longer than 65535 rows becomes a tiny height,
+# a negative value a huge count. Convert with try_from / saturating helpers
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_possible_wrap = "warn"
 # Leftovers and output that would corrupt the terminal
 dbg_macro = "warn"
 todo = "warn"

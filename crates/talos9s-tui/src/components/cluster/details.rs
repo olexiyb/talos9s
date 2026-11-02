@@ -1,17 +1,21 @@
 //! The details pane: the dashboard of the selected node
 
 use super::*;
+use talos9s_core::convert::to_u16;
 
 impl ClusterComponent {
     /// Render a compact ASCII bar for percentage values
     pub(super) fn render_compact_bar(pct: f32, width: usize) -> String {
-        let filled = ((pct / 100.0) * width as f32).round() as usize;
+        let filled = talos9s_core::convert::to_usize(talos9s_core::convert::float_to_u64(
+            f64::from(((pct / 100.0) * width as f32).round()),
+        ));
         let empty = width.saturating_sub(filled);
         format!(
             "{}{}{:>3}%",
             "█".repeat(filled),
             "░".repeat(empty),
-            pct.round() as u8
+            u8::try_from(talos9s_core::convert::float_to_u64(f64::from(pct).round()))
+                .unwrap_or(u8::MAX)
         )
     }
 
@@ -193,14 +197,14 @@ impl ClusterComponent {
             }
         }
         frame.render_widget(
-            Paragraph::new(lines).scroll((self.details_scroll as u16, 0)),
+            Paragraph::new(lines).scroll((to_u16(self.details_scroll), 0)),
             inner,
         );
         crate::ui_ext::draw_scrollbar(
             frame,
             Rect::new(inner.x + inner.width, inner.y, 1, inner.height),
-            total as u16,
-            self.details_scroll as u16,
+            to_u16(total),
+            to_u16(self.details_scroll),
         );
 
         // Where the service rows are on screen (clipped to the pane), for clicks
@@ -209,13 +213,13 @@ impl ClusterComponent {
         let last_visible = (rows_start + service_count).min(self.details_scroll + height);
         self.hits.borrow_mut().services =
             (service_count > 0 && first_visible < last_visible).then(|| {
-                let y = inner.y + (first_visible - self.details_scroll) as u16;
+                let y = inner.y + to_u16(first_visible - self.details_scroll);
                 (
                     Rect::new(
                         inner.x,
                         y,
                         inner.width,
-                        (last_visible - first_visible) as u16,
+                        to_u16(last_visible - first_visible),
                     ),
                     first_visible - rows_start,
                     service_count,

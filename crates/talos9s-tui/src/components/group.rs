@@ -186,7 +186,8 @@ fn counter_rate(previous: u64, current: u64, elapsed: Duration) -> Option<f64> {
 
 fn rate(previous: u64, current: u64, elapsed: Duration) -> Option<u64> {
     let secs = elapsed.as_secs_f64();
-    (current >= previous && secs > 0.0).then(|| ((current - previous) as f64 / secs) as u64)
+    (current >= previous && secs > 0.0)
+        .then(|| talos9s_core::convert::float_to_u64((current - previous) as f64 / secs))
 }
 
 /// A bounded talosctl query's result, its error as text
@@ -547,7 +548,7 @@ impl GroupComponent {
             .map(|n| n.hostname.len())
             .max()
             .unwrap_or(4);
-        Constraint::Length(longest.max(4) as u16 + 1)
+        Constraint::Length(talos9s_core::convert::to_u16(longest.max(4)).saturating_add(1))
     }
 
     /// Node index of each table row
@@ -568,9 +569,9 @@ impl GroupComponent {
         if len == 0 {
             return;
         }
-        let current = self.table_state.selected().unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, len as isize - 1);
-        self.table_state.select(Some(next as usize));
+        let current = self.table_state.selected().unwrap_or(0);
+        let next = current.saturating_add_signed(delta).min(len - 1);
+        self.table_state.select(Some(next));
     }
 
     /// Single-node view of the selected row's node
@@ -996,11 +997,13 @@ impl Component for GroupComponent {
         let problems_height = if problems.is_empty() {
             0
         } else {
-            (problems.len() as u16 + 2).min(area.height / 2)
+            talos9s_core::convert::to_u16(problems.len())
+                .saturating_add(2)
+                .min(area.height / 2)
         };
         let [title, warnings, table, problems_area] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(errors.len() as u16),
+            Constraint::Length(talos9s_core::convert::to_u16(errors.len())),
             Constraint::Min(4),
             Constraint::Length(problems_height),
         ])

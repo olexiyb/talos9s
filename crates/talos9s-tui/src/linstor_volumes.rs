@@ -340,7 +340,12 @@ pub async fn fetch_volumes(client: &kube::Client) -> Result<Option<Vec<LinstorVo
 /// Set each volume's `place_count` from its resource group's select filter
 pub fn apply_place_counts(volumes: &mut [LinstorVolume], groups: &Value) {
     let counts: HashMap<String, u32> = items::<GroupJson>(groups)
-        .map(|g| (g.name, g.select_filter.place_count as u32))
+        .map(|g| {
+            (
+                g.name,
+                u32::try_from(g.select_filter.place_count).unwrap_or(u32::MAX),
+            )
+        })
         .collect();
     for volume in volumes {
         volume.place_count = volume
@@ -475,7 +480,7 @@ struct ReplicationJson {
 fn volume_of(resource: &str, number: u64, definition: Option<&DefinitionJson>) -> LinstorVolume {
     let mut volume = LinstorVolume {
         resource: resource.to_string(),
-        volume_number: number as u32,
+        volume_number: u32::try_from(number).unwrap_or(u32::MAX),
         ..Default::default()
     };
     let Some(rd) = definition else {
@@ -542,7 +547,7 @@ pub fn volumes_from(resources: &Value, definitions: &Value) -> Vec<LinstorVolume
                         .as_ref()?
                         .minor_number
                 })
-                .map(|m| m as u32);
+                .map(|m| u32::try_from(m).unwrap_or(u32::MAX));
             let (disk_state, replication) = match vol.state {
                 Some(s) => (s.disk_state, s.replication_states),
                 None => (None, HashMap::new()),

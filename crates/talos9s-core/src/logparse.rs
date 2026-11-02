@@ -424,6 +424,9 @@ pub fn klog_sort_key(mmdd: &str, time: &str, now: chrono::DateTime<chrono::Utc>)
 /// Convert Unix timestamp to (HH:MM:SS, sort_key)
 /// Auto-detects whether timestamp is in seconds or milliseconds
 /// Sort key uses the full Unix timestamp to preserve date ordering
+// Float-to-int `as` saturates (NaN gives 0), so a garbage timestamp gives an
+// extreme but harmless time; there is no i64 helper in convert
+#[allow(clippy::cast_possible_truncation)]
 pub fn unix_ts_to_time(ts: f64) -> (String, i64) {
     // Auto-detect: timestamps < 10^12 are likely seconds, >= 10^12 are milliseconds
     // Current Unix time in seconds is ~1.7 billion (2024), in ms it's ~1.7 trillion

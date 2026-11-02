@@ -990,7 +990,9 @@ impl ProcessesComponent {
 
     /// Generate a usage bar (10 chars) based on percentage
     fn usage_bar(percent: f32) -> (String, Color) {
-        let filled = ((percent / 10.0).round() as usize).min(10);
+        let filled = usize::from(
+            talos9s_core::convert::float_to_u16(f64::from(percent / 10.0).round()).min(10),
+        );
         let empty = 10 - filled;
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
         // The dashboard's thresholds, so a node looks the same in both
@@ -1265,7 +1267,9 @@ impl ProcessesComponent {
             .map(|n| n.hostname.chars().count())
             .max()
             .unwrap_or(0)
-            .max(4) as u16
+            .max(4)
+            .try_into()
+            .unwrap_or(u16::MAX)
     }
 
     /// Draw the process table
@@ -1782,6 +1786,8 @@ fn process_cpu_percents(
         .iter()
         .filter_map(|p| {
             let prev = prev_cpu_times.get(&p.pid)?;
+            // f64 to f32 rounds to nearest (inf past the range): fine for a percentage
+            #[allow(clippy::cast_possible_truncation)]
             let pct = ((p.cpu_time - prev) / elapsed * 100.0) as f32;
             Some((p.pid, pct.max(0.0)))
         })

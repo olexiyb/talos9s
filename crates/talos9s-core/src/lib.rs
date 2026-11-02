@@ -24,6 +24,7 @@
 
 pub mod async_state;
 pub mod constants;
+pub mod convert;
 pub mod diagnostics;
 pub mod errors;
 pub mod etcd;
