@@ -404,7 +404,6 @@ impl App {
 
     /// Apply config in wizard
     async fn wizard_apply_config(&self, wizard: &mut WizardComponent) {
-        use std::time::Instant;
         use talos_rs::apply_config_insecure;
 
         wizard.transition(WizardState::Applying);
@@ -431,33 +430,28 @@ impl App {
                 &endpoint,
                 &format!("cluster {cluster_name}, disk {disk}, config {path}"),
             );
-            let applied =
-                tokio::time::timeout(APPLY_TIMEOUT, apply_config_insecure(&endpoint, &path))
+            let failure =
+                match tokio::time::timeout(APPLY_TIMEOUT, apply_config_insecure(&endpoint, &path))
                     .await
-                    .unwrap_or_else(|_| {
-                        Err(talos_rs::TalosError::Connection(format!(
-                            "timed out after {}s",
-                            APPLY_TIMEOUT.as_secs()
-                        )))
-                    });
-            match applied {
-                Ok(result) => {
-                    if result.success {
+                {
+                    Ok(Ok(result)) if result.success => {
                         audit_success("INSTALL", &endpoint, "config applied, node installing");
                         // Start waiting for reboot
                         wizard.data_mut().wait_started = Some(Instant::now());
                         wizard.data_mut().context_name = Some(cluster_name);
                         wizard.transition(WizardState::WaitingReboot);
-                    } else {
-                        audit_failure("INSTALL", &endpoint, &result.message);
-                        wizard.set_error(result.message);
+                        None
                     }
-                }
-                Err(e) => {
-                    let msg = format!("Failed to apply config: {e}");
-                    audit_failure("INSTALL", &endpoint, &msg);
-                    wizard.set_error(msg);
-                }
+                    Ok(Ok(result)) => Some(result.message),
+                    Ok(Err(e)) => Some(format!("Failed to apply config: {e}")),
+                    Err(_) => Some(format!(
+                        "Failed to apply config: timed out after {}s",
+                        APPLY_TIMEOUT.as_secs()
+                    )),
+                };
+            if let Some(msg) = failure {
+                audit_failure("INSTALL", &endpoint, &msg);
+                wizard.set_error(msg);
             }
         } else {
             wizard.set_error("No config generated".to_string());
@@ -466,7 +460,6 @@ impl App {
 
     /// Bootstrap cluster in wizard
     async fn wizard_bootstrap(&self, wizard: &mut WizardComponent) {
-        use std::time::Instant;
         use tokio::process::Command;
 
         wizard.transition(WizardState::Bootstrapping);
@@ -599,7 +592,10 @@ impl App {
     fn start_update_check(&mut self) {
         if !self.update_check_enabled
             || crate::update::do_not_track()
-            || !self.update.due(unix_now(), crate::update::CHECK_INTERVAL)
+            || !self.update.due(
+                crate::ui_ext::unix_now_secs(),
+                crate::update::CHECK_INTERVAL,
+            )
         {
             return;
         }
@@ -623,7 +619,7 @@ impl App {
             Some(Ok(Ok(latest))) => {
                 tracing::info!("Latest talos9s release: {latest}");
                 self.update = crate::state::UpdateCheck {
-                    checked_at: Some(unix_now()),
+                    checked_at: Some(crate::ui_ext::unix_now_secs()),
                     latest: Some(latest),
                 };
                 self.cluster
@@ -1316,6 +1312,30 @@ impl App {
         }
     }
 
+    /// Name of the selected cluster's talosconfig context
+    fn context(&self) -> Option<String> {
+        self.cluster.current_context_name().map(str::to_string)
+    }
+
+    /// A node opened from a group view: select it in the tree and remember
+    /// the group to go back to. Call before `leave_view`.
+    fn begin_drill(&mut self, hostname: &str) -> Option<(TreeSelection, String)> {
+        (self.view == View::Group).then(|| {
+            let group = (self.cluster.selection(), self.cluster.target_title(false));
+            self.cluster.select_node(hostname);
+            group
+        })
+    }
+
+    /// Offer the way back to the group `begin_drill` left. Call after
+    /// `show_component`, which clears it.
+    fn finish_drill(&mut self, from_group: Option<(TreeSelection, String)>) {
+        if let Some((selection, title)) = from_group {
+            self.cluster.set_back_hint(Some(title.clone()));
+            self.drill_return = Some((selection, title));
+        }
+    }
+
     /// Close the view on the right before another replaces it: stop log
     /// streams, keep settings that carry over, and cache the rest so coming
     /// back shows it at once
@@ -1457,10 +1477,7 @@ impl App {
                 network.set_settings(self.settings.network);
                 if let Some(client) = self.cluster.client() {
                     network.set_client(client.with_node(&address));
-                    network.set_talos_context(
-                        self.cluster.current_context_name().map(str::to_string),
-                        self.config_path.clone(),
-                    );
+                    network.set_talos_context(self.context(), self.config_path.clone());
                     network.refresh();
                 }
                 self.show_component(
@@ -1592,14 +1609,9 @@ impl App {
             }
             Action::ShowDiagnostics(hostname, address, role, cp_endpoint) => {
                 // A node opened from a group view: the tree follows
-                let from_group = (self.view == View::Group).then(|| {
-                    let group = (self.cluster.selection(), self.cluster.target_title(false));
-                    self.cluster.select_node(&hostname);
-                    group
-                });
+                let from_group = self.begin_drill(&hostname);
                 self.leave_view();
                 let mut load = false;
-                // Switch to diagnostics view for a node
                 tracing::info!(
                     "ShowDiagnostics: hostname='{}', address='{}', role='{}', cp_endpoint={:?}",
                     hostname,
@@ -1608,7 +1620,6 @@ impl App {
                     cp_endpoint
                 );
 
-                // Create diagnostics component
                 let mut diagnostics = DiagnosticsComponent::new(
                     hostname,
                     address.clone(),
@@ -1618,15 +1629,9 @@ impl App {
 
                 // Set the control plane endpoint for worker nodes to fetch kubeconfig
                 diagnostics.set_controlplane_endpoint(cp_endpoint);
-                diagnostics.set_talos_context(
-                    self.cluster
-                        .current_context_name()
-                        .map(std::string::ToString::to_string),
-                );
+                diagnostics.set_talos_context(self.context());
 
-                // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
-                    // Create a client configured for this specific node
                     let node_client = client.with_node(&address);
                     diagnostics.set_client(node_client);
                     load = true;
@@ -1637,21 +1642,15 @@ impl App {
                     ViewComponent::Diagnostics(Box::new(diagnostics)),
                     load,
                 );
-                if let Some((selection, title)) = from_group {
-                    self.cluster.set_back_hint(Some(title.clone()));
-                    self.drill_return = Some((selection, title));
-                }
+                self.finish_drill(from_group);
             }
             Action::ShowEtcd => {
                 self.leave_view();
-                // Switch to etcd status view
                 tracing::info!("Viewing etcd cluster status");
 
-                // Create etcd component
                 let mut etcd = EtcdComponent::new();
 
-                // Set the client and refresh data
-                etcd.set_context(self.cluster.current_context_name().map(str::to_string));
+                etcd.set_context(self.context());
                 etcd.set_config_path(self.config_path.clone());
                 // Without a client (the cluster is reconnecting) the refresh
                 // shows that instead of a blank view, and retries
@@ -1676,7 +1675,7 @@ impl App {
                         // "Loading processes..." until it lands
                         load = true;
                     }
-                    None => processes.set_error("Not connected".to_string()),
+                    None => processes.set_error("Not connected to the cluster".to_string()),
                 }
 
                 self.show_component(
@@ -1686,34 +1685,23 @@ impl App {
                 );
             }
             Action::ShowNetwork(hostname, address) => {
-                let from_group = (self.view == View::Group).then(|| {
-                    let group = (self.cluster.selection(), self.cluster.target_title(false));
-                    self.cluster.select_node(&hostname);
-                    group
-                });
+                let from_group = self.begin_drill(&hostname);
                 self.leave_view();
-                // Switch to network stats view for a node
                 tracing::info!(
                     "ShowNetwork: hostname='{}', address='{}'",
                     hostname,
                     address
                 );
 
-                // Create network component
                 let mut network = NetworkStatsComponent::new(hostname.clone(), address.clone());
                 network.set_settings(self.settings.network);
                 network.set_controlplane(self.cluster.is_controlplane(&hostname));
 
-                // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
-                    // Create a client configured for this specific node
                     let node_client = client.with_node(&address);
                     tracing::info!("Created node client for network: '{}'", address);
                     network.set_client(node_client);
-                    network.set_talos_context(
-                        self.cluster.current_context_name().map(str::to_string),
-                        self.config_path.clone(),
-                    );
+                    network.set_talos_context(self.context(), self.config_path.clone());
                     network.refresh();
                 }
 
@@ -1722,17 +1710,12 @@ impl App {
                     ViewComponent::Network(Box::new(network)),
                     false,
                 );
-                if let Some((selection, title)) = from_group {
-                    self.cluster.set_back_hint(Some(title.clone()));
-                    self.drill_return = Some((selection, title));
-                }
+                self.finish_drill(from_group);
             }
             Action::ShowSecurity => {
                 self.leave_view();
-                // Switch to security/certificates view
                 tracing::info!("Viewing security/certificates");
 
-                // Create security component
                 let mut security = SecurityComponent::new(
                     self.cluster
                         .current_context_name()
@@ -1741,7 +1724,6 @@ impl App {
                     self.config_path.clone(),
                 );
 
-                // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
                     security.set_client(client.clone());
                 }
@@ -1755,10 +1737,8 @@ impl App {
             }
             Action::ShowLifecycle => {
                 self.leave_view();
-                // Switch to lifecycle/version view
                 tracing::info!("Viewing lifecycle/versions");
 
-                // Create lifecycle component
                 let mut lifecycle = LifecycleComponent::new(
                     self.cluster
                         .current_context_name()
@@ -1767,7 +1747,6 @@ impl App {
                     self.config_path.clone(),
                 );
 
-                // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
                     lifecycle.set_client(client.clone());
                 }
@@ -1801,7 +1780,7 @@ impl App {
                     workloads.start_loading();
                     load = true;
                 } else {
-                    workloads.set_error("Not connected".to_string());
+                    workloads.set_error("Not connected to the cluster".to_string());
                 }
 
                 self.show_component(
@@ -1816,7 +1795,7 @@ impl App {
                 tracing::info!("ShowVolumes: '{}'", title);
 
                 let mut volumes = VolumesComponent::new(nodes);
-                volumes.set_context(self.cluster.current_context_name().map(str::to_string));
+                volumes.set_context(self.context());
                 if let Some(state) = self.settings.volumes.clone() {
                     volumes.set_view_state(state);
                 }
@@ -1831,7 +1810,7 @@ impl App {
                     // scanning message until it lands
                     load = true;
                 } else {
-                    volumes.set_error("Not connected".to_string());
+                    volumes.set_error("Not connected to the cluster".to_string());
                 }
 
                 self.show_component(
@@ -1858,8 +1837,8 @@ impl App {
                     kind,
                     title,
                     nodes,
-                    self.cluster.current_context_name().map(str::to_string),
-                    self.cluster.config_path().map(str::to_string),
+                    self.context(),
+                    self.config_path.clone(),
                     cp_endpoint,
                 );
                 group.set_storage_show_all(self.settings.storage_show_all);
@@ -1870,28 +1849,16 @@ impl App {
                 self.show_component(item, ViewComponent::Group(Box::new(group)), true);
             }
             Action::ShowStorage(hostname, address, mode) => {
-                let from_group = (self.view == View::Group).then(|| {
-                    let group = (self.cluster.selection(), self.cluster.target_title(false));
-                    self.cluster.select_node(&hostname);
-                    group
-                });
+                let from_group = self.begin_drill(&hostname);
                 self.leave_view();
-                // Switch to storage view for a node
                 tracing::info!(
                     "ShowStorage: hostname='{}', address='{}'",
                     hostname,
                     address
                 );
 
-                // Get context and config from cluster component
-                let context = self
-                    .cluster
-                    .current_context_name()
-                    .map(std::string::ToString::to_string);
-                let config_path = self
-                    .cluster
-                    .config_path()
-                    .map(std::string::ToString::to_string);
+                let context = self.context();
+                let config_path = self.config_path.clone();
 
                 // Create storage component with context for authentication
                 let mut storage = StorageComponent::new(hostname, address, context, config_path);
@@ -1905,10 +1872,7 @@ impl App {
                 // Storage reads through talosctl, with the context
                 let load = self.cluster.client().is_some();
                 self.show_component(item, ViewComponent::Storage(Box::new(storage)), load);
-                if let Some((selection, title)) = from_group {
-                    self.cluster.set_back_hint(Some(title.clone()));
-                    self.drill_return = Some((selection, title));
-                }
+                self.finish_drill(from_group);
             }
             Action::ShowNodeInfo(hostname, address, tab) => {
                 self.leave_view();
@@ -1918,21 +1882,15 @@ impl App {
                     NodeInfoTab::Config => NavMenuItem::Config,
                     NodeInfoTab::Extensions => NavMenuItem::Extensions,
                 };
-                let context = self
-                    .cluster
-                    .current_context_name()
-                    .map(std::string::ToString::to_string);
-                let config_path = self
-                    .cluster
-                    .config_path()
-                    .map(std::string::ToString::to_string);
+                let context = self.context();
+                let config_path = self.config_path.clone();
                 let mut node_info =
                     NodeInfoComponent::new(hostname, &address, context, config_path, tab);
                 if let Some(client) = self.cluster.client() {
                     node_info.set_client(client.with_node(&address));
                     load = true;
                 } else {
-                    node_info.set_error("No Talos client configured".to_string());
+                    node_info.set_error("Not connected to the cluster".to_string());
                 }
                 self.show_component(item, ViewComponent::NodeInfo(Box::new(node_info)), load);
             }
@@ -1940,7 +1898,6 @@ impl App {
                 // Show node operations overlay
                 tracing::info!("Viewing node operations for: {} ({})", hostname, address);
 
-                // Create node operations component
                 let mut node_ops = NodeOperationsComponent::new(hostname, address, is_controlplane);
 
                 // Set the Talos client
@@ -1961,7 +1918,6 @@ impl App {
                 // Show rolling operations overlay
                 tracing::info!("Viewing rolling operations for {} nodes", nodes.len());
 
-                // Create rolling operations component
                 let mut rolling_ops = RollingOperationsComponent::new();
 
                 // Convert node tuples to RollingNodeInfo
@@ -2020,13 +1976,6 @@ impl App {
         }
         Ok(())
     }
-}
-
-/// Seconds since the Unix epoch
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
 
 /// One tick of following the selection to `key`: a new selection starts

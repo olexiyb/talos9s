@@ -143,10 +143,7 @@ impl NetworkStatsComponent {
         }
 
         // Generate filename with timestamp
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let timestamp = crate::ui_ext::unix_now_secs();
         let filename = format!("{interface}_{timestamp}.pcap");
         let path = std::path::Path::new("/tmp").join(&filename);
 

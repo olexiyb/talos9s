@@ -69,6 +69,13 @@ pub fn draw_scrollbar(
     );
 }
 
+/// Seconds since the Unix epoch (0 if the clock is before it)
+pub fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// A spinner frame for "in progress" markers, advancing with wall time so
 /// every spinner on screen turns together and nothing has to track ticks
 pub fn spinner() -> &'static str {

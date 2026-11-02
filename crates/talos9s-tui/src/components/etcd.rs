@@ -558,9 +558,7 @@ impl EtcdComponent {
              # each blocks that member until it finishes\n{}",
             commands.join("\n")
         );
-        if let Err(e) = crate::clipboard::copy_to_clipboard(text) {
-            tracing::warn!("Failed to copy defrag commands: {}", e);
-        }
+        crate::clipboard::copy_to_clipboard(text);
     }
 
     /// Set an error message

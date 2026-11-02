@@ -147,14 +147,6 @@ pub(super) fn service_symbol(s: &ServiceInfo) -> (&'static str, Style) {
     }
 }
 
-/// Current time in seconds since the Unix epoch
-pub(super) fn unix_now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 /// Format an uptime in seconds, e.g. "5d 17h"
 pub(super) fn format_uptime(secs: u64) -> String {
     talos9s_core::format_duration_detailed(chrono::Duration::seconds(

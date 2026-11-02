@@ -143,7 +143,7 @@ impl ClusterComponent {
 
         let dim = Style::default().dim();
         let pending = || Cell::from(Span::styled("…", dim));
-        let now = unix_now_secs();
+        let now = crate::ui_ext::unix_now_secs();
         // Drop the least important columns on narrow panes rather than truncate
         let wide = inner.width >= 90;
         let has_zfs = nodes

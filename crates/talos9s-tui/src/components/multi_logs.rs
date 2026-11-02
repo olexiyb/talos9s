@@ -974,9 +974,9 @@ impl MultiLogsComponent {
     }
 
     /// Yank (copy) the selected lines, or the current one
-    fn yank_selection(&self) -> (bool, usize) {
+    fn yank_selection(&self) -> usize {
         let Some(data) = self.data() else {
-            return (false, 0);
+            return 0;
         };
         let lines: Vec<String> = (self.visual.rows(self.cursor))
             .filter_map(|vi| {
@@ -1998,8 +1998,8 @@ impl Component for MultiLogsComponent {
 
             // Yank selection or current line to clipboard
             KeyCode::Char('y') => {
-                let (success, count) = self.yank_selection();
-                if success {
+                let count = self.yank_selection();
+                if count > 0 {
                     tracing::info!("Copied {} log entries to clipboard", count);
                 }
                 // Clear visual selection after yank

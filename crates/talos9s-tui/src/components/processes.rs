@@ -1723,9 +1723,8 @@ impl ProcessesComponent {
                     let full_cmd = proc.display_command().to_string();
                     // By characters: 50 bytes can end inside a multi-byte one
                     let preview: String = full_cmd.chars().take(50).collect();
-                    if crate::clipboard::copy_to_clipboard(full_cmd).is_ok() {
-                        tracing::info!("Copied to clipboard: {}...", preview);
-                    }
+                    crate::clipboard::copy_to_clipboard(full_cmd);
+                    tracing::info!("Copied to clipboard: {}...", preview);
                 }
                 None
             }

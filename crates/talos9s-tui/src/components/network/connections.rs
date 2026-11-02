@@ -251,7 +251,7 @@ impl NetworkStatsComponent {
     }
 
     /// Yank (copy) the selected connections, or the current one
-    fn yank_conn_selection(&self) -> (bool, usize) {
+    fn yank_conn_selection(&self) -> usize {
         let conns = self.get_filtered_connections();
         let lines: Vec<String> = (self.conn_visual.rows(self.conn_selected))
             .filter_map(|idx| conns.get(idx).map(Self::format_connection))
@@ -881,8 +881,8 @@ impl NetworkStatsComponent {
 
             // Yank selection or current line to clipboard
             KeyCode::Char('y') => {
-                let (success, count) = self.yank_conn_selection();
-                if success {
+                let count = self.yank_conn_selection();
+                if count > 0 {
                     tracing::info!("Copied {} connection(s) to clipboard", count);
                 }
                 // Clear visual selection after yank

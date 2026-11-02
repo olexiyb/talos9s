@@ -301,7 +301,7 @@ impl ClusterComponent {
         // Uptime (computed at draw time so it keeps ticking between refreshes)
         if let Some(uptime) = self
             .get_node_system_stat(node_name)
-            .and_then(|s| s.uptime_secs(unix_now_secs()))
+            .and_then(|s| s.uptime_secs(crate::ui_ext::unix_now_secs()))
         {
             resource_lines.push(Line::from(vec![
                 Span::styled(" Uptime: ", Style::default().dim()),
