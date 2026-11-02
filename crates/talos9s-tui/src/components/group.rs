@@ -164,10 +164,7 @@ fn is_hidden_iface(row: &IfaceRow) -> bool {
 /// (loop images, device mapper, software RAID, DRBD replicas, zvols, ...),
 /// which would also count the same capacity twice
 fn is_virtual_disk(disk: &DiskInfo) -> bool {
-    let name = disk.dev_path.trim_start_matches("/dev/");
-    ["loop", "dm-", "md", "drbd", "zd", "nbd", "ram", "zram"]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+    crate::components::storage::virtual_kind(&disk.dev_path).is_some()
 }
 
 /// Talos volumes hidden by default: directories, overlays and symlinks in
@@ -647,6 +644,18 @@ impl GroupComponent {
             .collect()
     }
 
+    /// Whether `A` (show virtual devices too) applies, and the setting
+    /// saved for the storage views when it does
+    pub fn storage_show_all(&self) -> Option<bool> {
+        matches!(self.kind, GroupKind::Storage | GroupKind::Partitions).then_some(self.show_all)
+    }
+
+    pub fn set_storage_show_all(&mut self, show_all: bool) {
+        if matches!(self.kind, GroupKind::Storage | GroupKind::Partitions) {
+            self.show_all = show_all;
+        }
+    }
+
     fn footer_line(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let label = |l: &'static str| Span::styled(l, Style::default().fg(Color::DarkGray));
@@ -778,6 +787,10 @@ impl GroupComponent {
                     .map(|(i, disk)| {
                         let (kind, color) = if disk.cdrom {
                             ("CD-ROM", Color::Magenta)
+                        } else if let Some(kind) =
+                            crate::components::storage::virtual_kind(&disk.dev_path)
+                        {
+                            (kind, Color::DarkGray)
                         } else if disk.rotational {
                             ("HDD", Color::Yellow)
                         } else {

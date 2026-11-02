@@ -130,7 +130,7 @@ view to the full width.
 | Processes | htop-like process list and tree, sorted by CPU or memory |
 | Network | Interface traffic and connections, packet capture (filtered so it doesn't capture itself) |
 | KubeSpan | The node's WireGuard peers; on a cluster or group row, the peer matrix |
-| Disks | The node's disks |
+| Disks | The node's disks, read-only ones marked `RO`; virtual devices (loop, dm, md, DRBD, zvol) hidden until `A`, which is remembered |
 | Partitions | Talos volumes: the partitions with their filesystem, encryption and mount point |
 | Containers | Talos system services and Kubernetes containers |
 | Machine config | The config in effect, read-only, searchable, secrets masked; flags a staged change waiting for a reboot |

@@ -69,6 +69,34 @@ fn phase_health(phase: &str) -> HealthIndicator {
     }
 }
 
+/// What a virtual block device is (loop image, device mapper, software
+/// RAID, DRBD replica, zvol, ...), or `None` for a real disk. These are
+/// layered on the disks: hidden by default, and never called SSD or HDD
+pub(crate) fn virtual_kind(dev_path: &str) -> Option<&'static str> {
+    let name = dev_path.trim_start_matches("/dev/");
+    [
+        ("loop", "loop"),
+        ("dm-", "dm"),
+        ("md", "md"),
+        ("drbd", "drbd"),
+        ("zd", "zvol"),
+        ("nbd", "nbd"),
+        ("zram", "zram"),
+        ("ram", "ram"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| name.starts_with(prefix))
+    .map(|(_, kind)| kind)
+}
+
+/// The selected row: a background, so cell colours (TYPE, HEALTH) stay
+/// readable instead of turning into blocks under reverse video
+fn selected_row() -> Style {
+    Style::default()
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// Table title, naming a failed read
 fn table_title(name: &str, error: Option<&str>) -> Line<'static> {
     match error {
@@ -108,6 +136,9 @@ pub struct StorageComponent {
 
     /// Config path for authentication
     config_path: Option<String>,
+
+    /// Show virtual block devices too (`A`); saved in the state file
+    show_all: bool,
 }
 
 impl Default for StorageComponent {
@@ -155,6 +186,7 @@ impl StorageComponent {
             node_address,
             context,
             config_path,
+            show_all: false,
         }
     }
 
@@ -225,6 +257,25 @@ impl StorageComponent {
         Ok(())
     }
 
+    /// Show virtual block devices too
+    pub fn show_all(&self) -> bool {
+        self.show_all
+    }
+
+    pub fn set_show_all(&mut self, show_all: bool) {
+        self.show_all = show_all;
+    }
+
+    /// The disks in the table: real ones first, virtual ones only with `A`
+    fn visible_disks(&self) -> Vec<&DiskInfo> {
+        self.data().map_or_else(Vec::new, |d| {
+            d.disks
+                .iter()
+                .filter(|disk| self.show_all || virtual_kind(&disk.dev_path).is_none())
+                .collect()
+        })
+    }
+
     /// Get selected disk index
     fn selected_disk_index(&self) -> usize {
         self.disk_table_state.selected().unwrap_or(0)
@@ -237,10 +288,11 @@ impl StorageComponent {
 
     /// Move the selection in the open table
     fn move_selection(&mut self, step: crate::ui_ext::Move) {
-        let len = self.data().map_or(0, |d| match self.view_mode {
-            StorageViewMode::Disks => d.disks.len(),
-            StorageViewMode::Partitions => d.volumes.len(),
-        });
+        // Disks counts the rows shown: virtual ones are hidden until `A`
+        let len = match self.view_mode {
+            StorageViewMode::Disks => self.visible_disks().len(),
+            StorageViewMode::Partitions => self.data().map_or(0, |d| d.volumes.len()),
+        };
         let table = match self.view_mode {
             StorageViewMode::Disks => &mut self.disk_table_state,
             StorageViewMode::Partitions => &mut self.volume_table_state,
@@ -258,65 +310,77 @@ impl StorageComponent {
         ])
         .areas(area);
 
-        // Draw disk table
-        let header = Row::new(vec![
-            Cell::from("DEVICE").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("SIZE").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("TYPE").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("TRANSPORT").style(Style::default().add_modifier(Modifier::BOLD)),
-            Cell::from("MODEL").style(Style::default().add_modifier(Modifier::BOLD)),
-        ])
-        .height(1);
+        let disks = self.visible_disks();
+        let hidden = self
+            .data()
+            .map_or(0, |d| d.disks.len())
+            .saturating_sub(disks.len());
+        // RO only when a disk is read-only: on most nodes none is
+        let show_ro = disks.iter().any(|d| d.readonly);
+        let bold =
+            |t: &'static str| Cell::from(t).style(Style::default().add_modifier(Modifier::BOLD));
+        let mut header = vec![bold("DEVICE"), bold("SIZE"), bold("TYPE")];
+        if show_ro {
+            header.push(bold("RO"));
+        }
+        header.extend([bold("TRANSPORT"), bold("MODEL")]);
+        let header = Row::new(header).height(1);
 
-        let rows: Vec<Row> = if let Some(data) = self.data() {
-            data.disks
-                .iter()
-                .map(|disk| {
-                    let disk_type = if disk.cdrom {
-                        "CD-ROM"
-                    } else if disk.rotational {
-                        "HDD"
+        let rows: Vec<Row> = disks
+            .iter()
+            .map(|disk| {
+                let (disk_type, type_color) = if disk.cdrom {
+                    ("CD-ROM", Color::Magenta)
+                } else if let Some(kind) = virtual_kind(&disk.dev_path) {
+                    (kind, Color::DarkGray)
+                } else if disk.rotational {
+                    ("HDD", Color::Yellow)
+                } else {
+                    ("SSD", Color::Green)
+                };
+                let mut cells = vec![
+                    Cell::from(disk.dev_path.clone()),
+                    Cell::from(disk.size_pretty.clone()),
+                    Cell::from(disk_type).style(Style::default().fg(type_color)),
+                ];
+                if show_ro {
+                    cells.push(if disk.readonly {
+                        Cell::from("RO").style(Style::default().fg(Color::Red))
                     } else {
-                        "SSD"
-                    };
+                        Cell::from("")
+                    });
+                }
+                cells.extend([
+                    Cell::from(disk.transport.clone().unwrap_or_default()),
+                    Cell::from(disk.model.clone().unwrap_or_default()),
+                ]);
+                Row::new(cells)
+            })
+            .collect();
 
-                    let type_color = if disk.cdrom {
-                        Color::Magenta
-                    } else if disk.rotational {
-                        Color::Yellow
-                    } else {
-                        Color::Green
-                    };
-
-                    Row::new(vec![
-                        Cell::from(disk.dev_path.clone()),
-                        Cell::from(disk.size_pretty.clone()),
-                        Cell::from(disk_type).style(Style::default().fg(type_color)),
-                        Cell::from(disk.transport.clone().unwrap_or_default()),
-                        Cell::from(disk.model.clone().unwrap_or_default()),
-                    ])
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-
-        let widths = [
+        let mut widths = vec![
             Constraint::Length(14),
             Constraint::Length(10),
             Constraint::Length(8),
-            Constraint::Length(12),
-            Constraint::Min(20),
         ];
+        if show_ro {
+            widths.push(Constraint::Length(4));
+        }
+        widths.extend([Constraint::Length(12), Constraint::Min(20)]);
+        let title = if hidden > 0 {
+            format!("Disks · {hidden} virtual hidden")
+        } else {
+            "Disks".to_string()
+        };
 
         let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title(table_title(
-                "Disks",
+                &title,
                 self.data().and_then(|d| d.disks_error.as_deref()),
             )))
-            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .row_highlight_style(selected_row());
 
         frame.render_stateful_widget(table, table_area, &mut self.disk_table_state);
         self.rows = crate::ui_ext::RowHits::new(
@@ -338,8 +402,12 @@ impl StorageComponent {
             .title(" Details ")
             .title_style(Style::default().fg(Color::Yellow));
 
-        let content = if let Some(data) = self.data() {
-            if let Some(disk) = data.disks.get(self.selected_disk_index()) {
+        let content = if self.data().is_some() {
+            if let Some(disk) = self
+                .visible_disks()
+                .get(self.selected_disk_index())
+                .copied()
+            {
                 let mut lines = vec![
                     Line::from(vec![
                         Span::styled("Device: ", Style::default().fg(Color::Gray)),
@@ -450,7 +518,7 @@ impl StorageComponent {
                 "Partitions",
                 self.data().and_then(|d| d.volumes_error.as_deref()),
             )))
-            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .row_highlight_style(selected_row());
 
         frame.render_stateful_widget(table, table_area, &mut self.volume_table_state);
         self.rows = crate::ui_ext::RowHits::new(
@@ -527,12 +595,24 @@ impl Component for StorageComponent {
 
     fn key_hints(&self) -> Option<Line<'static>> {
         let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
-        Some(Line::from(vec![
+        let mut spans = vec![
             key("<↑/↓>"),
             Span::raw(" navigate  "),
             key("<r>"),
             Span::raw(" refresh"),
-        ]))
+        ];
+        if self.view_mode == StorageViewMode::Disks {
+            spans.extend([
+                Span::raw("  "),
+                key("<A>"),
+                Span::raw(if self.show_all {
+                    " hide virtual"
+                } else {
+                    " show all"
+                }),
+            ]);
+        }
+        Some(Line::from(spans))
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
@@ -545,6 +625,10 @@ impl Component for StorageComponent {
             }
             KeyCode::Char('r') => {
                 return Ok(Some(Action::Refresh));
+            }
+            KeyCode::Char('A') if self.view_mode == StorageViewMode::Disks => {
+                self.show_all = !self.show_all;
+                self.disk_table_state.select(Some(0));
             }
             _ => {}
         }
@@ -599,6 +683,99 @@ impl crate::components::BackgroundRefresh for StorageComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn disk(path: &str, readonly: bool) -> DiskInfo {
+        DiskInfo {
+            id: path.trim_start_matches("/dev/").to_string(),
+            dev_path: path.to_string(),
+            size: 0,
+            size_pretty: String::new(),
+            model: None,
+            serial: None,
+            transport: None,
+            rotational: false,
+            readonly,
+            cdrom: false,
+            wwid: None,
+            bus_path: None,
+        }
+    }
+
+    fn with_disks(disks: Vec<DiskInfo>) -> StorageComponent {
+        let mut c = StorageComponent::default();
+        c.state.set_data(StorageData {
+            hostname: "khn1".into(),
+            address: "10.0.0.1".into(),
+            disks,
+            volumes: Vec::new(),
+            disks_error: None,
+            volumes_error: None,
+        });
+        c
+    }
+
+    fn screen(c: &mut StorageComponent) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| c.draw(f, f.area()).unwrap()).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn virtual_devices_are_named_not_called_ssd() {
+        assert_eq!(virtual_kind("/dev/loop0"), Some("loop"));
+        assert_eq!(virtual_kind("/dev/dm-0"), Some("dm"));
+        assert_eq!(virtual_kind("/dev/zd16"), Some("zvol"));
+        assert_eq!(virtual_kind("/dev/zram0"), Some("zram"));
+        assert_eq!(virtual_kind("/dev/drbd1002"), Some("drbd"));
+        for real in [
+            "/dev/sda",
+            "/dev/nvme0n1",
+            "/dev/vda",
+            "/dev/sr0",
+            "/dev/mmcblk0",
+        ] {
+            assert_eq!(virtual_kind(real), None, "{real}");
+        }
+    }
+
+    /// Virtual devices hide until `A`; RO shows as a column only when a
+    /// shown disk is read-only
+    #[test]
+    fn virtual_disks_hide_until_a_and_read_only_gets_a_column() {
+        let mut c = with_disks(vec![
+            disk("/dev/loop0", true),
+            disk("/dev/sda", false),
+            disk("/dev/dm-0", false),
+        ]);
+        let text = screen(&mut c);
+        assert!(text.contains("/dev/sda"), "{text}");
+        assert!(!text.contains("/dev/loop0"), "{text}");
+        assert!(text.contains("2 virtual hidden"), "{text}");
+        assert!(!text.contains(" RO "), "no read-only disk shown: {text}");
+
+        c.handle_key_event(KeyEvent::new(
+            KeyCode::Char('A'),
+            crossterm::event::KeyModifiers::NONE,
+        ))
+        .unwrap();
+        assert!(c.show_all());
+        let text = screen(&mut c);
+        assert!(
+            text.contains("/dev/loop0") && text.contains("loop"),
+            "{text}"
+        );
+        assert!(text.contains("RO"), "{text}");
+        assert!(!text.contains("virtual hidden"), "{text}");
+    }
 
     #[test]
     fn volume_phases_on_the_way_to_ready_are_not_failures() {

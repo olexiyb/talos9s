@@ -35,6 +35,7 @@ pub struct UiState {
     /// Processes sort (`processes::SortBy` name)
     pub processes_sort: Option<String>,
     pub network: NetworkSettings,
+    pub storage: StorageSettings,
     /// The last new-release check (`update.rs`)
     pub update: UpdateCheck,
 }
@@ -79,6 +80,14 @@ pub struct Folds {
     pub expanded: bool,
     pub control_plane: bool,
     pub workers: bool,
+}
+
+/// Disks and partitions views, node and group
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StorageSettings {
+    /// Virtual block devices (loop, dm, md, drbd, zvol) shown too (`A`)
+    pub show_all: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -36,7 +36,7 @@ below.
 | `Esc`, `q` | back: close a menu, filter or search first, then hand the keyboard to the tree. `q` doubles for `Esc` because some terminals (IntelliJ's) never pass `Esc` |
 | `r` | refresh |
 | `a` | toggle auto-refresh, only that; a view that always refreshes ignores it |
-| `A` | toggle show all (or issues only); press again to go back |
+| `A` | toggle show all (or issues only, real devices only); press again to go back. Saved in `state.yaml` |
 | `0` | set a filter to all (logs: all levels, or all services/nodes with that pane open). It sets, never toggles |
 | `1`, `2`, ... | in tables: sort column. In logs: levels |
 | `y` | copy (a line, a selection, a fix or defrag command) |

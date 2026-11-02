@@ -106,6 +106,8 @@ pub(super) struct ViewSettings {
     pub(super) volumes: Option<VolumesViewState>,
     pub(super) processes_sort: processes::SortBy,
     pub(super) network: NetworkSettings,
+    /// Virtual block devices shown in the node and group storage views (`A`)
+    pub(super) storage_show_all: bool,
 }
 
 impl Default for ViewSettings {
@@ -115,6 +117,7 @@ impl Default for ViewSettings {
             volumes: None,
             processes_sort: Default::default(),
             network: Default::default(),
+            storage_show_all: false,
         }
     }
 }
@@ -127,6 +130,12 @@ impl ViewComponent {
             ViewComponent::Volumes(v) => settings.volumes = Some(v.view_state()),
             ViewComponent::Processes(p) => settings.processes_sort = p.sort_by(),
             ViewComponent::Network(n) => settings.network = n.settings(),
+            ViewComponent::Storage(s) => settings.storage_show_all = s.show_all(),
+            ViewComponent::Group(g) => {
+                if let Some(show_all) = g.storage_show_all() {
+                    settings.storage_show_all = show_all;
+                }
+            }
             _ => {}
         }
     }

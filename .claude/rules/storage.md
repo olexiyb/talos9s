@@ -26,6 +26,13 @@ paths:
   fall back to describing the state.
 - ZFS LocalPV: its CRDs plus the Mounts API for usage.
 
+## Block devices
+
+- `storage::virtual_kind` names virtual devices (loop, dm, md, drbd, zvol,
+  nbd, ram, zram). They're layered on real disks: hidden until `A` in the
+  node and group views (one saved setting, `storage.show_all`), and their
+  TYPE is the kind, never SSD/HDD (they report non-rotational).
+
 ## What matters
 
 - Out-of-sync bits toward the Primary on an Established link can make the

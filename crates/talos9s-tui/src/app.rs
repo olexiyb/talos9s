@@ -658,6 +658,7 @@ impl App {
             conn_sort_by: by_name(state.network.connections_sort.as_deref()).unwrap_or_default(),
             listening_only: state.network.listening_only.unwrap_or(false),
         };
+        self.settings.storage_show_all = state.storage.show_all.unwrap_or(false);
         let item = by_name(state.view.as_deref());
         self.update = state.update.clone();
         self.cluster
@@ -685,6 +686,7 @@ impl App {
             volumes,
             processes_sort,
             network,
+            storage_show_all,
         } = settings;
         crate::state::UiState {
             // Nothing listed yet (no talosconfig): keep the remembered one
@@ -718,6 +720,9 @@ impl App {
                 sort: Some(name_of(network.sort_by)),
                 connections_sort: Some(name_of(network.conn_sort_by)),
                 listening_only: Some(network.listening_only),
+            },
+            storage: crate::state::StorageSettings {
+                show_all: Some(storage_show_all),
             },
             update: self.update.clone(),
         }
@@ -1857,6 +1862,7 @@ impl App {
                     self.cluster.config_path().map(str::to_string),
                     cp_endpoint,
                 );
+                group.set_storage_show_all(self.settings.storage_show_all);
                 // Without a client the refresh says so (and retries)
                 if let Some(client) = self.cluster.client() {
                     group.set_client(client.clone());
@@ -1890,6 +1896,7 @@ impl App {
                 // Create storage component with context for authentication
                 let mut storage = StorageComponent::new(hostname, address, context, config_path);
                 storage.set_view_mode(mode);
+                storage.set_show_all(self.settings.storage_show_all);
 
                 let item = match mode {
                     StorageViewMode::Disks => NavMenuItem::Disks,
@@ -2248,6 +2255,23 @@ mod tests {
         let mut p = ProcessesComponent::new("bc1".to_string(), Vec::new());
         p.set_sort_by(sort);
         ViewComponent::Processes(Box::new(p))
+    }
+
+    /// `A` in the disks view is remembered for the next view and run
+    #[tokio::test]
+    async fn storage_show_all_is_kept_and_saved() {
+        let mut app = app_with_view(View::Cluster);
+        let mut storage = StorageComponent::default();
+        storage.set_show_all(true);
+        app.show_component(
+            NavMenuItem::Disks,
+            ViewComponent::Storage(Box::new(storage)),
+            false,
+        );
+        assert_eq!(app.current_state().storage.show_all, Some(true));
+        app.leave_view();
+        assert!(app.settings.storage_show_all);
+        assert_eq!(app.current_state().storage.show_all, Some(true));
     }
 
     #[tokio::test]
