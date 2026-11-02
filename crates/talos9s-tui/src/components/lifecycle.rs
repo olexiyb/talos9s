@@ -1,4 +1,5 @@
-//! Lifecycle component - displays version status, time sync, and config drift
+//! Lifecycle component - displays version status, time sync, and staged
+//! config changes
 //!
 //! Provides a consolidated view of cluster lifecycle operations.
 
@@ -51,7 +52,7 @@ async fn bounded<T, E: std::fmt::Display>(
 ///
 /// The base client's single `version()` / `time()` only cover the endpoint it
 /// targets, so this fans out across the whole roster (control plane and
-/// workers) to build complete lists for the version / config-drift table. Each
+/// workers) to build complete lists for the version / config table. Each
 /// entry is keyed by the node hostname (falling back to its IP) so versions and
 /// time-sync rows line up. Returns empty vecs if nothing could be queried,
 /// letting callers keep whatever they already had.
@@ -107,8 +108,10 @@ pub struct NodeStatus {
     pub hostname: String,
     /// Talos version
     pub version: String,
-    /// Config hash (placeholder - needs MachineConfig API)
-    pub config_hash: Option<String>,
+    /// The node's machine config revision (counts updates since the node
+    /// booted, so it isn't compared across nodes) and whether a saved change
+    /// waits for a reboot; none when the config couldn't be read
+    pub config: Option<(String, bool)>,
     /// Time sync status (placeholder - needs TimeStatus API)
     pub time_synced: Option<bool>,
     /// Node ready status
@@ -448,7 +451,7 @@ impl LifecycleComponent {
                     }
                     // Discovery is disabled or unreachable. Fall back to the
                     // Kubernetes API, which knows every node independently of
-                    // Talos discovery, so the version / config-drift table covers
+                    // Talos discovery, so the version / config table covers
                     // workers too — not just the endpoint. Mirrors the cluster
                     // node-list fallback.
                     if data.discovery_members.is_empty() {
@@ -501,13 +504,13 @@ impl LifecycleComponent {
             }
         }
 
-        // Fetch each node's config hash for drift detection, concurrently and
+        // Fetch each node's config revision and staged state, concurrently and
         // in this cluster's context. Resolve the IP from the roster so this
         // still works when the node is named by hostname (e.g. workers
         // enumerated via the Kubernetes API).
         let talos_context = (!context_name.is_empty()).then_some(context_name.as_str());
         let config_path = self.config_path.as_deref();
-        let config_hashes: Vec<Option<String>> =
+        let configs: Vec<Option<(String, bool)>> =
             futures::future::join_all(data.versions.iter().map(|v| {
                 let node_addr = roster_ip_for(&data.discovery_members, &v.node);
                 async move {
@@ -521,7 +524,7 @@ impl LifecycleComponent {
                     )
                     .await
                     .ok()
-                    .map(|config| config.version)
+                    .map(|config| (config.version, config.staged_differs))
                 }
             }))
             .await;
@@ -530,8 +533,8 @@ impl LifecycleComponent {
         let statuses: Vec<NodeStatus> = data
             .versions
             .iter()
-            .zip(config_hashes)
-            .map(|(v, node_config_hash)| {
+            .zip(configs)
+            .map(|(v, node_config)| {
                 // Look up time sync status for this node
                 let time_synced = data
                     .time_info
@@ -542,7 +545,7 @@ impl LifecycleComponent {
                 NodeStatus {
                     hostname: v.node.clone(),
                     version: v.version.clone(),
-                    config_hash: node_config_hash,
+                    config: node_config,
                     time_synced,
                     ready: true, // Assume ready for now
                     platform: v.platform.clone(),
@@ -675,34 +678,24 @@ impl LifecycleComponent {
             });
         }
 
-        // Check for config drift (compare hashes across nodes)
-        let config_hashes: Vec<(&str, Option<&str>)> = data
+        // A config change applied for the next boot is a real per-node state.
+        // Revisions are not compared: they count updates since each node
+        // booted, so a node rebooted later shows a lower one with the very
+        // same config.
+        let staged: Vec<&str> = data
             .node_statuses
             .items()
             .iter()
-            .map(|n| (n.hostname.as_str(), n.config_hash.as_deref()))
+            .filter(|n| n.config.as_ref().is_some_and(|(_, staged)| *staged))
+            .map(|n| talos_rs::host_of(&n.hostname))
             .collect();
-
-        let unique_hashes: std::collections::HashSet<_> =
-            config_hashes.iter().filter_map(|(_, h)| *h).collect();
-
-        if unique_hashes.len() > 1 {
-            // Config drift detected - list nodes with different hashes
-            let drift_details: Vec<String> = config_hashes
-                .iter()
-                .filter_map(|(hostname, hash)| {
-                    hash.map(|h| format!("{}:{}", talos_rs::host_of(hostname), h))
-                })
-                .collect();
+        if !staged.is_empty() {
             data.alerts.push(Alert {
                 severity: AlertSeverity::Warning,
-                message: format!("Config drift detected: {}", drift_details.join(", ")),
-            });
-        } else if let Some(hash) = unique_hashes.iter().next() {
-            // All nodes have same config hash
-            data.alerts.push(Alert {
-                severity: AlertSeverity::Info,
-                message: format!("Config version: {} (all nodes in sync)", hash),
+                message: format!(
+                    "A config change waits for a reboot on: {}",
+                    staged.join(", ")
+                ),
             });
         }
 
@@ -860,11 +853,14 @@ impl LifecycleComponent {
             .unwrap_or_default();
 
         let rows = node_items.iter().map(|node| {
-            let config_cell = match &node.config_hash {
-                Some(hash) => Span::styled(
-                    &hash[..8.min(hash.len())],
-                    Style::default().fg(Color::White),
-                ),
+            // A staged change stands out; the revision is only informative
+            let config_cell = match &node.config {
+                Some((_, true)) => {
+                    Span::styled("staged, reboot", Style::default().fg(Color::Yellow))
+                }
+                Some((revision, false)) => {
+                    Span::styled(format!("rev {revision}"), Style::default().fg(Color::Gray))
+                }
                 None => Span::styled("-", Style::default().fg(Color::Gray)),
             };
 

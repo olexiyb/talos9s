@@ -77,8 +77,12 @@ pub struct DiskInfo {
 /// Machine config info from MachineConfig resource
 #[derive(Debug, Clone)]
 pub struct MachineConfigInfo {
-    /// Config version (resource version, acts as hash)
+    /// Revision of the config resource on this node: it counts updates since
+    /// the node booted, so it says nothing when compared across nodes
     pub version: String,
+    /// The config saved for the next boot (`persistent`) differs from the
+    /// one in effect: a change was staged and waits for a reboot
+    pub staged_differs: bool,
     /// Machine type
     pub machine_type: Option<String>,
 }
@@ -1035,6 +1039,9 @@ fn parse_disks_yaml(yaml_str: &str) -> Result<Vec<DiskInfo>, TalosError> {
 /// version.
 fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosError> {
     let mut fallback: Option<MachineConfigInfo> = None;
+    let mut active: Option<MachineConfigInfo> = None;
+    let mut active_spec = None;
+    let mut persistent_spec = None;
 
     for doc in resource_documents::<serde_json::Value>(yaml_str) {
         let metadata = doc.get("metadata");
@@ -1066,15 +1073,33 @@ fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosE
 
         let info = MachineConfigInfo {
             version,
+            staged_differs: false,
             machine_type,
         };
+        let spec = doc.get("spec").and_then(|s| s.as_str()).map(str::to_string);
 
-        if id == "v1alpha1" {
-            return Ok(info);
+        match id {
+            "v1alpha1" => {
+                active_spec = spec;
+                active = Some(info);
+            }
+            "persistent" => {
+                persistent_spec = spec;
+                fallback.get_or_insert(info);
+            }
+            _ => {
+                fallback.get_or_insert(info);
+            }
         }
-        fallback.get_or_insert(info);
     }
 
+    if let Some(mut info) = active {
+        info.staged_differs = matches!(
+            (&active_spec, &persistent_spec),
+            (Some(a), Some(p)) if a != p
+        );
+        return Ok(info);
+    }
     fallback.ok_or_else(|| {
         TalosError::Connection("no machineconfig document with a version found".to_string())
     })
@@ -1561,6 +1586,16 @@ spec: "version: v1alpha1\nmachine:\n    type: controlplane\n"
         assert_eq!(config.version, "3");
         // spec is a serialized string here, so machine.type is not a mapping.
         assert_eq!(config.machine_type, None);
+        // The saved config is the one in effect: nothing staged
+        assert!(!config.staged_differs);
+
+        // A change applied for the next boot: the saved config differs
+        let staged = yaml.replacen(
+            "type: controlplane",
+            "type: controlplane\n    install: {}",
+            1,
+        );
+        assert!(parse_machine_config_yaml(&staged).unwrap().staged_differs);
     }
 
     #[test]
