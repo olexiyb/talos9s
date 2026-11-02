@@ -429,11 +429,7 @@ impl DeploymentReplicas {
     pub fn of(deployment: &Deployment) -> Self {
         let status = deployment.status.as_ref();
         Self {
-            desired: deployment
-                .spec
-                .as_ref()
-                .and_then(|s| s.replicas)
-                .unwrap_or(1),
+            desired: deployment.spec.replicas.unwrap_or(1),
             ready: status.and_then(|s| s.ready_replicas).unwrap_or(0),
             available: status.and_then(|s| s.available_replicas).unwrap_or(0),
             unavailable: status.and_then(|s| s.unavailable_replicas).unwrap_or(0),
