@@ -792,3 +792,81 @@ fn kubespan_links_count_peers_and_name_the_ones_not_up() {
     let nodes = ["kpc1".to_string(), "worker-long-name".to_string()];
     assert_eq!(kubespan_matrix_width(&nodes), 16 + (4 + 2) + (16 + 2));
 }
+
+fn line_texts(lines: &[Line<'_>]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect()
+}
+
+/// The network section names the KubeSpan peers that aren't up and says
+/// when the tailnet link is down
+#[test]
+fn network_lines_name_what_is_down() {
+    let peer = |label: &str, state: &str| talos_rs::KubeSpanPeerStatus {
+        id: label.to_string(),
+        label: label.to_string(),
+        state: state.to_string(),
+        ..Default::default()
+    };
+    let net = NodeNetworkInfo {
+        addresses: vec!["10.0.0.1/24".to_string()],
+        connectivity_ready: Some(false),
+        tailscale: Some(talos_rs::TailscaleLink::default()),
+        kubespan_peers: Some(vec![peer("cp2", "up"), peer("w1", "down")]),
+        ..Default::default()
+    };
+    let text = line_texts(&details::network_lines(&net, 80));
+    assert_eq!(
+        text,
+        [
+            " Addrs:  10.0.0.1/24",
+            " Conn:   ✗ Not ready",
+            " TS:     down",
+            " KSpan:  1/2 peers up  w1 down",
+        ]
+    );
+}
+
+/// A failed connection lists the endpoints tried and the cause; the retry
+/// hint follows auto-refresh
+#[test]
+fn connection_error_lines_show_endpoints_cause_and_retry() {
+    let cluster = ClusterData {
+        name: "test".to_string(),
+        endpoints: vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()],
+        ..Default::default()
+    };
+    let text = line_texts(&details::connection_error_lines(
+        &cluster,
+        "Connection refused",
+        false,
+    ))
+    .join("\n");
+    assert!(text.contains("Cluster:  test"), "{text}");
+    assert!(text.contains("- 10.0.0.1\n    - 10.0.0.2"), "{text}");
+    assert!(text.contains("Connection refused"), "{text}");
+    assert!(text.ends_with("Press r to retry."), "{text}");
+
+    let text = line_texts(&details::connection_error_lines(&cluster, "x", true)).join("\n");
+    assert!(text.contains("Retrying every"), "{text}");
+}
+
+/// The services list marks the selected service only while it has focus
+#[test]
+fn services_lines_mark_the_selection_when_focused() {
+    let mut comp = two_node_cluster();
+    let services = services_with("cp1", &["apid", "etcd"]).services;
+    comp.selected_service = 1;
+    let text = line_texts(&comp.services_lines(&services));
+    assert_eq!(text[0], " Services (2/2)");
+    assert!(!text.iter().any(|l| l.contains('▸')), "{text:?}");
+
+    comp.set_focused_pane(FocusedPane::Services);
+    let text = line_texts(&comp.services_lines(&services));
+    assert!(
+        text[2].starts_with(" ▸") && text[2].contains("etcd"),
+        "{text:?}"
+    );
+}
