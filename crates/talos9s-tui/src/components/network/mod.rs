@@ -759,7 +759,7 @@ impl Component for NetworkStatsComponent {
     }
 
     fn key_hints(&self) -> Option<Line<'static>> {
-        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         if self.file_viewer.is_some() {
             return Some(Line::from(vec![
                 key("<j/k>"),

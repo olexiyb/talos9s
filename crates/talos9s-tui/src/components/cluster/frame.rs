@@ -140,7 +140,7 @@ impl ClusterComponent {
         dashboard: bool,
         view_hints: Option<Line<'static>>,
     ) {
-        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
         let sep = || Span::raw("  ");
         // Only what acts on the focused window now: the keys that always work
@@ -333,7 +333,7 @@ impl ClusterComponent {
 
         // The keys that work in every window, before the name; left out when
         // the line is too narrow for them
-        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
         let global = Line::from(vec![
             key("<Tab>"),

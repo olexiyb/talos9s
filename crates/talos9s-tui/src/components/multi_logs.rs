@@ -1611,32 +1611,32 @@ impl MultiLogsComponent {
             vec![
                 Span::raw(" Type to search").dim(),
                 Span::raw("  "),
-                Span::raw("<Enter>").fg(Color::Yellow),
+                Span::styled("<Enter>", crate::ui_ext::KEY),
                 Span::raw(" confirm").dim(),
                 Span::raw("  "),
-                Span::raw("<Esc>").fg(Color::Yellow),
+                Span::styled("<Esc>", crate::ui_ext::KEY),
                 Span::raw(" cancel").dim(),
             ]
         } else if self.search_mode == SearchMode::Active {
             vec![
-                Span::raw(" <n/N>").fg(Color::Yellow),
+                Span::styled(" <n/N>", crate::ui_ext::KEY),
                 Span::raw(" next/prev").dim(),
                 Span::raw("  "),
-                Span::raw("</>").fg(Color::Yellow),
+                Span::styled("</>", crate::ui_ext::KEY),
                 Span::raw(" new search").dim(),
                 Span::raw("  "),
-                Span::raw("<Esc>").fg(Color::Yellow),
+                Span::styled("<Esc>", crate::ui_ext::KEY),
                 Span::raw(" clear").dim(),
             ]
         } else if self.floating_pane != FloatingPane::None {
             let mut spans = vec![
-                Span::raw(" <Space>").fg(Color::Yellow),
+                Span::styled(" <Space>", crate::ui_ext::KEY),
                 Span::raw(" toggle").dim(),
                 Span::raw("  "),
-                Span::raw("<0>").fg(Color::Yellow),
+                Span::styled("<0>", crate::ui_ext::KEY),
                 Span::raw(" all").dim(),
                 Span::raw("  "),
-                Span::raw("<n>").fg(Color::Yellow),
+                Span::styled("<n>", crate::ui_ext::KEY),
                 Span::raw(" none").dim(),
                 Span::raw("  "),
             ];
@@ -1644,29 +1644,29 @@ impl MultiLogsComponent {
             // to keep the main key line within 100 columns
             if self.floating_pane == FloatingPane::Levels {
                 spans.extend([
-                    Span::raw("<1-5>").fg(Color::Yellow),
+                    Span::styled("<1-5>", crate::ui_ext::KEY),
                     Span::raw(" only").dim(),
                     Span::raw("  "),
-                    Span::raw("<Shift+1-5>").fg(Color::Yellow),
+                    Span::styled("<Shift+1-5>", crate::ui_ext::KEY),
                     Span::raw(" ±level").dim(),
                     Span::raw("  "),
                 ]);
             }
             spans.extend([
-                Span::raw("<Esc/q>").fg(Color::Yellow),
+                Span::styled("<Esc/q>", crate::ui_ext::KEY),
                 Span::raw(" close").dim(),
             ]);
             spans
         } else if self.visual.active() {
             // Visual mode footer
             vec![
-                Span::raw(" <j/k>").fg(Color::Yellow),
+                Span::styled(" <j/k>", crate::ui_ext::KEY),
                 Span::raw(" extend").dim(),
                 Span::raw(" "),
-                Span::raw("<y>").fg(Color::Yellow),
+                Span::styled("<y>", crate::ui_ext::KEY),
                 Span::raw(" yank").dim(),
                 Span::raw(" "),
-                Span::raw("<Esc/V>").fg(Color::Yellow),
+                Span::styled("<Esc/V>", crate::ui_ext::KEY),
                 Span::raw(" cancel").dim(),
             ]
         } else {
@@ -1683,22 +1683,22 @@ impl MultiLogsComponent {
                 " follow/stream"
             };
             let spans = vec![
-                Span::raw(panes).fg(Color::Yellow),
+                Span::styled(panes, crate::ui_ext::KEY),
                 Span::raw(pane_labels).dim(),
                 Span::raw(" "),
-                Span::raw("</>").fg(Color::Yellow),
+                Span::styled("</>", crate::ui_ext::KEY),
                 Span::raw(" search").dim(),
                 Span::raw(" "),
-                Span::raw("<f/F>").fg(Color::Yellow),
+                Span::styled("<f/F>", crate::ui_ext::KEY),
                 Span::raw(follow_text).dim(),
                 Span::raw(" "),
-                Span::raw("<w>").fg(Color::Yellow),
+                Span::styled("<w>", crate::ui_ext::KEY),
                 Span::raw(wrap_text).dim(),
                 Span::raw(" "),
-                Span::raw("<V>").fg(Color::Yellow),
+                Span::styled("<V>", crate::ui_ext::KEY),
                 Span::raw(" visual").dim(),
                 Span::raw(" "),
-                Span::raw("<y>").fg(Color::Yellow),
+                Span::styled("<y>", crate::ui_ext::KEY),
                 Span::raw(" yank").dim(),
             ];
             spans

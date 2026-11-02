@@ -574,31 +574,31 @@ impl NetworkStatsComponent {
         let spans = if self.conn_visual.active() {
             // Visual mode footer
             vec![
-                Span::styled("<j/k>", Style::default().fg(Color::Cyan)),
+                Span::styled("<j/k>", crate::ui_ext::KEY),
                 Span::raw(" extend  "),
-                Span::styled("<y>", Style::default().fg(Color::Cyan)),
+                Span::styled("<y>", crate::ui_ext::KEY),
                 Span::raw(" yank  "),
-                Span::styled("<Esc/V>", Style::default().fg(Color::Cyan)),
+                Span::styled("<Esc/V>", crate::ui_ext::KEY),
                 Span::raw(" cancel  "),
-                Span::styled("<Esc/q>", Style::default().fg(Color::Cyan)),
+                Span::styled("<Esc/q>", crate::ui_ext::KEY),
                 Span::raw(" interfaces"),
             ]
         } else {
             // Normal mode footer
             vec![
-                Span::styled("<j/k>", Style::default().fg(Color::Cyan)),
+                Span::styled("<j/k>", crate::ui_ext::KEY),
                 Span::raw(" navigate  "),
-                Span::styled("<c>", Style::default().fg(Color::Cyan)),
+                Span::styled("<c>", crate::ui_ext::KEY),
                 Span::raw(" capture  "),
-                Span::styled("<f>", Style::default().fg(Color::Cyan)),
+                Span::styled("<f>", crate::ui_ext::KEY),
                 Span::raw(" "),
                 Span::styled(bpf_label, Style::default().fg(bpf_color)),
                 Span::raw("  "),
-                Span::styled("<L>", Style::default().fg(Color::Cyan)),
+                Span::styled("<L>", crate::ui_ext::KEY),
                 Span::raw(format!(" {listen_label}  ")),
-                Span::styled("<A>", Style::default().fg(Color::Cyan)),
+                Span::styled("<A>", crate::ui_ext::KEY),
                 Span::raw(format!(" {all_label}  ")),
-                Span::styled("<Esc/q>", Style::default().fg(Color::Cyan)),
+                Span::styled("<Esc/q>", crate::ui_ext::KEY),
                 Span::raw(" interfaces"),
             ]
         };
@@ -739,18 +739,18 @@ impl NetworkStatsComponent {
                 Span::raw(", "),
                 Span::styled(health_text, Style::default().fg(health_color)),
                 Span::raw(")   "),
-                Span::styled("<o>", Style::default().fg(Color::Cyan)),
+                Span::styled("<o>", crate::ui_ext::KEY),
                 Span::styled(" logs  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("<R>", Style::default().fg(Color::Cyan)),
+                Span::styled("<R>", crate::ui_ext::KEY),
                 Span::styled(" restart", Style::default().fg(Color::DarkGray)),
             ]));
         } else {
             // No service - show process info hint
             lines.push(Line::from(vec![
                 Span::styled("Actions: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("<y>", Style::default().fg(Color::Cyan)),
+                Span::styled("<y>", crate::ui_ext::KEY),
                 Span::styled(" yank  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("<V>", Style::default().fg(Color::Cyan)),
+                Span::styled("<V>", crate::ui_ext::KEY),
                 Span::styled(" visual select", Style::default().fg(Color::DarkGray)),
             ]));
         }

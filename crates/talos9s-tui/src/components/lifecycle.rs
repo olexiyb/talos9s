@@ -1109,9 +1109,9 @@ impl LifecycleComponent {
     /// Draw the footer
     fn key_hints_line(&self) -> Line<'static> {
         let spans = vec![
-            Span::styled("<j/k>", Style::default().fg(Color::Cyan)),
+            Span::styled("<j/k>", crate::ui_ext::KEY),
             Span::raw(" navigate  "),
-            Span::styled("<r>", Style::default().fg(Color::Cyan)),
+            Span::styled("<r>", crate::ui_ext::KEY),
             Span::raw(" refresh"),
         ];
 

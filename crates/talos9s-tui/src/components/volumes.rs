@@ -780,7 +780,8 @@ impl VolumesComponent {
                     "  Suggested fix: review, run by hand, one volume at a time ",
                     Style::default().fg(Color::Cyan).bold(),
                 ),
-                Span::styled("<y> copy", dim),
+                Span::styled("<y>", crate::ui_ext::KEY),
+                Span::styled(" copy", dim),
             ]));
             for remedy in &remedies {
                 lines.push(Line::from(Span::styled(
@@ -851,7 +852,7 @@ impl VolumesComponent {
     }
 
     fn key_hints_line(&self) -> Line<'static> {
-        let key = |k: &'static str| Span::styled(k, Style::default().bold());
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let spans = if self.filter_editing {
             vec![
                 Span::raw("Filter: "),

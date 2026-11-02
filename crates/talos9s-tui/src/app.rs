@@ -43,7 +43,7 @@ fn is_ctrl_c(key: &KeyEvent) -> bool {
 
 /// Bottom line while `q` on the dashboard waits for an answer
 fn quit_question() -> Line<'static> {
-    let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+    let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
     Line::from(vec![
         Span::raw("Quit talos9s?  "),
         key("<y>"),

@@ -648,19 +648,28 @@ impl GroupComponent {
     }
 
     fn footer_line(&self) -> Line<'static> {
-        let all = if self.show_all {
-            "  <A> hide virtual"
-        } else {
-            "  <A> show all"
-        };
-        let toggle = match self.kind {
-            GroupKind::Storage | GroupKind::Partitions | GroupKind::Network => all.to_string(),
-            GroupKind::Diagnostics => String::new(),
-        };
-        Line::styled(
-            format!("<j/k> select  <Enter> open node  <r> refresh{toggle}"),
-            Style::default().fg(Color::DarkGray),
-        )
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
+        let label = |l: &'static str| Span::styled(l, Style::default().fg(Color::DarkGray));
+        let mut spans = vec![
+            key("<j/k>"),
+            label(" select  "),
+            key("<Enter>"),
+            label(" open node  "),
+            key("<r>"),
+            label(" refresh"),
+        ];
+        if self.kind != GroupKind::Diagnostics {
+            spans.extend([
+                label("  "),
+                key("<A>"),
+                label(if self.show_all {
+                    " hide virtual"
+                } else {
+                    " show all"
+                }),
+            ]);
+        }
+        Line::from(spans)
     }
 
     fn table<'a>(&self, data: &'a GroupData) -> (Row<'a>, Vec<Row<'a>>, Vec<Constraint>) {

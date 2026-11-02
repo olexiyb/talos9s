@@ -1037,17 +1037,9 @@ impl NodeOperationsComponent {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(
-                "  <y>",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("  <y>", crate::ui_ext::KEY_YES),
             Span::raw(" Confirm    "),
-            Span::styled(
-                "<n>",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("<n>", crate::ui_ext::KEY_NO),
             Span::raw(" Cancel"),
         ]));
 
@@ -1360,10 +1352,10 @@ impl NodeOperationsComponent {
 
         // Footer
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            "  <q> Cancel",
-            Style::default().fg(Color::DarkGray),
-        )]));
+        lines.push(Line::from(vec![
+            Span::styled("  <q>", crate::ui_ext::KEY),
+            Span::styled(" Cancel", Style::default().fg(Color::DarkGray)),
+        ]));
 
         // Render
         let title = format!(" Node: {} ", self.hostname);

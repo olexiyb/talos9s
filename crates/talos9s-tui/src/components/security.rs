@@ -632,9 +632,9 @@ impl Component for SecurityComponent {
 
     fn key_hints(&self) -> Option<Line<'static>> {
         Some(Line::from(vec![
-            Span::styled("<↑/↓>", Style::default().fg(Color::Yellow)),
+            Span::styled("<↑/↓>", crate::ui_ext::KEY),
             Span::raw(" navigate  "),
-            Span::styled("<r>", Style::default().fg(Color::Yellow)),
+            Span::styled("<r>", crate::ui_ext::KEY),
             Span::raw(" refresh"),
         ]))
     }

@@ -935,7 +935,7 @@ impl Component for DiagnosticsComponent {
     }
 
     fn key_hints(&self) -> Option<Line<'static>> {
-        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let spans = if self.show_details {
             vec![key("<Esc>"), Span::raw(" close")]
         } else if self.show_confirmation {

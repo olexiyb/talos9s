@@ -20,6 +20,10 @@ below.
 - Modifiers spelled out with `+`: `<Ctrl+C>`, `<Shift+1-5>`,
   `<Alt/Shift+drag>`; no symbols (`⇧`, `⌥`, `^C`). Arrows as `←` `→` `↑/↓`.
 - Named keys: `Enter`, `Esc`, `Tab`, `Space`, `Home`, `End`.
+- Colour: keys use `ui_ext::KEY` (cyan), labels dim or dark gray. Only the
+  answers of a confirmation dialog differ: `KEY_YES` (`<y>`, green) and
+  `KEY_NO` (`<n>`, red). Status labels keep their own colours.
+  `layout_tests::keys_share_one_style` checks every view's key line.
 
 ## Shared meanings (don't reuse these for something else)
 

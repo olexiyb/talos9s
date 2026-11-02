@@ -397,9 +397,7 @@ impl ClusterComponent {
             let hotkey_style = if highlighted {
                 bar.add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                crate::ui_ext::KEY.add_modifier(Modifier::BOLD)
             };
             let label_style = if highlighted {
                 bar.add_modifier(Modifier::BOLD)

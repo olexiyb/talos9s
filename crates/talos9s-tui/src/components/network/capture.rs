@@ -239,9 +239,9 @@ impl NetworkStatsComponent {
                 Span::raw("  "),
                 Span::styled(&bytes_str, Style::default().fg(Color::Blue)),
                 Span::raw("  "),
-                Span::styled("<c>", Style::default().fg(Color::DarkGray)),
+                Span::styled("<c>", crate::ui_ext::KEY),
                 Span::styled(" stop  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("<s>", Style::default().fg(Color::DarkGray)),
+                Span::styled("<s>", crate::ui_ext::KEY),
                 Span::styled(" save to /tmp", Style::default().fg(Color::DarkGray)),
             ]);
 

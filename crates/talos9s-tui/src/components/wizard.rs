@@ -623,20 +623,20 @@ impl WizardComponent {
 
         // Help
         let help = Line::from(vec![
-            Span::styled(" <↑/↓> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <↑/↓> ", crate::ui_ext::KEY),
             Span::raw("Navigate"),
             Span::raw("  "),
-            Span::styled(" <Enter> ", Style::default().fg(Color::Green)),
+            Span::styled(" <Enter> ", crate::ui_ext::KEY),
             Span::raw("Select"),
             Span::raw("  "),
-            Span::styled(" <Tab> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <Tab> ", crate::ui_ext::KEY),
             Span::raw(if self.viewing_volumes {
                 "View Disks"
             } else {
                 "View Volumes"
             }),
             Span::raw("  "),
-            Span::styled(" <q> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <q> ", crate::ui_ext::KEY),
             Span::raw("Quit"),
         ]);
         frame.render_widget(Paragraph::new(help), help_area);
@@ -943,13 +943,13 @@ impl WizardComponent {
 
         // Help
         let help = Line::from(vec![
-            Span::styled(" <Tab> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <Tab> ", crate::ui_ext::KEY),
             Span::raw("Next field"),
             Span::raw("  "),
-            Span::styled(" <Enter> ", Style::default().fg(Color::Green)),
+            Span::styled(" <Enter> ", crate::ui_ext::KEY),
             Span::raw("Generate config"),
             Span::raw("  "),
-            Span::styled(" <Esc> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <Esc> ", crate::ui_ext::KEY),
             Span::raw("Back"),
         ]);
         frame.render_widget(Paragraph::new(help), help_area);
@@ -1108,7 +1108,7 @@ impl WizardComponent {
         ));
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![
-            Span::styled(" <q> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <q> ", crate::ui_ext::KEY),
             Span::raw("Quit"),
         ]));
 
@@ -1156,9 +1156,9 @@ impl WizardComponent {
         let mut lines = lines;
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![
-            Span::styled(" <y> ", Style::default().fg(Color::Green)),
+            Span::styled(" <y> ", crate::ui_ext::KEY_YES),
             Span::raw("Yes  "),
-            Span::styled(" <n/Esc> ", Style::default().fg(Color::Cyan)),
+            Span::styled(" <n/Esc> ", crate::ui_ext::KEY_NO),
             Span::raw("Cancel"),
         ]));
         let width = lines
@@ -1208,10 +1208,10 @@ impl WizardComponent {
             ));
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
-                Span::styled(" <b/Enter> ", Style::default().fg(Color::Green)),
+                Span::styled(" <b/Enter> ", crate::ui_ext::KEY),
                 Span::raw("Bootstrap"),
                 Span::raw("  "),
-                Span::styled(" <q> ", Style::default().fg(Color::Cyan)),
+                Span::styled(" <q> ", crate::ui_ext::KEY),
                 Span::raw("Quit"),
             ]));
         } else {
@@ -1282,7 +1282,7 @@ impl WizardComponent {
             Line::raw("    [ ] Node ready"),
             Line::raw(""),
             Line::from(vec![
-                Span::styled(" <q> ", Style::default().fg(Color::Cyan)),
+                Span::styled(" <q> ", crate::ui_ext::KEY),
                 Span::raw("Quit"),
             ]),
         ])
@@ -1325,10 +1325,10 @@ impl WizardComponent {
             ),
             Line::raw(""),
             Line::from(vec![
-                Span::styled(" <Enter> ", Style::default().fg(Color::Green)),
+                Span::styled(" <Enter> ", crate::ui_ext::KEY),
                 Span::raw("Exit"),
                 Span::raw("  "),
-                Span::styled(" <q> ", Style::default().fg(Color::Cyan)),
+                Span::styled(" <q> ", crate::ui_ext::KEY),
                 Span::raw("Quit"),
             ]),
         ])

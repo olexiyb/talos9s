@@ -1140,25 +1140,25 @@ impl WorkloadHealthComponent {
 
         let nav_keys = if self.drill_down {
             vec![
-                Span::styled("<j/k>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<j/k>", crate::ui_ext::KEY),
                 Span::raw(" select  "),
-                Span::styled("<Esc/q>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<Esc/q>", crate::ui_ext::KEY),
                 Span::raw(" back  "),
             ]
         } else {
             vec![
-                Span::styled("<j/k>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<j/k>", crate::ui_ext::KEY),
                 Span::raw(" select  "),
-                Span::styled("<Enter>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<Enter>", crate::ui_ext::KEY),
                 Span::raw(" expand  "),
             ]
         };
 
         let mut spans = nav_keys;
         spans.extend(vec![
-            Span::styled("<r>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<r>", crate::ui_ext::KEY),
             Span::raw(" refresh  "),
-            Span::styled("<a>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<a>", crate::ui_ext::KEY),
             Span::raw(" auto:"),
             auto_status,
         ]);

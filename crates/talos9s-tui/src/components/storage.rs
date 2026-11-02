@@ -567,7 +567,7 @@ impl Component for StorageComponent {
     }
 
     fn key_hints(&self) -> Option<Line<'static>> {
-        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         Some(Line::from(vec![
             key("<↑/↓>"),
             Span::raw(" navigate  "),

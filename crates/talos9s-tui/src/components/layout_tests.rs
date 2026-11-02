@@ -133,3 +133,18 @@ fn key_lines_fit_a_100_column_screen() {
         "key lines wider than {room}: {too_long:?}"
     );
 }
+
+#[test]
+fn keys_share_one_style() {
+    for (name, view) in views() {
+        let Some(hints) = view.key_hints() else {
+            continue;
+        };
+        for span in &hints.spans {
+            let text = span.content.trim();
+            if text.starts_with('<') && text.ends_with('>') {
+                assert_eq!(span.style, crate::ui_ext::KEY, "{name}: {text}");
+            }
+        }
+    }
+}

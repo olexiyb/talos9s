@@ -707,15 +707,15 @@ impl NetworkStatsComponent {
         };
 
         let spans = vec![
-            Span::styled("<Enter>", Style::default().fg(Color::Cyan)),
+            Span::styled("<Enter>", crate::ui_ext::KEY),
             Span::raw(" conns  "),
-            Span::styled("<c>", Style::default().fg(Color::Cyan)),
+            Span::styled("<c>", crate::ui_ext::KEY),
             Span::raw(" capture  "),
-            Span::styled("<f>", Style::default().fg(Color::Cyan)),
+            Span::styled("<f>", crate::ui_ext::KEY),
             Span::raw(" "),
             Span::styled(bpf_label, Style::default().fg(bpf_color)),
             Span::raw("  "),
-            Span::styled("<a>", Style::default().fg(Color::Cyan)),
+            Span::styled("<a>", crate::ui_ext::KEY),
             Span::raw(format!(" {auto_label}")),
         ];
 

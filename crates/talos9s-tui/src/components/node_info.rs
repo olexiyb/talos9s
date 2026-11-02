@@ -1294,7 +1294,7 @@ impl NodeInfoComponent {
     }
 
     fn key_hints_line(&self) -> Line<'static> {
-        let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let query = self.query();
         let spans = if query.editing {
             let what = if self.tab == NodeInfoTab::Config {

@@ -3,7 +3,7 @@
 //! Provides ratatui-specific extensions for core types, bridging the gap
 //! between the UI-agnostic core library and the TUI presentation layer.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use talos9s_core::{
     CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus,
@@ -398,6 +398,12 @@ impl<T: Clone> LineHits<T> {
         self.lines.get(line).cloned().flatten()
     }
 }
+
+/// A key in a hint line or dialog (`<r>`): one colour in every view
+pub const KEY: Style = Style::new().fg(Color::Cyan);
+/// The answer keys of a confirmation dialog: `<y>` goes ahead, `<n>` backs out
+pub const KEY_YES: Style = Style::new().fg(Color::Green);
+pub const KEY_NO: Style = Style::new().fg(Color::Red);
 
 /// `line` cut to `width` columns with `…` at the end when it is wider, so a
 /// narrow pane shows that something was cut ("Control Pl…")

@@ -732,15 +732,15 @@ impl RollingOperationsComponent {
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  <Space>", Style::default().fg(Color::Green)),
+            Span::styled("  <Space>", crate::ui_ext::KEY),
             Span::raw(" Toggle  "),
-            Span::styled("<d>", Style::default().fg(Color::Yellow)),
+            Span::styled("<d>", crate::ui_ext::KEY),
             Span::raw(" Rolling Drain  "),
-            Span::styled("<r>", Style::default().fg(Color::Red)),
+            Span::styled("<r>", crate::ui_ext::KEY),
             Span::raw(" Rolling Reboot"),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  <q>", Style::default().fg(Color::DarkGray)),
+            Span::styled("  <q>", crate::ui_ext::KEY),
             Span::raw(" Cancel"),
         ]));
 
@@ -780,9 +780,9 @@ impl RollingOperationsComponent {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  <y>", Style::default().fg(Color::Green)),
+            Span::styled("  <y>", crate::ui_ext::KEY_YES),
             Span::raw(" Confirm  "),
-            Span::styled("<n>", Style::default().fg(Color::Red)),
+            Span::styled("<n>", crate::ui_ext::KEY_NO),
             Span::raw(" Cancel"),
         ]));
 
