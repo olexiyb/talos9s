@@ -862,3 +862,22 @@ fn services_lines_mark_the_selection_when_focused() {
         "{text:?}"
     );
 }
+
+#[test]
+fn group_columns_follow_the_features_present() {
+    use super::group_table::GroupCol;
+    let titles = |cols: Vec<GroupCol>| cols.into_iter().map(GroupCol::title).collect::<Vec<_>>();
+    assert_eq!(
+        titles(GroupCol::shown(false, false, false, false)),
+        [
+            "Node", "Role", "Talos", "K8s", "Mem", "Disk", "Load", "Uptime", "Conn", "Svc",
+            "Clock", "GW"
+        ]
+    );
+    let all = titles(GroupCol::shown(true, true, true, true));
+    assert_eq!(all.len(), 16);
+    // Optional columns sit in a fixed order
+    let pos = |t: &str| all.iter().position(|c| *c == t).unwrap();
+    assert!(pos("ZFS") < pos("Load") && pos("Cores") < pos("Uptime"));
+    assert!(pos("Svc") < pos("KSpan") && pos("Tailscale") < pos("Clock"));
+}

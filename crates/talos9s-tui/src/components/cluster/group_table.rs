@@ -178,6 +178,29 @@ impl ClusterComponent {
             None => pending(),
         };
 
+        let cols = GroupCol::shown(has_zfs, wide, has_kubespan, has_tailscale);
+        let name_width = nodes.iter().map(|n| n.chars().count()).max().unwrap_or(0);
+        let version_width = |versions: Vec<Option<&str>>| {
+            versions
+                .into_iter()
+                .flatten()
+                .map(|v| v.chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(5) as u16
+        };
+        let talos_width = version_width(
+            nodes
+                .iter()
+                .map(|n| self.get_node_talos_version_for(cluster_idx, n))
+                .collect(),
+        );
+        let k8s_width = version_width(
+            nodes
+                .iter()
+                .map(|n| self.get_node_kubelet_version_for(cluster_idx, n))
+                .collect(),
+        );
         let rows: Vec<Row> = nodes
             .iter()
             .map(|node| {
@@ -189,33 +212,18 @@ impl ClusterComponent {
 
                 // Offline: nothing current to show; say so in the Uptime column
                 if let Some(down) = self.node_offline_for(cluster_idx, node) {
-                    let none = || Cell::from(Span::styled("-", dim));
                     let red = Style::default().fg(Color::Red);
-                    let mut cells = vec![
-                        Cell::from(Span::styled(node.clone(), red)),
-                        Cell::from(Span::styled(role, dim)),
-                        none(),
-                        none(),
-                        none(),
-                        none(),
-                    ];
-                    if has_zfs {
-                        cells.push(none());
-                    }
-                    cells.push(none());
-                    if wide {
-                        cells.push(none());
-                    }
-                    cells.extend([
-                        Cell::from(Span::styled("offline", red)),
-                        Cell::from(Span::styled("✗", red)),
-                        none(),
-                        Cell::from(Span::styled(
+                    return Row::new(cols.iter().map(|col| match col {
+                        GroupCol::Node => Cell::from(Span::styled(node.clone(), red)),
+                        GroupCol::Role => Cell::from(Span::styled(role, dim)),
+                        GroupCol::Uptime => Cell::from(Span::styled("offline", red)),
+                        GroupCol::Conn => Cell::from(Span::styled("✗", red)),
+                        GroupCol::Gw => Cell::from(Span::styled(
                             format!("down {}", format_uptime(down.as_secs())),
                             dim,
                         )),
-                    ]);
-                    return Row::new(cells);
+                        _ => Cell::from(Span::styled("-", dim)),
+                    }));
                 }
 
                 let mem = match self.get_node_memory_for(cluster_idx, node) {
@@ -354,100 +362,44 @@ impl ClusterComponent {
                     None => pending(),
                 };
 
-                let mut cells = vec![
-                    Cell::from(Span::styled(
+                Row::new(cols.iter().map(|col| match col {
+                    GroupCol::Node => Cell::from(Span::styled(
                         node.clone(),
                         Style::default().fg(Color::White),
                     )),
-                    Cell::from(Span::styled(role, dim)),
-                    version_cell(
+                    GroupCol::Role => Cell::from(Span::styled(role, dim)),
+                    GroupCol::Talos => version_cell(
                         self.get_node_talos_version_for(cluster_idx, node),
                         talos_common,
                     ),
-                    version_cell(
+                    GroupCol::K8s => version_cell(
                         self.get_node_kubelet_version_for(cluster_idx, node),
                         k8s_common,
                     ),
-                    mem,
-                    disk,
-                ];
-                if has_zfs {
-                    cells.push(zfs);
-                }
-                cells.push(load);
-                if wide {
-                    cells.push(cores);
-                }
-                cells.extend([uptime, conn, svc]);
-                if has_kubespan {
-                    cells.push(kspan);
-                }
-                if has_tailscale {
-                    cells.push(tailscale);
-                }
-                cells.extend([clock, gw]);
-                Row::new(cells)
+                    GroupCol::Mem => mem.clone(),
+                    GroupCol::Disk => disk.clone(),
+                    GroupCol::Zfs => zfs.clone(),
+                    GroupCol::Load => load.clone(),
+                    GroupCol::Cores => cores.clone(),
+                    GroupCol::Uptime => uptime.clone(),
+                    GroupCol::Conn => conn.clone(),
+                    GroupCol::Svc => svc.clone(),
+                    GroupCol::KSpan => kspan.clone(),
+                    GroupCol::Tailscale => tailscale.clone(),
+                    GroupCol::Clock => clock.clone(),
+                    GroupCol::Gw => gw.clone(),
+                }))
             })
             .collect();
 
-        let mut header = vec!["Node", "Role", "Talos", "K8s", "Mem", "Disk"];
-        let name_width = nodes.iter().map(|n| n.chars().count()).max().unwrap_or(0);
-        let version_width = |versions: Vec<Option<&str>>| {
-            versions
-                .into_iter()
-                .flatten()
-                .map(|v| v.chars().count())
-                .max()
-                .unwrap_or(0)
-                .max(5) as u16
-        };
-        let talos_width = version_width(
-            nodes
-                .iter()
-                .map(|n| self.get_node_talos_version_for(cluster_idx, n))
-                .collect(),
-        );
-        let k8s_width = version_width(
-            nodes
-                .iter()
-                .map(|n| self.get_node_kubelet_version_for(cluster_idx, n))
-                .collect(),
-        );
-        let mut widths = vec![
-            Constraint::Length(name_width.max(4) as u16),
-            Constraint::Length(6),
-            Constraint::Length(talos_width),
-            Constraint::Length(k8s_width),
-            Constraint::Length(9),
-            Constraint::Length(14),
-        ];
-        if has_zfs {
-            header.push("ZFS");
-            widths.push(Constraint::Length(15));
-        }
-        header.push("Load");
-        widths.push(Constraint::Length(5));
-        if wide {
-            header.push("Cores");
-            widths.push(Constraint::Length(5));
-        }
-        header.extend(["Uptime", "Conn", "Svc"]);
-        widths.extend([
-            Constraint::Length(8),
-            Constraint::Length(4),
-            Constraint::Length(5),
-        ]);
-        if has_kubespan {
-            header.push("KSpan");
-            widths.push(Constraint::Length(5));
-        }
-        if has_tailscale {
-            header.push("Tailscale");
-            widths.push(Constraint::Length(15));
-        }
-        header.extend(["Clock", "GW"]);
-        widths.extend([Constraint::Length(7), Constraint::Fill(1)]);
-
+        let header = cols.iter().map(|c| c.title());
+        let widths = cols.iter().map(|c| match c {
+            GroupCol::Node => Constraint::Length(name_width.max(4) as u16),
+            GroupCol::Talos => Constraint::Length(talos_width),
+            GroupCol::K8s => Constraint::Length(k8s_width),
+            GroupCol::Gw => Constraint::Fill(1),
+            c => Constraint::Length(c.width()),
+        });
         let header = Row::new(header).style(Style::default().fg(Color::Gray).bold());
         let table = Table::new(rows, widths).header(header).column_spacing(2);
 
@@ -844,5 +796,91 @@ impl ClusterComponent {
             .header(header)
             .column_spacing(2)
             .render(area, buf);
+    }
+}
+
+/// A column of the group table. The header and the online and offline rows
+/// are all built from one list, so they can't disagree about the order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GroupCol {
+    Node,
+    Role,
+    Talos,
+    K8s,
+    Mem,
+    Disk,
+    Zfs,
+    Load,
+    Cores,
+    Uptime,
+    Conn,
+    Svc,
+    KSpan,
+    Tailscale,
+    Clock,
+    Gw,
+}
+
+impl GroupCol {
+    /// The columns shown: optional ones only when a node has the feature,
+    /// Cores only on wide panes
+    pub(super) fn shown(zfs: bool, wide: bool, kubespan: bool, tailscale: bool) -> Vec<Self> {
+        use GroupCol::*;
+        [
+            (Node, true),
+            (Role, true),
+            (Talos, true),
+            (K8s, true),
+            (Mem, true),
+            (Disk, true),
+            (Zfs, zfs),
+            (Load, true),
+            (Cores, wide),
+            (Uptime, true),
+            (Conn, true),
+            (Svc, true),
+            (KSpan, kubespan),
+            (Tailscale, tailscale),
+            (Clock, true),
+            (Gw, true),
+        ]
+        .into_iter()
+        .filter_map(|(col, shown)| shown.then_some(col))
+        .collect()
+    }
+
+    pub(super) fn title(self) -> &'static str {
+        match self {
+            Self::Node => "Node",
+            Self::Role => "Role",
+            Self::Talos => "Talos",
+            Self::K8s => "K8s",
+            Self::Mem => "Mem",
+            Self::Disk => "Disk",
+            Self::Zfs => "ZFS",
+            Self::Load => "Load",
+            Self::Cores => "Cores",
+            Self::Uptime => "Uptime",
+            Self::Conn => "Conn",
+            Self::Svc => "Svc",
+            Self::KSpan => "KSpan",
+            Self::Tailscale => "Tailscale",
+            Self::Clock => "Clock",
+            Self::Gw => "GW",
+        }
+    }
+
+    /// Fixed widths; Node, the versions and GW size to their content
+    fn width(self) -> u16 {
+        match self {
+            Self::Role => 6,
+            Self::Mem => 9,
+            Self::Disk => 14,
+            Self::Zfs | Self::Tailscale => 15,
+            Self::Uptime => 8,
+            Self::Conn => 4,
+            Self::Clock => 7,
+            _ => 5,
+        }
     }
 }
