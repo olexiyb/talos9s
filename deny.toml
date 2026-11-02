@@ -1,0 +1,42 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny): `cargo deny check`
+# Dependencies must have no known vulnerability, a license on the list below
+# (talos9s is MIT), and come from crates.io.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec: vulnerabilities and unsound crates fail; unmaintained crates fail
+# only when the workspace depends on them directly
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+# Permissive licenses only: a copyleft dependency would change what
+# talos9s's MIT release may be used for
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Several versions of a crate come from dependencies needing different
+# ones (kube still on an old serde-saphyr); worth seeing, not fixable here
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

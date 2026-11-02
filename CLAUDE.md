@@ -34,6 +34,7 @@ cargo build -p talos-rs --features regenerate        # only after changing crate
 cargo install --path . --locked                      # installs the `talos9s` binary
 TALOS9S_CONTEXT=bc cargo dev                         # run, rebuild and restart on every source change (cargo-watch)
 lefthook install                                     # git hooks: fmt on commit, clippy + tests on push (lefthook.yml)
+cargo deny check                                     # dependency advisories, licenses, sources (deny.toml; a CI job)
 ```
 
 Live tests against real clusters are `#[ignore]`d and read

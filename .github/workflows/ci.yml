@@ -49,6 +49,14 @@ jobs:
           cargo build -p talos-rs --features regenerate
           git diff --exit-code crates/talos-rs/src/generated
 
+  deny:
+    name: Dependencies (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Advisories (RustSec), licenses, sources and bans from deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   test:
     name: Test
     runs-on: ubuntu-latest

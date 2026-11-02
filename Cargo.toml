@@ -9,6 +9,9 @@ authors = ["Ken Udovic", "Olexiy Buyanskyy"]
 license = "MIT"
 repository = "https://github.com/olexiyb/talos9s"
 homepage = "https://github.com/olexiyb/talos9s"
+# Released as binaries (cargo-dist) and from git, not on crates.io; this also
+# lets cargo-deny accept the path dependencies between the crates
+publish = false
 
 [workspace.dependencies]
 # Async runtime
@@ -135,6 +138,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish.workspace = true
 description = "A terminal UI for managing and monitoring Talos Linux Kubernetes clusters"
 
 [dependencies]
@@ -145,6 +149,10 @@ tokio.workspace = true
 color-eyre.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[package.metadata.dist]
+# Release it although it isn't published to crates.io
+dist = true
 
 [dev-dependencies]
 tempfile = "3"
