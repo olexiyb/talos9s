@@ -71,9 +71,7 @@ impl Component for ClusterComponent {
                             self.toggle_expand();
                         } else {
                             self.selected_item = item;
-                            if let Some(idx) = self.selected_cluster_index() {
-                                self.active_cluster = idx;
-                            }
+                            self.active_cluster = self.selected_cluster_index();
                         }
                     }
                     Ok(None)
@@ -82,7 +80,7 @@ impl Component for ClusterComponent {
                     if (1..=NavMenuItem::ALL.len()).contains(&idx) {
                         self.focused_pane = FocusedPane::Menu;
                         self.selected_menu_item = idx;
-                        return self.navigate_to_selected_menu();
+                        return Ok(self.navigate_to_selected_menu());
                     }
                     // The separator line
                     self.focused_pane = FocusedPane::Nodes;
@@ -213,7 +211,7 @@ impl Component for ClusterComponent {
                     }
                     FocusedPane::Menu => {
                         // Navigate to selected screen
-                        self.navigate_to_selected_menu()
+                        Ok(self.navigate_to_selected_menu())
                     }
                     FocusedPane::Services => {
                         // Logs of the selected service, the node's others available

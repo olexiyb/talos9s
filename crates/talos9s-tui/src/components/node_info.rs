@@ -18,6 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use talos_rs::{
@@ -335,9 +336,7 @@ pub fn mask_config(text: &str) -> (Vec<ConfigLine>, usize) {
             && count > 0
             && let Some(placeholder) = lines.get_mut(at)
         {
-            placeholder
-                .text
-                .push_str(&format!("  ({count} lines hidden)"));
+            let _ = write!(placeholder.text, "  ({count} lines hidden)");
         }
     };
 
@@ -592,20 +591,14 @@ pub struct NodeInfoComponent {
 
 impl Default for NodeInfoComponent {
     fn default() -> Self {
-        Self::new(
-            String::new(),
-            String::new(),
-            None,
-            None,
-            NodeInfoTab::default(),
-        )
+        Self::new(String::new(), "", None, None, NodeInfoTab::default())
     }
 }
 
 impl NodeInfoComponent {
     pub fn new(
         hostname: String,
-        address: String,
+        address: &str,
         context: Option<String>,
         config_path: Option<String>,
         tab: NodeInfoTab,
@@ -624,7 +617,7 @@ impl NodeInfoComponent {
             hostname,
             tab,
             client: None,
-            node_address: talos_rs::host_of(&address).to_string(),
+            node_address: talos_rs::host_of(address).to_string(),
             context,
             config_path,
             reload_all: true,
@@ -1046,10 +1039,10 @@ impl NodeInfoComponent {
         let mut title = format!(" Containers: {running} running, {exited} exited ");
         let filter = &self.queries[NodeInfoTab::Containers].text;
         if !filter.is_empty() {
-            title.push_str(&format!("· {} match \"{filter}\" ", visible.len()));
+            let _ = write!(title, "· {} match \"{filter}\" ", visible.len());
         }
         if let Some(e) = &error {
-            title.push_str(&format!("· {e} "));
+            let _ = write!(title, "· {e} ");
         }
         let widths = [
             Constraint::Length(20),
@@ -1603,9 +1596,10 @@ impl Component for NodeInfoComponent {
             // talosctl sends the whole config: with inline manifests that
             // takes a while (up to 2 minutes before giving up)
             if self.tab == NodeInfoTab::Config && waited >= 3 {
-                text.push_str(&format!(
+                let _ = write!(
+                    text,
                     " {waited}s (a large config takes a while; it is kept for this session)"
-                ));
+                );
             }
             frame.render_widget(
                 Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
@@ -1647,7 +1641,7 @@ mod tests {
             "version: v1alpha1\ndebug: false\nmachine:\n    type: controlplane\n    network:\n        hostname: bc1\n    files:\n        - content: x\n          path: /var/etc/a.conf\ncluster:\n    clusterName: bc\n    inlineManifests:\n        - name: cilium\n          contents: |\n",
         );
         for i in 0..40 {
-            text.push_str(&format!("            line{i}: v\n"));
+            let _ = writeln!(text, "            line{i}: v");
         }
         text.push_str("        - name: extra\n          contents: |\n            a: b\n            ---\n            c: d\n---\napiVersion: v1alpha1\nkind: KubeSpanEndpointsConfig\nextraAnnouncedEndpoints:\n    - 1.2.3.4:51820\n");
         let (lines, _) = mask_config(&text);

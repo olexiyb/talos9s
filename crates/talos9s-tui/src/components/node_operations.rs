@@ -16,6 +16,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use talos_rs::TalosClient;
 use talos9s_core::{AsyncState, EtcdQuorum, SafetyStatus};
@@ -153,10 +154,7 @@ async fn run_drain_operation(
             if result.success {
                 let mut msg = format!("Drained {} pods", result.pods_evicted);
                 if !result.force_deleted_pods.is_empty() {
-                    msg.push_str(&format!(
-                        " ({} force-deleted)",
-                        result.force_deleted_pods.len()
-                    ));
+                    let _ = write!(msg, " ({} force-deleted)", result.force_deleted_pods.len());
                 }
                 audit_success("DRAIN", &hostname, &msg);
                 OperationResult {

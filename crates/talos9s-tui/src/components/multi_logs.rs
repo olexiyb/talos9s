@@ -318,7 +318,7 @@ impl MultiLogsComponent {
         title: String,
         subtitle: String,
         nodes: Vec<LogNode>,
-        active_services: Vec<String>,
+        active_services: &[String],
         all_services: Vec<String>,
     ) -> Self {
         let nodes: Vec<NodeState> = nodes
@@ -956,7 +956,7 @@ impl MultiLogsComponent {
         let Some(data) = self.data() else {
             return (false, 0);
         };
-        let lines = (self.visual.rows(self.cursor))
+        let lines: Vec<String> = (self.visual.rows(self.cursor))
             .filter_map(|vi| {
                 data.visible_indices
                     .get(vi)
@@ -964,7 +964,7 @@ impl MultiLogsComponent {
                     .map(|e| self.format_entry(e))
             })
             .collect();
-        crate::clipboard::copy_lines(lines)
+        crate::clipboard::copy_lines(&lines)
     }
 
     /// Update search matches
@@ -2230,7 +2230,7 @@ mod tests {
             "bc control plane".into(),
             "3 nodes".into(),
             vec![node("bc1"), node("bc2"), node("bc3")],
-            vec!["etcd".into(), KERNEL_SERVICE.into()],
+            &["etcd".into(), KERNEL_SERVICE.into()],
             vec!["etcd".into(), KERNEL_SERVICE.into()],
         );
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2341,7 +2341,7 @@ mod tests {
             .collect();
         let services = vec!["etcd".to_string(), KERNEL_SERVICE.to_string()];
         let mut logs =
-            MultiLogsComponent::new(context, "live".into(), nodes, services.clone(), services);
+            MultiLogsComponent::new(context, "live".into(), nodes, &services, services.clone());
         logs.set_client(client, 20);
         logs.start_streaming();
         for _ in 0..40 {
@@ -2467,7 +2467,7 @@ mod tests {
             "10.0.0.1".into(),
             "worker".into(),
             vec![node("w1")],
-            vec!["kubelet".into()],
+            &["kubelet".into()],
             vec!["kubelet".into()],
         );
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2507,7 +2507,7 @@ mod tests {
             "10.0.0.1".into(),
             "worker".into(),
             vec![node("w1")],
-            vec!["kubelet".into()],
+            &["kubelet".into()],
             vec!["kubelet".into()],
         );
         assert_eq!(logs.level_filter(), ALL_LEVELS);
@@ -2524,7 +2524,7 @@ mod tests {
             "10.0.0.1".into(),
             "worker".into(),
             vec![node("w1")],
-            vec!["kubelet".into()],
+            &["kubelet".into()],
             vec!["kubelet".into()],
         );
         reopened.set_level_filter(filter);

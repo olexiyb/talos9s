@@ -790,7 +790,7 @@ impl ProcessesComponent {
             children_map: &HashMap<ProcKey, Vec<usize>>,
             indices: &[usize],
             depth: usize,
-            ancestors_have_siblings: Vec<bool>,
+            ancestors_have_siblings: &[bool],
         ) {
             let count = indices.len();
             for (i, &idx) in indices.iter().enumerate() {
@@ -800,13 +800,13 @@ impl ProcessesComponent {
                     process_idx: idx,
                     depth,
                     is_last,
-                    ancestors_have_siblings: ancestors_have_siblings.clone(),
+                    ancestors_have_siblings: ancestors_have_siblings.to_vec(),
                 });
 
                 // Process children
                 if let Some(children) = processes.get(idx).and_then(|p| children_map.get(&p.key()))
                 {
-                    let mut child_ancestors = ancestors_have_siblings.clone();
+                    let mut child_ancestors = ancestors_have_siblings.to_vec();
                     child_ancestors.push(!is_last);
                     add_tree_entries(
                         entries,
@@ -814,7 +814,7 @@ impl ProcessesComponent {
                         children_map,
                         children,
                         depth + 1,
-                        child_ancestors,
+                        &child_ancestors,
                     );
                 }
             }
@@ -826,7 +826,7 @@ impl ProcessesComponent {
             &children_map,
             &root_indices,
             0,
-            vec![],
+            &[],
         );
     }
 
@@ -1539,8 +1539,8 @@ impl Component for ProcessesComponent {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match self.mode {
-            Mode::Normal => self.handle_normal_key(key),
-            Mode::Filtering => self.handle_filter_key(key),
+            Mode::Normal => Ok(self.handle_normal_key(key)),
+            Mode::Filtering => Ok(self.handle_filter_key(key)),
         }
     }
 
@@ -1624,24 +1624,24 @@ impl Component for ProcessesComponent {
 }
 
 impl ProcessesComponent {
-    fn handle_normal_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    fn handle_normal_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
+            KeyCode::Char('q') | KeyCode::Esc => Some(Action::Back),
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_selection(crate::ui_ext::Move::Next);
-                Ok(None)
+                None
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.move_selection(crate::ui_ext::Move::Prev);
-                Ok(None)
+                None
             }
             KeyCode::Char('g') => {
                 self.move_selection(crate::ui_ext::Move::First);
-                Ok(None)
+                None
             }
             KeyCode::Char('G') => {
                 self.move_selection(crate::ui_ext::Move::Last);
-                Ok(None)
+                None
             }
             KeyCode::Char('1') => {
                 // Toggle between CPU% and CPU time
@@ -1652,23 +1652,23 @@ impl ProcessesComponent {
                 };
                 self.resort();
                 self.reset_selection();
-                Ok(None)
+                None
             }
             KeyCode::Char('2') => {
                 self.sort_by = SortBy::Mem;
                 self.resort();
                 self.reset_selection();
-                Ok(None)
+                None
             }
             KeyCode::Char('/') => {
                 self.mode = Mode::Filtering;
                 self.filter_input = self.filter.clone().unwrap_or_default();
-                Ok(None)
+                None
             }
-            KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+            KeyCode::Char('r') => Some(Action::Refresh),
             KeyCode::Char('a') => {
                 self.auto_refresh = !self.auto_refresh;
-                Ok(None)
+                None
             }
             KeyCode::Char('t') => {
                 // Toggle subtree from selected process
@@ -1685,7 +1685,7 @@ impl ProcessesComponent {
                     self.rebuild_display_list();
                     self.reset_selection();
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('T') => {
                 // Full tree from init (pid 1)
@@ -1693,7 +1693,7 @@ impl ProcessesComponent {
                 self.tree_view = !self.tree_view;
                 self.rebuild_display_list();
                 self.reset_selection();
-                Ok(None)
+                None
             }
             KeyCode::Char('z') => {
                 // Toggle zombie filter
@@ -1704,7 +1704,7 @@ impl ProcessesComponent {
                 }
                 self.apply_filter();
                 self.reset_selection();
-                Ok(None)
+                None
             }
             KeyCode::Char('d') => {
                 // Toggle disk-wait filter
@@ -1715,7 +1715,7 @@ impl ProcessesComponent {
                 }
                 self.apply_filter();
                 self.reset_selection();
-                Ok(None)
+                None
             }
             KeyCode::Char('y') => {
                 // Yank (copy) the selected process command to clipboard
@@ -1727,13 +1727,13 @@ impl ProcessesComponent {
                         tracing::info!("Copied to clipboard: {}...", preview);
                     }
                 }
-                Ok(None)
+                None
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 
-    fn handle_filter_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    fn handle_filter_key(&mut self, key: KeyEvent) -> Option<Action> {
         use crate::ui_ext::{TextEdit, edit_text};
         match edit_text(&mut self.filter_input, &key) {
             TextEdit::Cancel => {
@@ -1754,7 +1754,7 @@ impl ProcessesComponent {
             }
             TextEdit::Ignored => {}
         }
-        Ok(None)
+        None
     }
 }
 

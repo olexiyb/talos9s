@@ -4,6 +4,7 @@
 
 use super::pki::{self, CertStatus, CertificateInfo};
 use super::types::{DiagnosticCheck, DiagnosticContext, DiagnosticFix, FixAction};
+use std::fmt::Write as _;
 use talos_rs::TalosClient;
 use talos9s_core::HealthIndicator;
 
@@ -208,10 +209,11 @@ pub async fn run_kubernetes_checks(
             if !pod_health.crashing.is_empty() {
                 details.push_str("Crashing pods:\n");
                 for pod in &pod_health.crashing {
-                    details.push_str(&format!(
-                        "  {}/{} ({} restarts)\n",
+                    let _ = writeln!(
+                        details,
+                        "  {}/{} ({} restarts)",
                         pod.namespace, pod.name, pod.restart_count
-                    ));
+                    );
                 }
             }
             if !pod_health.image_pull_errors.is_empty() {
@@ -220,7 +222,7 @@ pub async fn run_kubernetes_checks(
                 }
                 details.push_str("Image pull errors:\n");
                 for pod in &pod_health.image_pull_errors {
-                    details.push_str(&format!("  {}/{}\n", pod.namespace, pod.name));
+                    let _ = writeln!(details, "  {}/{}", pod.namespace, pod.name);
                 }
             }
 

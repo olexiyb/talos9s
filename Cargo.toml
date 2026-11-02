@@ -101,6 +101,8 @@ cast_sign_loss = "warn"
 cast_possible_wrap = "warn"
 # Leftovers and output that would corrupt the terminal
 dbg_macro = "warn"
+panic = "warn"
+exit = "warn"
 todo = "warn"
 unimplemented = "warn"
 print_stdout = "warn"
@@ -110,6 +112,13 @@ await_holding_lock = "warn"
 redundant_clone = "warn"
 clone_on_ref_ptr = "warn"
 implicit_clone = "warn"
+# Honest signatures: no ownership taken to only read, no Result/Option that
+# can't fail, no async that never awaits
+needless_pass_by_value = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"
+# push_str(&format!(..)) allocates twice; write! into the String
+format_push_string = "warn"
 # Readability, fixed by `cargo clippy --fix`
 uninlined_format_args = "warn"
 semicolon_if_nothing_returned = "warn"

@@ -6,6 +6,7 @@
 //! `cargo build -p talos-rs --features regenerate` (needs `protoc`) and
 //! commit the result; CI checks the two match.
 
+#[allow(clippy::unnecessary_wraps)] // the `regenerate` feature uses `?`; without it nothing fails
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     #[cfg(feature = "regenerate")]

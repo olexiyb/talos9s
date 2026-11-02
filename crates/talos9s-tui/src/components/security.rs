@@ -162,7 +162,7 @@ impl SecurityComponent {
         let mut data = self.state.take_data().unwrap_or_default();
 
         // Load PKI status from talosconfig
-        Self::load_pki_status_into(&mut data, self.config_path.as_deref()).await;
+        Self::load_pki_status_into(&mut data, self.config_path.as_deref());
 
         // Load kubeconfig certs and encryption status (if client available)
         if let Some(client) = &self.client {
@@ -194,7 +194,7 @@ impl SecurityComponent {
     }
 
     /// Load PKI status from talosconfig (static method)
-    async fn load_pki_status_into(data: &mut SecurityData, config_path: Option<&str>) {
+    fn load_pki_status_into(data: &mut SecurityData, config_path: Option<&str>) {
         let mut pki = PkiStatus::default();
 
         // Load talosconfig - use custom path if provided

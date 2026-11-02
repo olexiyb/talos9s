@@ -3,7 +3,6 @@
 use super::{CommandOutput, NetworkStatsComponent, PendingAction, port_to_service, with_timeout};
 use crate::action::Action;
 use crate::components::LogNode;
-use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -35,39 +34,35 @@ impl NetworkStatsComponent {
     }
 
     /// Handle key events when a confirmation is pending
-    pub(super) fn handle_confirmation_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    pub(super) fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('y' | 'Y') => {
                 // Confirmed - execute the action
                 if let Some(action) = self.pending_action.take() {
-                    return self.execute_pending_action(action);
+                    return Some(self.execute_pending_action(action));
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                 // Cancelled
                 self.pending_action = None;
-                Ok(None)
+                None
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 
     /// Open logs for the currently selected connection's service
-    pub(super) fn open_service_logs(&self) -> Result<Option<Action>> {
+    pub(super) fn open_service_logs(&self) -> Option<Action> {
         let conns = self.get_filtered_connections();
-        let Some(conn) = conns.get(self.conn_selected) else {
-            return Ok(None);
-        };
+        let conn = conns.get(self.conn_selected)?;
 
         // Only for known service ports
-        let Some(service_name) = port_to_service(conn.local_port) else {
-            return Ok(None);
-        };
+        let service_name = port_to_service(conn.local_port)?;
 
         // Return action to show logs for this service
         let service_vec = vec![service_name.to_string()];
-        Ok(Some(Action::ShowMultiLogs(
+        Some(Action::ShowMultiLogs(
             self.address.clone(),
             String::new(), // role not needed for single service
             vec![LogNode {
@@ -77,7 +72,7 @@ impl NetworkStatsComponent {
             }],
             service_vec.clone(),
             service_vec, // from network view we only know about this service
-        )))
+        ))
     }
 
     /// Initiate service restart - sets pending_action for confirmation
@@ -113,7 +108,7 @@ impl NetworkStatsComponent {
     }
 
     /// Execute a pending action after confirmation
-    fn execute_pending_action(&mut self, action: PendingAction) -> Result<Option<Action>> {
+    fn execute_pending_action(&mut self, action: PendingAction) -> Action {
         match action {
             PendingAction::RestartService(service_id, service_name) => {
                 // Show status message while waiting
@@ -124,7 +119,7 @@ impl NetworkStatsComponent {
                 self.pending_restart_service = Some(service_id);
 
                 // Trigger immediate refresh to execute the restart
-                Ok(Some(Action::Refresh))
+                Action::Refresh
             }
         }
     }
@@ -158,12 +153,12 @@ impl NetworkStatsComponent {
     /// Show the outcome of a finished service restart
     pub(super) fn apply_restart(
         &mut self,
-        service_id: String,
+        service_id: &str,
         result: std::result::Result<Vec<ServiceRestartResult>, TalosError>,
     ) {
         match result {
             Ok(results) => {
-                crate::audit::audit_success("SERVICE_RESTART", &self.hostname, &service_id);
+                crate::audit::audit_success("SERVICE_RESTART", &self.hostname, service_id);
                 let mut lines = Vec::new();
                 lines.push(format!("Restarting service: {service_id}"));
                 lines.push(String::new());

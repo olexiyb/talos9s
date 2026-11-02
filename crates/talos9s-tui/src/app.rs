@@ -751,7 +751,7 @@ impl App {
         // Load the cluster list from talosconfig. This does no network I/O:
         // each cluster connects in the background and fills in as it becomes
         // reachable, so the UI is usable at once even if some are down.
-        self.cluster.connect().await?;
+        self.cluster.connect()?;
         // Back where the last run left off; a view of a node waits (with a
         // loading note) until the cluster lists its nodes
         self.state_path = crate::state::default_path();
@@ -1524,7 +1524,7 @@ impl App {
                 // long the UI is frozen. Log slow ones to find the culprit.
                 let started = std::time::Instant::now();
                 match (&self.view, &mut self.component) {
-                    (View::Cluster, _) => self.cluster.refresh().await?,
+                    (View::Cluster, _) => self.cluster.refresh()?,
                     (View::NodeOperations, _) => {
                         if let Some(node_ops) = &mut self.node_operations {
                             node_ops.refresh();
@@ -1573,7 +1573,7 @@ impl App {
 
                 // Create multi-logs component with all services, marking active ones
                 let mut multi_logs =
-                    MultiLogsComponent::new(title, subtitle, nodes, active_services, all_services);
+                    MultiLogsComponent::new(title, subtitle, nodes, &active_services, all_services);
                 multi_logs.set_level_filter(self.settings.log_levels);
 
                 // Each stream targets its node through the cluster's client and
@@ -1927,7 +1927,7 @@ impl App {
                     .config_path()
                     .map(std::string::ToString::to_string);
                 let mut node_info =
-                    NodeInfoComponent::new(hostname, address.clone(), context, config_path, tab);
+                    NodeInfoComponent::new(hostname, &address, context, config_path, tab);
                 if let Some(client) = self.cluster.client() {
                     node_info.set_client(client.with_node(&address));
                     load = true;

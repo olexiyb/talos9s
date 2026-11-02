@@ -2,7 +2,6 @@
 
 use super::{NetworkData, NetworkStatsComponent, SortBy, ViewMode, conn_warnings, service_ports};
 use crate::action::Action;
-use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -724,9 +723,9 @@ impl NetworkStatsComponent {
     }
 
     /// Handle key events in Interfaces view
-    pub(super) fn handle_interfaces_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    pub(super) fn handle_interfaces_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
+            KeyCode::Char('q') | KeyCode::Esc => Some(Action::Back),
             KeyCode::Enter => {
                 let has_connections = self
                     .data()
@@ -735,54 +734,54 @@ impl NetworkStatsComponent {
                 if has_connections {
                     self.enter_connections_view();
                 }
-                Ok(None)
+                None
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_device(crate::ui_ext::Move::Next);
-                Ok(None)
+                None
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.move_device(crate::ui_ext::Move::Prev);
-                Ok(None)
+                None
             }
             KeyCode::Char('g') => {
                 self.move_device(crate::ui_ext::Move::First);
-                Ok(None)
+                None
             }
             KeyCode::Char('G') => {
                 self.move_device(crate::ui_ext::Move::Last);
-                Ok(None)
+                None
             }
             KeyCode::Char('1') => {
                 self.sort_by = SortBy::Traffic;
                 self.sort_devices();
-                Ok(None)
+                None
             }
             KeyCode::Char('2') => {
                 self.sort_by = SortBy::Errors;
                 self.sort_devices();
-                Ok(None)
+                None
             }
-            KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+            KeyCode::Char('r') => Some(Action::Refresh),
             KeyCode::Char('a') => {
                 self.auto_refresh = !self.auto_refresh;
-                Ok(None)
+                None
             }
             // Packet capture (uses BPF filter to exclude port 50000, preventing feedback loop)
             KeyCode::Char('c') => {
                 self.toggle_capture();
-                Ok(None)
+                None
             }
             KeyCode::Char('s') => {
                 self.save_capture();
-                Ok(None)
+                None
             }
             // Toggle BPF filter for packet capture
             KeyCode::Char('f') => {
                 self.toggle_bpf_filter();
-                Ok(None)
+                None
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 
