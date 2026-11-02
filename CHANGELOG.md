@@ -50,7 +50,7 @@ One workspace instead of full-screen views: the cluster tree stays on the left a
 ### Fixes
 
 **Safety**
-- **Machine config masking** also hides PGP private keys, `dockerconfigjson` lines, passwords in URLs (`https://user:pass@host` in mirrors and proxies) and secret keys inside `{…}` maps; before, only PEM blocks and plain keys were caught.
+- **Machine config masking** also hides PGP private keys, `dockerconfigjson` lines, passwords embedded in mirror and proxy URLs and secret keys inside `{…}` maps; before, only PEM blocks and plain keys were caught.
 - **Reboot safety** counts etcd members that are already down (with 3 members and 1 down, rebooting another showed Safe), treats a status it couldn't read as unknown, and matches members correctly (10.0.0.1 no longer matches 10.0.0.11).
 - **Rolling reboots** wait for etcd to allow each reboot, so a control plane node waits for the previous one to rejoin; a node counts as back only when Ready after its new boot.
 - **Lifecycle pre-checks** that couldn't run say so instead of "All checks passed".
