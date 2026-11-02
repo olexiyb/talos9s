@@ -183,7 +183,7 @@ pub const ALL_LEVELS: LevelFilter = [true; 5];
 
 /// What a level hotkey does
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LevelHotkey {
+pub(crate) enum LevelHotkey {
     /// `0`: show every level
     All,
     /// `1`-`5`: show only this level
@@ -196,7 +196,7 @@ impl LevelHotkey {
     /// Map a key to a level hotkey. Shift+digit arrives as the shifted symbol
     /// on most terminals (US layout `!@#$%`), or as the digit with SHIFT set
     /// when the terminal reports modifiers (e.g. the kitty keyboard protocol).
-    fn from_key(key: &KeyEvent) -> Option<Self> {
+    pub(crate) fn from_key(key: &KeyEvent) -> Option<Self> {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Char('0') if !shift => Some(Self::All),

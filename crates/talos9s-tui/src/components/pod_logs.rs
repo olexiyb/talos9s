@@ -22,16 +22,71 @@ use std::time::{Duration, Instant};
 use talos9s_core::constants::{
     POD_LOG_FOLLOW_INTERVAL, POD_LOG_SOURCES_MAX, POD_LOG_TOTAL_LINES, WORKLOADS_FETCH_TIMEOUT,
 };
+use talos9s_core::logparse::{JsonLine, LogLevel, match_ranges};
 use talos9s_core::pod_logs::{LogLine, LogSource, merge_logs, tail_per_source};
 
 /// The selection must rest this long before its logs are read, so walking
 /// the list doesn't read every pod on the way
 const SETTLE: Duration = Duration::from_millis(300);
 
+/// A line as the pane shows it: its level, and a JSON or logfmt line as
+/// its message and fields
+#[derive(Debug, Clone)]
+struct Shown {
+    line: LogLine,
+    level: LogLevel,
+    message: String,
+    /// `key=value ...`, dimmed after the message
+    fields: String,
+}
+
+impl Shown {
+    fn of(line: LogLine) -> Self {
+        let json = JsonLine::parse(&line.text);
+        let level = json
+            .as_ref()
+            .and_then(|j| j.level)
+            .unwrap_or_else(|| LogLevel::of_line(&line.text, &line.text));
+        let (message, fields) = match json {
+            Some(j) => (
+                j.message,
+                j.fields
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            None => (line.text.clone(), String::new()),
+        };
+        Self {
+            line,
+            level,
+            message,
+            fields,
+        }
+    }
+
+    /// What the search looks in: the source, the message and the fields
+    fn searchable(&self) -> String {
+        format!("{} {} {}", self.line.source, self.message, self.fields)
+    }
+}
+
+/// Position of a level in the filter, in the Logs view's order
+fn level_index(level: LogLevel) -> usize {
+    match level {
+        LogLevel::Error => 0,
+        LogLevel::Warn => 1,
+        LogLevel::Info => 2,
+        LogLevel::Debug => 3,
+        LogLevel::Unknown => 4,
+    }
+}
+
 /// What a read gave: the lines and the sources that couldn't be read
 #[derive(Debug, Clone)]
 struct Read {
-    lines: Vec<LogLine>,
+    lines: Vec<Shown>,
     failed: Vec<String>,
     /// More sources than `POD_LOG_SOURCES_MAX`: these weren't read
     skipped: usize,
@@ -59,6 +114,13 @@ pub struct LogPane {
     scroll: Option<usize>,
     wrap: bool,
     height: usize,
+    /// Levels hidden (`1`-`5`, `0`), in `level_index` order
+    hidden: [bool; 5],
+    /// Typing a search (`/`)
+    searching: bool,
+    query: String,
+    /// The match `n`/`N` went to, a position among the visible lines
+    current_match: Option<usize>,
 }
 
 impl LogPane {
@@ -170,7 +232,7 @@ impl LogPane {
                 )),
             }
             let read = Read {
-                lines: merge_logs(&texts),
+                lines: merge_logs(&texts).into_iter().map(Shown::of).collect(),
                 failed,
                 skipped,
             };
@@ -190,11 +252,141 @@ impl LogPane {
         }
     }
 
-    /// Handle a pane key (`p`, `w`, `r`, scrolling); `false` when it isn't one
+    /// Indexes of the lines whose level is shown
+    fn visible(&self) -> Vec<usize> {
+        self.read.as_ref().map_or_else(Vec::new, |r| {
+            r.lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| {
+                    !self
+                        .hidden
+                        .get(level_index(l.level))
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        })
+    }
+
+    /// Positions among the visible lines that match the search
+    fn matches(&self) -> Vec<usize> {
+        let Some(read) = &self.read else {
+            return Vec::new();
+        };
+        if self.query.is_empty() {
+            return Vec::new();
+        }
+        self.visible()
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| {
+                read.lines
+                    .get(**i)
+                    .is_some_and(|l| !match_ranges(&l.searchable(), &self.query).is_empty())
+            })
+            .map(|(pos, _)| pos)
+            .collect()
+    }
+
+    /// Show the next (or previous) match, centered
+    fn jump_to_match(&mut self, forward: bool) {
+        let matches = self.matches();
+        let count = self.visible().len();
+        let last = count.saturating_sub(self.height.max(1));
+        let from = self
+            .current_match
+            .unwrap_or_else(|| self.scroll.unwrap_or(last) + if forward { 0 } else { self.height });
+        let next = if forward {
+            matches
+                .iter()
+                .find(|&&m| self.current_match.map_or(m >= from, |c| m > c))
+                .or(matches.first())
+        } else {
+            matches
+                .iter()
+                .rev()
+                .find(|&&m| self.current_match.map_or(m < from, |c| m < c))
+                .or(matches.last())
+        };
+        if let Some(&pos) = next {
+            self.current_match = Some(pos);
+            let top = pos.saturating_sub(self.height / 2).min(last);
+            self.scroll = (top < last).then_some(top);
+        }
+    }
+
+    /// Typing a search (`/`): the view's other keys wait
+    pub fn captures_text(&self) -> bool {
+        self.searching
+    }
+
+    /// A search to clear before Esc leaves
+    pub fn has_search(&self) -> bool {
+        self.searching || !self.query.is_empty()
+    }
+
+    fn clear_search(&mut self) {
+        self.searching = false;
+        self.query.clear();
+        self.current_match = None;
+    }
+
+    fn handle_search_key(&mut self, key: &KeyEvent) {
+        use crate::ui_ext::{TextEdit, edit_text};
+        match edit_text(&mut self.query, key) {
+            TextEdit::Cancel => self.clear_search(),
+            TextEdit::Submit => {
+                self.searching = false;
+                self.current_match = None;
+                if self.query.is_empty() {
+                    self.clear_search();
+                } else {
+                    self.jump_to_match(true);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a pane key (levels, search, `p`, `w`, `r`, scrolling); `false`
+    /// when it isn't one
     pub fn handle_key(&mut self, key: &KeyEvent, client: Option<&Client>) -> bool {
+        use crate::components::multi_logs::LevelHotkey;
         use crate::ui_ext::Move;
         use crossterm::event::KeyCode;
+        if self.searching {
+            self.handle_search_key(key);
+            return true;
+        }
+        if let Some(hotkey) = LevelHotkey::from_key(key) {
+            match hotkey {
+                LevelHotkey::All => self.hidden = [false; 5],
+                LevelHotkey::Only(i) => {
+                    self.hidden = [true; 5];
+                    if let Some(h) = self.hidden.get_mut(i) {
+                        *h = false;
+                    }
+                }
+                LevelHotkey::Toggle(i) => {
+                    if let Some(h) = self.hidden.get_mut(i) {
+                        *h = !*h;
+                    }
+                }
+            }
+            self.current_match = None;
+            return true;
+        }
         match key.code {
+            KeyCode::Esc if self.has_search() => self.clear_search(),
+            KeyCode::Char('/') => {
+                self.searching = true;
+                self.query.clear();
+                self.current_match = None;
+            }
+            KeyCode::Char('n') if !self.query.is_empty() => self.jump_to_match(true),
+            KeyCode::Char('N') if !self.query.is_empty() => self.jump_to_match(false),
             KeyCode::Char('p') => {
                 self.previous = !self.previous;
                 self.read = None;
@@ -206,7 +398,7 @@ impl LogPane {
             _ => match Move::from_key(key) {
                 // j/k move the list; the page keys and g/G scroll the logs
                 Some(step @ (Move::First | Move::Last | Move::By(_))) => {
-                    let count = self.read.as_ref().map_or(0, |r| r.lines.len());
+                    let count = self.visible().len();
                     let last = count.saturating_sub(self.height.max(1));
                     let step = match step {
                         Move::By(n) => Move::By(
@@ -240,6 +432,48 @@ impl LogPane {
             title.push(Span::styled(
                 "· previous run ",
                 Style::default().fg(Color::Yellow),
+            ));
+        }
+        if self.hidden.iter().any(|h| *h) {
+            let shown: Vec<&str> = [
+                LogLevel::Error,
+                LogLevel::Warn,
+                LogLevel::Info,
+                LogLevel::Debug,
+                LogLevel::Unknown,
+            ]
+            .iter()
+            .zip(self.hidden)
+            .filter(|(_, hidden)| !hidden)
+            .map(|(l, _)| l.badge())
+            .collect();
+            title.push(Span::styled(
+                format!(
+                    "· levels {} ",
+                    if shown.is_empty() {
+                        "none".to_string()
+                    } else {
+                        shown.join(" ")
+                    }
+                ),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+        if self.searching || !self.query.is_empty() {
+            let cursor = if self.searching { "█" } else { "" };
+            let count = if self.searching {
+                String::new()
+            } else {
+                let matches = self.matches();
+                let at = self
+                    .current_match
+                    .and_then(|c| matches.iter().position(|&m| m == c))
+                    .map_or_else(String::new, |p| format!("{}/", p + 1));
+                format!(" {at}{}", matches.len())
+            };
+            title.push(Span::styled(
+                format!("· /{}{cursor}{count} ", self.query),
+                Style::default().fg(Color::Cyan),
             ));
         }
         if self.scroll.is_none() && self.read.is_some() {
@@ -280,29 +514,38 @@ impl LogPane {
             frame.render_widget(Paragraph::new(text).style(dim), body);
             return;
         }
+        let visible = self.visible();
+        if visible.is_empty() {
+            frame.render_widget(
+                Paragraph::new("No lines at the levels shown  <0> all levels").style(dim),
+                body,
+            );
+            return;
+        }
         let width = read
             .lines
             .iter()
-            .map(|l| l.source.chars().count())
+            .map(|l| l.line.source.chars().count())
             .max()
             .unwrap_or(0);
-        let last = read.lines.len().saturating_sub(self.height.max(1));
+        let last = visible.len().saturating_sub(self.height.max(1));
         let top = self.scroll.unwrap_or(last).min(last);
-        let shown: Vec<Line> = read
-            .lines
+        let shown: Vec<Line> = visible
             .iter()
+            .enumerate()
             .skip(top)
             .take(self.height)
-            .map(|l| {
+            .filter_map(|(pos, &i)| {
+                let l = read.lines.get(i)?;
                 let mut spans = Vec::new();
                 if width > 0 {
                     spans.push(Span::styled(
-                        format!("{:width$} ", l.source),
-                        Style::default().fg(source_color(&l.source)),
+                        format!("{:width$} ", l.line.source),
+                        Style::default().fg(source_color(&l.line.source)),
                     ));
                 }
-                spans.extend(line_spans(l));
-                Line::from(spans)
+                spans.extend(line_spans(l, &self.query, self.current_match == Some(pos)));
+                Some(Line::from(spans))
             })
             .collect();
         let mut paragraph = Paragraph::new(shown);
@@ -315,52 +558,70 @@ impl LogPane {
         crate::ui_ext::draw_scrollbar(
             frame,
             bar,
-            talos9s_core::convert::to_u16(read.lines.len()),
+            talos9s_core::convert::to_u16(visible.len()),
             talos9s_core::convert::to_u16(top),
         );
     }
 }
 
-/// A line's time (`HH:MM:SS`, UTC like the Logs view), level badge and
-/// text: a JSON line as its message, then its fields dimmed
-fn line_spans(line: &LogLine) -> Vec<Span<'static>> {
-    use talos9s_core::logparse::{JsonLine, LogLevel};
+/// A line's time (`HH:MM:SS`, UTC like the Logs view), level badge,
+/// message and its fields dimmed, with the matches of `query` marked (the
+/// current one brighter)
+fn line_spans(line: &Shown, query: &str, current: bool) -> Vec<Span<'static>> {
     let time = line
+        .line
         .time
         .and_then(|nanos| chrono::DateTime::from_timestamp(nanos.div_euclid(1_000_000_000), 0))
         .map_or_else(|| " ".repeat(8), |t| t.format("%H:%M:%S").to_string());
-    let json = JsonLine::parse(&line.text);
-    let level = json
-        .as_ref()
-        .and_then(|j| j.level)
-        .unwrap_or_else(|| LogLevel::of_line(&line.text, &line.text));
-    let color = crate::components::multi_logs::level_color(level);
-    let text_style = match level {
+    let color = crate::components::multi_logs::level_color(line.level);
+    let text_style = match line.level {
         LogLevel::Error => Style::default().fg(Color::Red),
         LogLevel::Warn => Style::default().fg(Color::Yellow),
         LogLevel::Debug => Style::default().dim(),
         _ => Style::default(),
     };
+    let mark = if current {
+        Style::default().fg(Color::Black).bg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    };
     let mut spans = vec![
         Span::styled(format!("{time} "), Style::default().dim()),
-        Span::styled(format!("{} ", level.badge()), Style::default().fg(color)),
+        Span::styled(
+            format!("{} ", line.level.badge()),
+            Style::default().fg(color),
+        ),
     ];
-    match json {
-        Some(json) => {
-            spans.push(Span::styled(json.message.clone(), text_style));
-            let fields: Vec<String> = json
-                .fields
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect();
-            if !fields.is_empty() {
-                spans.push(Span::styled(
-                    format!(" {}", fields.join(" ")),
-                    Style::default().dim(),
-                ));
+    spans.extend(highlighted(&line.message, query, text_style, mark));
+    if !line.fields.is_empty() {
+        spans.push(Span::raw(" "));
+        spans.extend(highlighted(
+            &line.fields,
+            query,
+            Style::default().dim(),
+            mark,
+        ));
+    }
+    spans
+}
+
+/// `text` in `style`, the matches of `query` in `mark`
+fn highlighted(text: &str, query: &str, style: Style, mark: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for range in match_ranges(text, query) {
+        if let (Some(before), Some(found)) = (text.get(at..range.start), text.get(range.clone())) {
+            if !before.is_empty() {
+                spans.push(Span::styled(before.to_string(), style));
             }
+            spans.push(Span::styled(found.to_string(), mark));
         }
-        None => spans.push(Span::styled(line.text.clone(), text_style)),
+        at = range.end;
+    }
+    if let Some(rest) = text.get(at..)
+        && !rest.is_empty()
+    {
+        spans.push(Span::styled(rest.to_string(), style));
     }
     spans
 }
@@ -437,7 +698,7 @@ mod tests {
             source: String::new(),
             text: r#"{"level":"error","msg":"db down","retry":3}"#.into(),
         };
-        let text: String = line_spans(&line)
+        let text: String = line_spans(&Shown::of(line), "", false)
             .iter()
             .map(|s| s.content.to_string())
             .collect();
@@ -447,7 +708,7 @@ mod tests {
             source: String::new(),
             text: "level=warn msg=slow took=3s".into(),
         };
-        let text: String = line_spans(&plain)
+        let text: String = line_spans(&Shown::of(plain), "", false)
             .iter()
             .map(|s| s.content.to_string())
             .collect();
@@ -457,11 +718,63 @@ mod tests {
             source: String::new(),
             text: "Error: connection refused".into(),
         };
-        let text: String = line_spans(&raw)
+        let text: String = line_spans(&Shown::of(raw), "", false)
             .iter()
             .map(|s| s.content.to_string())
             .collect();
         assert!(text.ends_with("ERR Error: connection refused"), "{text}");
+    }
+
+    /// `2` shows warnings only, `0` all again; a search marks its matches
+    /// and Esc clears it
+    #[test]
+    fn levels_and_search() {
+        use crossterm::event::KeyCode;
+        let mut pane = LogPane::default();
+        let text = |t: &str| {
+            Shown::of(LogLine {
+                time: None,
+                source: String::new(),
+                text: t.into(),
+            })
+        };
+        pane.read = Some(Read {
+            lines: vec![
+                text("level=error msg=boom"),
+                text("level=warn msg=\"slow db\""),
+                text("level=info msg=\"ok db\""),
+            ],
+            failed: Vec::new(),
+            skipped: 0,
+        });
+        // Drawn: all three lines fit
+        pane.height = 10;
+        let key = |pane: &mut LogPane, code| pane.handle_key(&KeyEvent::from(code), None);
+        key(&mut pane, KeyCode::Char('2'));
+        assert_eq!(pane.visible(), [1]);
+        key(&mut pane, KeyCode::Char('0'));
+        assert_eq!(pane.visible(), [0, 1, 2]);
+        key(&mut pane, KeyCode::Char('/'));
+        assert!(pane.captures_text());
+        for c in "db".chars() {
+            key(&mut pane, KeyCode::Char(c));
+        }
+        key(&mut pane, KeyCode::Enter);
+        assert!(!pane.captures_text());
+        assert_eq!(pane.matches(), [1, 2]);
+        assert_eq!(pane.current_match, Some(1));
+        key(&mut pane, KeyCode::Char('n'));
+        assert_eq!(pane.current_match, Some(2));
+        key(&mut pane, KeyCode::Char('n'));
+        assert_eq!(pane.current_match, Some(1), "wraps around");
+        let marked = line_spans(&text("level=warn msg=\"slow db\""), "db", true);
+        assert!(
+            marked
+                .iter()
+                .any(|s| s.content == "db" && s.style.bg == Some(Color::Yellow))
+        );
+        key(&mut pane, KeyCode::Esc);
+        assert!(!pane.has_search());
     }
 
     #[test]

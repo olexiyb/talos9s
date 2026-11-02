@@ -1254,6 +1254,13 @@ impl WorkloadHealthComponent {
     fn handle_focus_key(&mut self, key: KeyEvent) -> Option<Action> {
         use crate::ui_ext::Move;
         let client = self.k8s_client.clone();
+        // A search being typed takes every key; Esc clears one before leaving
+        if let Some(focus) = &mut self.focus
+            && (focus.logs.captures_text() || (key.code == KeyCode::Esc && focus.logs.has_search()))
+        {
+            focus.logs.handle_key(&key, client.as_ref());
+            return None;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.close_focus();
@@ -1300,25 +1307,44 @@ impl WorkloadHealthComponent {
 
     fn focus_key_hints(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
-        let previous = self.focus.as_ref().is_some_and(|f| f.logs.previous());
-        Line::from(vec![
+        let Some(logs) = self.focus.as_ref().map(|f| &f.logs) else {
+            return Line::default();
+        };
+        if logs.captures_text() {
+            return Line::from(vec![
+                key("<Enter>"),
+                Span::raw(" search  "),
+                key("<Esc>"),
+                Span::raw(" clear"),
+            ]);
+        }
+        // `<PgUp/PgDn/g/G>` scroll and `<r>` reload are left out: they mean
+        // that in every view, and the line must fit 85 columns
+        let search = if logs.has_search() {
+            [key("<n/N>"), Span::raw(" next/prev  ")]
+        } else {
+            [key("</>"), Span::raw(" search  ")]
+        };
+        let mut spans = vec![
             key("<Enter>"),
             Span::raw(" containers  "),
+            key("<1-5/0>"),
+            Span::raw(" levels  "),
+        ];
+        spans.extend(search);
+        spans.extend([
             key("<p>"),
-            Span::raw(if previous {
-                " current run  "
+            Span::raw(if logs.previous() {
+                " current  "
             } else {
-                " previous run  "
+                " previous  "
             }),
             key("<w>"),
             Span::raw(" wrap  "),
-            key("<PgUp/PgDn/g/G>"),
-            Span::raw(" scroll  "),
             key("<y>"),
-            Span::raw(" copy  "),
-            key("<r>"),
-            Span::raw(" reload"),
-        ])
+            Span::raw(" copy"),
+        ]);
+        Line::from(spans)
     }
 
     fn draw_focus(&mut self, frame: &mut Frame, area: Rect) {
@@ -1477,7 +1503,7 @@ impl Component for WorkloadHealthComponent {
     }
 
     fn captures_text(&self) -> bool {
-        self.filtering
+        self.filtering || self.focus.as_ref().is_some_and(|f| f.logs.captures_text())
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
