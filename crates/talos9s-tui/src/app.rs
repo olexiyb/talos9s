@@ -78,6 +78,9 @@ pub struct App {
     /// Selection the right side shows, and a newer one waiting out `FOLLOW_DELAY`
     applied_target: String,
     pending_target: Option<(String, Instant)>,
+    /// A file to open in the log viewer once the action is handled: the
+    /// loop owns the terminal
+    open_in_viewer: Option<std::path::PathBuf>,
     /// Why the menu view has nothing to show (`View::Hint`)
     hint: Option<String>,
     /// Nodes of the KubeSpan matrix (`View::KubeSpanMatrix`)
@@ -167,6 +170,7 @@ impl App {
             width_before_zoom: None,
             applied_target: String::new(),
             pending_target: None,
+            open_in_viewer: None,
             hint: None,
             kubespan_nodes: Vec::new(),
             last_click: None,
@@ -825,6 +829,9 @@ impl App {
             // never refills, and once it is spent every await on a budgeted
             // resource (and every poll of a finished task) reads as pending.
             tokio::task::yield_now().await;
+            if let Some(path) = self.open_in_viewer.take() {
+                self.run_viewer(terminal, &path)?;
+            }
             self.poll_update_check();
             self.persist_state();
 
@@ -839,6 +846,48 @@ impl App {
             }
         }
 
+        Ok(())
+    }
+
+    /// Suspend the TUI, run the log viewer (`TALOS9S_LOG_VIEWER`, default
+    /// `hl --allow-prefix`) on `path`, and come back; the file is removed
+    /// after. Why it couldn't run goes to the view that asked.
+    fn run_viewer(&mut self, terminal: &mut Tui, path: &std::path::Path) -> Result<()> {
+        let command = std::env::var("TALOS9S_LOG_VIEWER")
+            .ok()
+            .filter(|c| !c.trim().is_empty())
+            .unwrap_or_else(|| talos9s_core::constants::DEFAULT_LOG_VIEWER.to_string());
+        let mut words = command.split_whitespace();
+        let Some(program) = words.next() else {
+            return Ok(());
+        };
+        tui::restore()?;
+        let status = std::process::Command::new(program)
+            .args(words)
+            .arg(path)
+            .status();
+        crossterm::terminal::enable_raw_mode()?;
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture
+        )?;
+        terminal.clear()?;
+        let _ = std::fs::remove_file(path);
+        let problem = match status {
+            Ok(s) if s.success() => None,
+            Ok(s) => Some(format!("{program} exited with {s}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(format!(
+                "{program} not found: install it (https://github.com/pamburus/hl) or set TALOS9S_LOG_VIEWER"
+            )),
+            Err(e) => Some(format!("Couldn't run {program}: {e}")),
+        };
+        if let Some(problem) = problem {
+            tracing::warn!("log viewer: {problem}");
+            if let Some(ViewComponent::Workloads(w)) = &mut self.component {
+                w.viewer_failed(problem);
+            }
+        }
         Ok(())
     }
 
@@ -1518,6 +1567,7 @@ impl App {
                 self.show_in_pane(item, View::Hint);
             }
             Action::FocusView => self.focus_view(),
+            Action::OpenInViewer(path) => self.open_in_viewer = Some(path),
             Action::Tick => {
                 // The tree stays on screen with every view: keep it current
                 if let Some(next_action) = self.cluster.update(Action::Tick)? {

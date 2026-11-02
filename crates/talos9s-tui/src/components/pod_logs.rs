@@ -121,6 +121,8 @@ pub struct LogPane {
     query: String,
     /// The match `n`/`N` went to, a position among the visible lines
     current_match: Option<usize>,
+    /// Why the external viewer (`v`) failed
+    viewer_problem: Option<String>,
 }
 
 impl LogPane {
@@ -133,6 +135,7 @@ impl LogPane {
         if sources == self.sources {
             return;
         }
+        self.viewer_problem = None;
         self.sources = sources;
         self.read = None;
         self.scroll = None;
@@ -250,6 +253,28 @@ impl LogPane {
         {
             self.read = Some(read);
         }
+    }
+
+    /// The lines read, as the containers wrote them (each after its label
+    /// when several are merged), for the external viewer; `None` before a read
+    pub fn export(&self) -> Option<String> {
+        let read = self.read.as_ref().filter(|r| !r.lines.is_empty())?;
+        let mut text = String::new();
+        for shown in &read.lines {
+            if !shown.line.source.is_empty() {
+                text.push_str(&shown.line.source);
+                text.push_str(" | ");
+            }
+            text.push_str(&shown.line.text);
+            text.push('\n');
+        }
+        Some(text)
+    }
+
+    /// Why the external viewer couldn't show the logs, until other logs are
+    /// shown or `r`
+    pub fn set_viewer_problem(&mut self, problem: String) {
+        self.viewer_problem = Some(problem);
     }
 
     /// Indexes of the lines whose level is shown
@@ -393,7 +418,10 @@ impl LogPane {
                 self.scroll = None;
                 self.fetch(client);
             }
-            KeyCode::Char('r') => self.fetch(client),
+            KeyCode::Char('r') => {
+                self.viewer_problem = None;
+                self.fetch(client);
+            }
             KeyCode::Char('w') => self.wrap = !self.wrap,
             _ => match Move::from_key(key) {
                 // j/k move the list; the page keys and g/G scroll the logs
@@ -486,6 +514,12 @@ impl LogPane {
             return;
         };
         let mut notes = Vec::new();
+        if let Some(problem) = &self.viewer_problem {
+            notes.push(Line::from(Span::styled(
+                problem.clone(),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
         if !read.failed.is_empty() {
             notes.push(Line::from(Span::styled(
                 format!("Couldn't read: {}", read.failed.join("; ")),
@@ -775,6 +809,30 @@ mod tests {
         );
         key(&mut pane, KeyCode::Esc);
         assert!(!pane.has_search());
+    }
+
+    /// The viewer gets the lines as written, each after its label when
+    /// merged; nothing before a read
+    #[test]
+    fn export_for_the_viewer() {
+        let mut pane = LogPane::default();
+        assert_eq!(pane.export(), None);
+        let line = |source: &str, text: &str| {
+            Shown::of(LogLine {
+                time: None,
+                source: source.into(),
+                text: text.into(),
+            })
+        };
+        pane.read = Some(Read {
+            lines: vec![line("web-a", r#"{"msg":"up"}"#), line("web-b", "plain")],
+            failed: Vec::new(),
+            skipped: 0,
+        });
+        assert_eq!(
+            pane.export().as_deref(),
+            Some("web-a | {\"msg\":\"up\"}\nweb-b | plain\n")
+        );
     }
 
     #[test]

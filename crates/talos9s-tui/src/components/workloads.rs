@@ -77,6 +77,17 @@ fn row_id(row: &ListRow) -> Option<String> {
     }
 }
 
+/// Write `text` to `path`, readable by the user only: logs can hold what
+/// the containers printed
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(text.as_bytes())
+}
+
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]
 pub struct WorkloadsData {
@@ -1291,6 +1302,8 @@ impl WorkloadHealthComponent {
                     crate::clipboard::copy_to_clipboard(focus.logs.command());
                 }
             }
+            // The lines read, in the external viewer (hl)
+            KeyCode::Char('v') => return self.open_in_viewer(),
             KeyCode::Char('a') => self.auto_refresh = !self.auto_refresh,
             _ => match Move::from_key(&key) {
                 Some(step @ (Move::Prev | Move::Next)) => self.move_selection(step),
@@ -1303,6 +1316,29 @@ impl WorkloadHealthComponent {
         }
         self.sync_logs();
         None
+    }
+
+    /// Write the logs read to a private temp file for `Action::OpenInViewer`
+    fn open_in_viewer(&mut self) -> Option<Action> {
+        let focus = self.focus.as_mut()?;
+        let text = focus.logs.export()?;
+        let path = std::env::temp_dir().join(format!("talos9s-logs-{}.log", std::process::id()));
+        match write_private(&path, &text) {
+            Ok(()) => Some(Action::OpenInViewer(path)),
+            Err(e) => {
+                focus
+                    .logs
+                    .set_viewer_problem(format!("Couldn't write {}: {e}", path.display()));
+                None
+            }
+        }
+    }
+
+    /// The external viewer couldn't run: say why in the logs pane
+    pub fn viewer_failed(&mut self, problem: String) {
+        if let Some(focus) = &mut self.focus {
+            focus.logs.set_viewer_problem(problem);
+        }
     }
 
     fn focus_key_hints(&self) -> Line<'static> {
@@ -1321,7 +1357,7 @@ impl WorkloadHealthComponent {
         // `<PgUp/PgDn/g/G>` scroll and `<r>` reload are left out: they mean
         // that in every view, and the line must fit 85 columns
         let search = if logs.has_search() {
-            [key("<n/N>"), Span::raw(" next/prev  ")]
+            [key("<n/N>"), Span::raw(" match  ")]
         } else {
             [key("</>"), Span::raw(" search  ")]
         };
@@ -1334,15 +1370,13 @@ impl WorkloadHealthComponent {
         spans.extend(search);
         spans.extend([
             key("<p>"),
-            Span::raw(if logs.previous() {
-                " current  "
-            } else {
-                " previous  "
-            }),
+            Span::raw(if logs.previous() { " now  " } else { " prev  " }),
             key("<w>"),
             Span::raw(" wrap  "),
             key("<y>"),
-            Span::raw(" copy"),
+            Span::raw(" copy  "),
+            key("<v>"),
+            Span::raw(" hl"),
         ]);
         Line::from(spans)
     }
@@ -1799,6 +1833,24 @@ mod tests {
         assert_eq!(WorkloadHealthComponent::selectable(&rows), [1, 2]);
         press(&mut c, KeyCode::Char('G'));
         assert_eq!(c.selected, 1);
+    }
+
+    /// The focused view's key line fits 85 columns in every state
+    #[test]
+    fn focus_key_line_fits() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        press(&mut c, KeyCode::Enter);
+        assert!(c.focus.is_some());
+        let width = |c: &WorkloadHealthComponent| c.key_hints_line().width();
+        assert!(width(&c) <= 85, "{}", width(&c));
+        press(&mut c, KeyCode::Char('p'));
+        press(&mut c, KeyCode::Char('/'));
+        press(&mut c, KeyCode::Char('x'));
+        press(&mut c, KeyCode::Enter);
+        assert!(width(&c) <= 85, "{}", width(&c));
+        // Nothing read yet: nothing to open
+        assert!(press(&mut c, KeyCode::Char('v')).is_none());
     }
 
     /// Typing filters live; Esc drops a kept filter before leaving the view

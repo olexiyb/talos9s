@@ -61,6 +61,10 @@ pub const WORKLOADS_EVENTS_TIMEOUT: std::time::Duration = std::time::Duration::f
 /// At most this many failing pods get their events read, one request each
 pub const WORKLOAD_EVENTS_MAX: usize = 20;
 
+/// The program `v` opens the Workloads view's logs in, with the file as
+/// its last argument; `TALOS9S_LOG_VIEWER` replaces it
+pub const DEFAULT_LOG_VIEWER: &str = "hl --allow-prefix";
+
 /// Containers whose logs the Workloads view reads at once, one request each
 pub const POD_LOG_SOURCES_MAX: usize = 12;
 

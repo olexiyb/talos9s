@@ -63,6 +63,8 @@ pub enum Action {
     ShowHint(crate::components::cluster::NavMenuItem, String),
     /// Move the keyboard from the tree into the view on the right
     FocusView,
+    /// Suspend the TUI and open this file in the log viewer (`v`)
+    OpenInViewer(std::path::PathBuf),
     /// Show node operations overlay: (hostname, address, is_controlplane)
     ShowNodeOperations(String, String, bool),
     /// Show rolling operations overlay with node list: Vec<(hostname, address, is_controlplane)>
