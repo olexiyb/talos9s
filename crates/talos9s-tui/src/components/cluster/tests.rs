@@ -226,7 +226,7 @@ fn diagnostics_line_names_the_findings() {
         text.starts_with(" Diag:   ✗ 1 failure, 1 warning: Etcd, Hubble Relay"),
         "{text}"
     );
-    assert!(text.ends_with("ago  [d]"), "{text}");
+    assert!(text.ends_with("ago  <d>"), "{text}");
 
     let clean = DiagnosticsSummary::of(&[(
         "System Health",

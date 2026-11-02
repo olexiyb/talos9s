@@ -253,9 +253,9 @@ impl NetworkStatsComponent {
             Line::from(message),
             Line::from(""),
             Line::from(vec![
-                Span::styled("[y]", Style::default().fg(Color::Green)),
+                Span::styled("<y>", Style::default().fg(Color::Green)),
                 Span::raw(" Yes  "),
-                Span::styled("[n/Esc]", Style::default().fg(Color::Red)),
+                Span::styled("<n/Esc>", Style::default().fg(Color::Red)),
                 Span::raw(" No"),
             ]),
         ];

@@ -149,13 +149,13 @@ impl ClusterComponent {
         let spans = if view_focused {
             match &self.back_hint {
                 Some(hint) => vec![
-                    key(" [Esc/q]"),
+                    key(" <Esc/q>"),
                     Span::styled(format!(" back to {hint}"), Style::default().dim()),
                     sep(),
-                    key("[←]"),
+                    key("<←>"),
                     label(" tree"),
                 ],
-                None => vec![key(" [Esc/q/←]"), label(" tree")],
+                None => vec![key(" <Esc/q/←>"), label(" tree")],
             }
         } else {
             let header_selected = matches!(
@@ -173,52 +173,52 @@ impl ClusterComponent {
             };
             match self.focused_pane {
                 FocusedPane::Menu => vec![
-                    key(" [j/k]"),
+                    key(" <j/k>"),
                     label(" nav"),
                     sep(),
-                    key("[Enter]"),
+                    key("<Enter>"),
                     label(" open view"),
                 ],
                 FocusedPane::Services => vec![
-                    key(" [j/k]"),
+                    key(" <j/k>"),
                     label(" select"),
                     sep(),
-                    key("[Enter]"),
+                    key("<Enter>"),
                     label(" logs"),
                     sep(),
-                    key("[Esc/q/←]"),
+                    key("<Esc/q/←>"),
                     label(" tree"),
                 ],
                 FocusedPane::Nodes => {
-                    let mut spans = vec![key(" [j/k]"), label(" nav"), sep()];
+                    let mut spans = vec![key(" <j/k>"), label(" nav"), sep()];
                     spans.extend(match (header_selected, dashboard) {
-                        (true, true) => [key("[Enter/Space]"), label(" fold")],
-                        (false, true) => [key("[Enter/→]"), label(" services")],
-                        (_, false) => [key("[Enter/→]"), label(" into view")],
+                        (true, true) => [key("<Enter/Space>"), label(" fold")],
+                        (false, true) => [key("<Enter/→>"), label(" services")],
+                        (_, false) => [key("<Enter/→>"), label(" into view")],
                     });
                     spans.extend([
                         sep(),
-                        key("[r]"),
+                        key("<r>"),
                         label(" refresh"),
                         sep(),
-                        key("[a]"),
+                        key("<a>"),
                         label(" auto:"),
                         Span::styled(auto_refresh_status, Style::default().fg(auto_refresh_color)),
                     ]);
                     if header_selected && !dashboard {
-                        spans.extend([sep(), key("[Space]"), label(" fold")]);
+                        spans.extend([sep(), key("<Space>"), label(" fold")]);
                     }
                     if node_selected {
-                        spans.extend([sep(), key("[o]"), label(" ops")]);
+                        spans.extend([sep(), key("<o>"), label(" ops")]);
                     }
                     if !self.clusters.is_empty() {
-                        spans.extend([sep(), key("[O]"), label(" rolling")]);
+                        spans.extend([sep(), key("<O>"), label(" rolling")]);
                     }
                     // q returns to the dashboard first, and quits from there
                     if dashboard {
-                        spans.extend([sep(), key("[q]"), label(" quit")]);
+                        spans.extend([sep(), key("<q>"), label(" quit")]);
                     } else {
-                        spans.extend([sep(), key("[Esc/q]"), label(" dashboard")]);
+                        spans.extend([sep(), key("<Esc/q>"), label(" dashboard")]);
                     }
                     spans
                 }
@@ -336,17 +336,17 @@ impl ClusterComponent {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Yellow));
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
         let global = Line::from(vec![
-            key("[Tab]"),
+            key("<Tab>"),
             label(" next window  "),
-            key("[Z]"),
+            key("<Z>"),
             label(" zoom  "),
-            key("[ ]"),
+            key("<[> <]>"),
             label(" pane width  "),
-            key("[Ctrl+C]"),
+            key("<Ctrl+C>"),
             label(" quit  "),
             // Mouse capture is on for click navigation, so the terminal's own
             // selection needs a modifier (Option in iTerm2, Shift elsewhere)
-            key("[⌥/⇧+drag]"),
+            key("<Alt/Shift+drag>"),
             label(" select text "),
         ]);
         let global_width = to_u16(global.width());

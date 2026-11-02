@@ -1038,14 +1038,14 @@ impl NodeOperationsComponent {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled(
-                "  [y]",
+                "  <y>",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" Confirm    "),
             Span::styled(
-                "[n]",
+                "<n>",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" Cancel"),
@@ -1323,7 +1323,7 @@ impl NodeOperationsComponent {
         lines.push(Line::from(vec![
             Span::raw("    "),
             Span::styled(reboot_ind, Style::default().fg(reboot_color)),
-            Span::styled(" [r] Reboot (with drain)", reboot_style),
+            Span::styled(" <r> Reboot (with drain)", reboot_style),
         ]));
 
         // Drain operation
@@ -1341,7 +1341,7 @@ impl NodeOperationsComponent {
         lines.push(Line::from(vec![
             Span::raw("    "),
             Span::styled(drain_ind, Style::default().fg(drain_color)),
-            Span::styled(" [d] Drain only", drain_style),
+            Span::styled(" <d> Drain only", drain_style),
         ]));
 
         // Shutdown: as safe as a reboot, but the node doesn't come back
@@ -1355,13 +1355,13 @@ impl NodeOperationsComponent {
         lines.push(Line::from(vec![
             Span::raw("    "),
             Span::styled(reboot_ind, Style::default().fg(reboot_color)),
-            Span::styled(" [s] Shutdown (with drain)", shutdown_style),
+            Span::styled(" <s> Shutdown (with drain)", shutdown_style),
         ]));
 
         // Footer
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
-            "  [q] Cancel",
+            "  <q> Cancel",
             Style::default().fg(Color::DarkGray),
         )]));
 

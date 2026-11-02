@@ -117,8 +117,8 @@ fn views_draw_at_narrow_widths() {
 
 #[test]
 fn key_lines_fit_a_100_column_screen() {
-    // The bottom line spans the screen; "[Esc/q/←] tree" sits on its right
-    let room = 100 - ratatui::text::Line::from("[Esc/q/←] tree").width() - 1;
+    // The bottom line spans the screen; "<Esc/q/←> tree" sits on its right
+    let room = 100 - ratatui::text::Line::from("<Esc/q/←> tree").width() - 1;
     let mut too_long = Vec::new();
     for (name, view) in views() {
         if let Some(hints) = view.key_hints() {

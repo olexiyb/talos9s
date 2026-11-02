@@ -11,6 +11,16 @@ A letter means the same thing in every view. Before giving a key a new
 meaning, grep the components for `KeyCode::Char('x')` and check the tables
 below.
 
+## Notation in hints
+
+- Every key in a hint line or dialog is wrapped in angle brackets, as k9s
+  does: `<y>`, `<Esc/q>`, `<Enter/→>`, `<[> <]>`. Square brackets are for
+  status labels (`[LISTEN ONLY]`, `[AUTO:OFF]`), never keys.
+- Alternatives with `/`, `Esc` before `q`: `<Esc/q>`, `<j/k>`, `<g/G>`.
+- Modifiers spelled out with `+`: `<Ctrl+C>`, `<Shift+1-5>`,
+  `<Alt/Shift+drag>`; no symbols (`⇧`, `⌥`, `^C`). Arrows as `←` `→` `↑/↓`.
+- Named keys: `Enter`, `Esc`, `Tab`, `Space`, `Home`, `End`.
+
 ## Shared meanings (don't reuse these for something else)
 
 | Key | Meaning |
@@ -55,7 +65,7 @@ filter of the same kind (`L` listening only next to `A` all in connections).
 
 - Never on a lowercase key next to a harmless one; use uppercase (`R`
   restart) or the operations dialog (`o`).
-- Always a confirmation (`[y]` / `[n/Esc]`) and `audit_start` /
+- Always a confirmation (`<y>` / `<n/Esc>`) and `audit_start` /
   `audit_success` / `audit_failure` (`crate::audit`), as drain, reboot and
   service restart do.
 

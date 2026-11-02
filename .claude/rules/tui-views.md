@@ -126,6 +126,6 @@ What each view shows per target:
 - Narrow screens: the right pane is 70-120 columns on a 100-120 column
   terminal. A new view goes in `components/layout_tests.rs`, which draws
   every view at those widths and checks its `key_hints()` fit beside
-  `[Esc/q/←] tree` on a 100 column screen (85 columns). When a key line
-  grows, group keys (`[s/o/l]`, `[f/F]`) or move a pane's keys into that
+  `<Esc/q/←> tree` on a 100 column screen (85 columns). When a key line
+  grows, group keys (`<s/o/l>`, `<f/F>`) or move a pane's keys into that
   pane's hints instead of letting it be cut.

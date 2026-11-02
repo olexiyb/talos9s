@@ -720,7 +720,7 @@ impl VolumesComponent {
 
         if empty {
             let message = if !self.show_all && self.filter.is_empty() {
-                "No volumes with issues ([A] shows all)"
+                "No volumes with issues (<A> shows all)"
             } else {
                 "No volumes match"
             };
@@ -780,7 +780,7 @@ impl VolumesComponent {
                     "  Suggested fix: review, run by hand, one volume at a time ",
                     Style::default().fg(Color::Cyan).bold(),
                 ),
-                Span::styled("[y] copy", dim),
+                Span::styled("<y> copy", dim),
             ]));
             for remedy in &remedies {
                 lines.push(Line::from(Span::styled(
@@ -860,30 +860,30 @@ impl VolumesComponent {
                     Style::default().fg(Color::Cyan),
                 ),
                 Span::raw("  "),
-                key("[Enter]"),
+                key("<Enter>"),
                 Span::raw(" done  "),
-                key("[Esc]"),
+                key("<Esc>"),
                 Span::raw(" clear"),
             ]
         } else {
             let mut spans = vec![
-                key("[j/k]"),
+                key("<j/k>"),
                 Span::raw(" select  "),
-                key("[A]"),
+                key("<A>"),
                 Span::raw(if self.show_all {
                     " issues only  "
                 } else {
                     " show all  "
                 }),
-                key("[t]"),
+                key("<t>"),
                 Span::raw(format!(" type: {}  ", self.type_filter.label())),
-                key("[/]"),
+                key("</>"),
                 Span::raw(" filter  "),
-                key("[r]"),
+                key("<r>"),
                 Span::raw(" refresh"),
             ];
             if !self.remedies().is_empty() {
-                spans.extend([Span::raw("  "), key("[y]"), Span::raw(" copy fix")]);
+                spans.extend([Span::raw("  "), key("<y>"), Span::raw(" copy fix")]);
             }
             if self
                 .copied_at

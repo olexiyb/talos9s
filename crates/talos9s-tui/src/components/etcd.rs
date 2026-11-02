@@ -1160,13 +1160,13 @@ impl EtcdComponent {
         };
 
         Line::from(vec![
-            Span::styled("[j/k]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<j/k>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" select  "),
-            Span::styled("[r]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<r>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" refresh  "),
-            Span::styled("[y]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<y>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" copy defrag  "),
-            Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<a>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
             auto_status,
         ])

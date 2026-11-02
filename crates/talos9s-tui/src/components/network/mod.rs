@@ -762,19 +762,19 @@ impl Component for NetworkStatsComponent {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
         if self.file_viewer.is_some() {
             return Some(Line::from(vec![
-                key("[j/k]"),
+                key("<j/k>"),
                 Span::raw(" scroll  "),
-                key("[g/G]"),
+                key("<g/G>"),
                 Span::raw(" top/bottom  "),
-                key("[Esc/q]"),
+                key("<Esc/q>"),
                 Span::raw(" close"),
             ]));
         }
         if self.pending_action.is_some() {
             return Some(Line::from(vec![
-                key("[y]"),
+                key("<y>"),
                 Span::raw(" confirm  "),
-                key("[n/Esc]"),
+                key("<n/Esc>"),
                 Span::raw(" cancel"),
             ]));
         }
@@ -782,15 +782,15 @@ impl Component for NetworkStatsComponent {
             ViewMode::Interfaces => self.interfaces_key_hints(),
             ViewMode::Connections => self.connections_key_hints(),
             ViewMode::KubeSpan => Line::from(vec![
-                key("[j/k]"),
+                key("<j/k>"),
                 Span::raw(" navigate  "),
-                key("[r]"),
+                key("<r>"),
                 Span::raw(" refresh"),
             ]),
         };
         if self.show_output_pane {
             line.spans
-                .extend([Span::raw("  "), key("[Esc]"), Span::raw(" close output")]);
+                .extend([Span::raw("  "), key("<Esc>"), Span::raw(" close output")]);
         }
         Some(line)
     }

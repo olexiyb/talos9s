@@ -239,11 +239,11 @@ impl NetworkStatsComponent {
 
         let footer = Paragraph::new(Line::from(vec![
             Span::styled(&scroll_info, Style::default().fg(Color::DarkGray)),
-            Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
+            Span::styled("<j/k>", Style::default().fg(Color::Cyan)),
             Span::raw(" scroll "),
-            Span::styled("[g/G]", Style::default().fg(Color::Cyan)),
+            Span::styled("<g/G>", Style::default().fg(Color::Cyan)),
             Span::raw(" top/bottom "),
-            Span::styled("[q/Esc]", Style::default().fg(Color::Cyan)),
+            Span::styled("<Esc/q>", Style::default().fg(Color::Cyan)),
             Span::raw(" close"),
         ]));
         frame.render_widget(footer, footer_area);

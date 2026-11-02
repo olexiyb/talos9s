@@ -1611,32 +1611,32 @@ impl MultiLogsComponent {
             vec![
                 Span::raw(" Type to search").dim(),
                 Span::raw("  "),
-                Span::raw("[Enter]").fg(Color::Yellow),
+                Span::raw("<Enter>").fg(Color::Yellow),
                 Span::raw(" confirm").dim(),
                 Span::raw("  "),
-                Span::raw("[Esc]").fg(Color::Yellow),
+                Span::raw("<Esc>").fg(Color::Yellow),
                 Span::raw(" cancel").dim(),
             ]
         } else if self.search_mode == SearchMode::Active {
             vec![
-                Span::raw(" [n/N]").fg(Color::Yellow),
+                Span::raw(" <n/N>").fg(Color::Yellow),
                 Span::raw(" next/prev").dim(),
                 Span::raw("  "),
-                Span::raw("[/]").fg(Color::Yellow),
+                Span::raw("</>").fg(Color::Yellow),
                 Span::raw(" new search").dim(),
                 Span::raw("  "),
-                Span::raw("[Esc]").fg(Color::Yellow),
+                Span::raw("<Esc>").fg(Color::Yellow),
                 Span::raw(" clear").dim(),
             ]
         } else if self.floating_pane != FloatingPane::None {
             let mut spans = vec![
-                Span::raw(" [Space]").fg(Color::Yellow),
+                Span::raw(" <Space>").fg(Color::Yellow),
                 Span::raw(" toggle").dim(),
                 Span::raw("  "),
-                Span::raw("[0]").fg(Color::Yellow),
+                Span::raw("<0>").fg(Color::Yellow),
                 Span::raw(" all").dim(),
                 Span::raw("  "),
-                Span::raw("[n]").fg(Color::Yellow),
+                Span::raw("<n>").fg(Color::Yellow),
                 Span::raw(" none").dim(),
                 Span::raw("  "),
             ];
@@ -1644,38 +1644,38 @@ impl MultiLogsComponent {
             // to keep the main key line within 100 columns
             if self.floating_pane == FloatingPane::Levels {
                 spans.extend([
-                    Span::raw("[1-5]").fg(Color::Yellow),
+                    Span::raw("<1-5>").fg(Color::Yellow),
                     Span::raw(" only").dim(),
                     Span::raw("  "),
-                    Span::raw("[⇧1-5]").fg(Color::Yellow),
+                    Span::raw("<Shift+1-5>").fg(Color::Yellow),
                     Span::raw(" ±level").dim(),
                     Span::raw("  "),
                 ]);
             }
             spans.extend([
-                Span::raw("[Esc/q]").fg(Color::Yellow),
+                Span::raw("<Esc/q>").fg(Color::Yellow),
                 Span::raw(" close").dim(),
             ]);
             spans
         } else if self.visual.active() {
             // Visual mode footer
             vec![
-                Span::raw(" [j/k]").fg(Color::Yellow),
+                Span::raw(" <j/k>").fg(Color::Yellow),
                 Span::raw(" extend").dim(),
                 Span::raw(" "),
-                Span::raw("[y]").fg(Color::Yellow),
+                Span::raw("<y>").fg(Color::Yellow),
                 Span::raw(" yank").dim(),
                 Span::raw(" "),
-                Span::raw("[Esc/V]").fg(Color::Yellow),
+                Span::raw("<Esc/V>").fg(Color::Yellow),
                 Span::raw(" cancel").dim(),
             ]
         } else {
             let wrap_text = if self.wrap { " nowrap" } else { " wrap" };
             // Grouped so the line fits a 100 column screen
             let (panes, pane_labels) = if self.multi_node() {
-                (" [s/o/l]", " svcs/nodes/lvls")
+                (" <s/o/l>", " svcs/nodes/lvls")
             } else {
-                (" [s/l]", " svcs/lvls")
+                (" <s/l>", " svcs/lvls")
             };
             let follow_text = if self.streaming {
                 " follow/stop"
@@ -1686,19 +1686,19 @@ impl MultiLogsComponent {
                 Span::raw(panes).fg(Color::Yellow),
                 Span::raw(pane_labels).dim(),
                 Span::raw(" "),
-                Span::raw("[/]").fg(Color::Yellow),
+                Span::raw("</>").fg(Color::Yellow),
                 Span::raw(" search").dim(),
                 Span::raw(" "),
-                Span::raw("[f/F]").fg(Color::Yellow),
+                Span::raw("<f/F>").fg(Color::Yellow),
                 Span::raw(follow_text).dim(),
                 Span::raw(" "),
-                Span::raw("[w]").fg(Color::Yellow),
+                Span::raw("<w>").fg(Color::Yellow),
                 Span::raw(wrap_text).dim(),
                 Span::raw(" "),
-                Span::raw("[V]").fg(Color::Yellow),
+                Span::raw("<V>").fg(Color::Yellow),
                 Span::raw(" visual").dim(),
                 Span::raw(" "),
-                Span::raw("[y]").fg(Color::Yellow),
+                Span::raw("<y>").fg(Color::Yellow),
                 Span::raw(" yank").dim(),
             ];
             spans
@@ -2115,7 +2115,7 @@ impl Component for MultiLogsComponent {
         ];
         let (_, waiting, failed) = self.stream_counts();
         if failed > 0 {
-            let hint = if self.multi_node() { ", see [o]" } else { "" };
+            let hint = if self.multi_node() { ", see <o>" } else { "" };
             header_spans.push(Span::styled(
                 format!("  {failed} stream(s) failed{hint}"),
                 Style::default().fg(Color::Red),
@@ -2418,7 +2418,7 @@ mod tests {
         assert!(screen.contains("bc3 kernel"), "{screen}");
         // The node filter is offered in the key line, not drawn in the view
         let hints = logs.key_hints().unwrap().to_string();
-        assert!(hints.contains("[s/o/l] svcs/nodes"), "{hints}");
+        assert!(hints.contains("<s/o/l> svcs/nodes"), "{hints}");
     }
 
     #[tokio::test]
@@ -2486,7 +2486,7 @@ mod tests {
         assert!(screen.contains("Multi-Service Logs: 10.0.0.1"), "{screen}");
         assert!(screen.contains("synced"), "{screen}");
         assert!(!screen.contains("w1 "), "{screen}");
-        assert!(!screen.contains("[o]"), "{screen}");
+        assert!(!screen.contains("<o>"), "{screen}");
     }
 
     #[test]

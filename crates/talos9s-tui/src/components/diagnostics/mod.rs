@@ -937,25 +937,25 @@ impl Component for DiagnosticsComponent {
     fn key_hints(&self) -> Option<Line<'static>> {
         let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
         let spans = if self.show_details {
-            vec![key("[Esc]"), Span::raw(" close")]
+            vec![key("<Esc>"), Span::raw(" close")]
         } else if self.show_confirmation {
             vec![
-                key("[←/→]"),
+                key("<←/→>"),
                 Span::raw(" choose  "),
-                key("[y]"),
+                key("<y>"),
                 Span::raw(" copy  "),
-                key("[Esc]"),
+                key("<Esc>"),
                 Span::raw(" close"),
             ]
         } else {
             vec![
-                key("[j/k]"),
+                key("<j/k>"),
                 Span::raw(" navigate  "),
-                key("[Tab]"),
+                key("<Tab>"),
                 Span::raw(" section  "),
-                key("[Enter]"),
+                key("<Enter>"),
                 Span::raw(" details/fix  "),
-                key("[r]"),
+                key("<r>"),
                 Span::raw(" refresh"),
             ]
         };

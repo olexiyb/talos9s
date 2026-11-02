@@ -1430,7 +1430,7 @@ impl ProcessesComponent {
             Span::styled("Res: ", Style::default().add_modifier(Modifier::DIM)),
             Span::raw(proc.resident_memory_human()),
             Span::raw("  "),
-            Span::styled("[y] yank", Style::default().fg(Color::DarkGray)),
+            Span::styled("<y> yank", Style::default().fg(Color::DarkGray)),
         ]);
         let stats_para = Paragraph::new(vec![stats_line1, stats_line2]);
         frame.render_widget(stats_para, stats_area);
@@ -1441,9 +1441,9 @@ impl ProcessesComponent {
         if self.mode == Mode::Filtering {
             return Line::from(vec![
                 Span::raw(" Type to filter  "),
-                Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<Enter>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" apply  "),
-                Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<Esc>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" clear"),
             ]);
         }
@@ -1465,33 +1465,33 @@ impl ProcessesComponent {
 
         // State filter status
         let filter_status = match &self.state_filter {
-            Some(ProcessState::Zombie) => Span::styled(" [Z]", Style::default().fg(Color::Red)),
+            Some(ProcessState::Zombie) => Span::styled(" <Z>", Style::default().fg(Color::Red)),
             Some(ProcessState::DiskSleep) => {
-                Span::styled(" [D]", Style::default().fg(Color::Yellow))
+                Span::styled(" <D>", Style::default().fg(Color::Yellow))
             }
             _ => Span::raw(""),
         };
 
         Line::from(vec![
-            Span::styled("[1]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<1>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" cpu "),
-            Span::styled("[2]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<2>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" mem "),
-            Span::styled("[t]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<t>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" subtree "),
-            Span::styled("[T]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<T>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" tree:"),
             tree_status,
             Span::raw(" "),
-            Span::styled("[z]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<z>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" zombie "),
-            Span::styled("[d]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<d>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" disk"),
             filter_status,
             Span::raw(" "),
-            Span::styled("[/]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("</>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" filter "),
-            Span::styled("[a]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("<a>", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" auto:"),
             auto_status,
         ])

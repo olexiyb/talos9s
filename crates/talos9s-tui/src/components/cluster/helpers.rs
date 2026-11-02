@@ -207,7 +207,7 @@ pub(super) fn diagnostics_line(summary: &DiagnosticsSummary) -> Line<'static> {
         ));
     }
     spans.push(Span::styled(
-        format!("  {age} ago  [d]"),
+        format!("  {age} ago  <d>"),
         Style::default().dim(),
     ));
     Line::from(spans)

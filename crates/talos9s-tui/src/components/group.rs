@@ -649,16 +649,16 @@ impl GroupComponent {
 
     fn footer_line(&self) -> Line<'static> {
         let all = if self.show_all {
-            "  [A] hide virtual"
+            "  <A> hide virtual"
         } else {
-            "  [A] show all"
+            "  <A> show all"
         };
         let toggle = match self.kind {
             GroupKind::Storage | GroupKind::Partitions | GroupKind::Network => all.to_string(),
             GroupKind::Diagnostics => String::new(),
         };
         Line::styled(
-            format!("[j/k] select  [Enter] open node  [r] refresh{toggle}"),
+            format!("<j/k> select  <Enter> open node  <r> refresh{toggle}"),
             Style::default().fg(Color::DarkGray),
         )
     }

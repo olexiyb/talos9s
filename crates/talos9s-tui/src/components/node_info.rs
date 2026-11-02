@@ -1306,14 +1306,14 @@ impl NodeInfoComponent {
                 Span::raw(format!(" {what}: ")),
                 Span::styled(format!("{}▏", query.text), Style::default().fg(Color::Cyan)),
                 Span::raw("  "),
-                key("Enter"),
+                key("<Enter>"),
                 Span::raw(" done  "),
-                key("Esc"),
+                key("<Esc>"),
                 Span::raw(" clear"),
             ]
         } else {
             let mut spans = vec![
-                key(" ↑/↓"),
+                key(" <↑/↓>"),
                 Span::raw(match (self.tab, self.config_in_content) {
                     (NodeInfoTab::Config, true) => " scroll  ",
                     (NodeInfoTab::Config, false) => " part  ",
@@ -1321,29 +1321,29 @@ impl NodeInfoComponent {
                 }),
             ];
             if self.tab == NodeInfoTab::Config && !self.config_in_content {
-                spans.extend([key("Enter/→"), Span::raw(" read  ")]);
+                spans.extend([key("<Enter/→>"), Span::raw(" read  ")]);
             }
             if self.tab == NodeInfoTab::Config && self.config_in_content {
                 spans.extend([
-                    key("g/G"),
+                    key("<g/G>"),
                     Span::raw(" top/bottom  "),
-                    key("←/→"),
+                    key("<←/→>"),
                     Span::raw(" pan  "),
-                    key("Esc"),
+                    key("<Esc>"),
                     Span::raw(" outline  "),
                 ]);
             }
-            spans.push(key("/"));
+            spans.push(key("</>"));
             if self.tab == NodeInfoTab::Config {
                 spans.extend([
                     Span::raw(" search all  "),
-                    key("n/N"),
+                    key("<n/N>"),
                     Span::raw(" next/prev  "),
                 ]);
             } else {
                 spans.push(Span::raw(" filter  "));
             }
-            spans.extend([key("r"), Span::raw(" refresh")]);
+            spans.extend([key("<r>"), Span::raw(" refresh")]);
             spans
         };
         Line::from(spans)

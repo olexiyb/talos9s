@@ -46,9 +46,9 @@ fn quit_question() -> Line<'static> {
     let key = |k: &'static str| Span::styled(k, Style::default().fg(Color::Cyan));
     Line::from(vec![
         Span::raw("Quit talos9s?  "),
-        key("[y]"),
+        key("<y>"),
         Span::raw(" yes  "),
-        key("[n]"),
+        key("<n>"),
         Span::raw(" no"),
     ])
 }

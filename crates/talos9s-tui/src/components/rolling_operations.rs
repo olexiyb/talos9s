@@ -732,15 +732,15 @@ impl RollingOperationsComponent {
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  [Space]", Style::default().fg(Color::Green)),
+            Span::styled("  <Space>", Style::default().fg(Color::Green)),
             Span::raw(" Toggle  "),
-            Span::styled("[d]", Style::default().fg(Color::Yellow)),
+            Span::styled("<d>", Style::default().fg(Color::Yellow)),
             Span::raw(" Rolling Drain  "),
-            Span::styled("[r]", Style::default().fg(Color::Red)),
+            Span::styled("<r>", Style::default().fg(Color::Red)),
             Span::raw(" Rolling Reboot"),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  [q]", Style::default().fg(Color::DarkGray)),
+            Span::styled("  <q>", Style::default().fg(Color::DarkGray)),
             Span::raw(" Cancel"),
         ]));
 
@@ -780,9 +780,9 @@ impl RollingOperationsComponent {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  [y]", Style::default().fg(Color::Green)),
+            Span::styled("  <y>", Style::default().fg(Color::Green)),
             Span::raw(" Confirm  "),
-            Span::styled("[n]", Style::default().fg(Color::Red)),
+            Span::styled("<n>", Style::default().fg(Color::Red)),
             Span::raw(" Cancel"),
         ]));
 
