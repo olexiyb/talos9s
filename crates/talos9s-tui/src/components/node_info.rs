@@ -329,7 +329,8 @@ pub fn mask_config(text: &str) -> (Vec<ConfigLine>, usize) {
             }
             continue;
         }
-        if line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----") {
+        // PEM (`EC PRIVATE KEY-----`) and PGP (`PGP PRIVATE KEY BLOCK-----`)
+        if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
             in_pem = !line.contains("-----END");
             hidden += 1;
             lines.push(ConfigLine {
@@ -357,13 +358,13 @@ pub fn mask_config(text: &str) -> (Vec<ConfigLine>, usize) {
         let ini = || {
             body.split_once('=')
                 .map(|(k, v)| (k.trim(), v.trim(), " = "))
-                .filter(|(k, v, _)| !k.is_empty() && !k.contains(' ') && !v.is_empty())
+                // A plain name: `{"a":"b=="}` is JSON, not `key = value`
+                .filter(|(k, v, _)| {
+                    !k.is_empty() && !k.contains([' ', '{', ':', ',']) && !v.is_empty()
+                })
         };
         let Some((key, value, sep)) = yaml.or_else(ini) else {
-            lines.push(ConfigLine {
-                text: line.to_string(),
-                masked: false,
-            });
+            lines.push(mask_inline(line, &mut hidden));
             continue;
         };
 
@@ -379,14 +380,138 @@ pub fn mask_config(text: &str) -> (Vec<ConfigLine>, usize) {
                 hiding = Some((column, lines.len() - 1, 0));
             }
         } else {
-            lines.push(ConfigLine {
-                text: line.to_string(),
-                masked: false,
-            });
+            lines.push(mask_inline(line, &mut hidden));
         }
     }
     finish(&mut lines, hiding);
     (lines, hidden)
+}
+
+/// A line with no secret key of its own, with the secrets inside it hidden:
+/// secret keys of JSON objects and YAML flow maps (`{"auth": "…"}`,
+/// `{password: …}`) and passwords in URLs (`https://user:pass@host`)
+fn mask_inline(line: &str, hidden: &mut usize) -> ConfigLine {
+    let (text, flow) = mask_flow_values(line);
+    let (text, urls) = mask_url_passwords(&text);
+    *hidden += flow + urls;
+    ConfigLine {
+        text,
+        masked: flow + urls > 0,
+    }
+}
+
+/// The index just past the string starting with the quote at `start`
+fn string_end(b: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'"' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    b.len()
+}
+
+/// Values of secret keys in `{…}` objects, at any depth; the count hidden
+// Every index is at an ASCII byte found by the scan, a char boundary
+#[allow(clippy::string_slice)]
+fn mask_flow_values(line: &str) -> (String, usize) {
+    let b = line.as_bytes();
+    let skip_ws = |mut i: usize| {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+    let (mut out, mut last, mut count, mut i) = (String::new(), 0, 0, 0);
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i = string_end(b, i);
+                continue;
+            }
+            b'{' | b',' => {}
+            _ => {
+                i += 1;
+                continue;
+            }
+        }
+        // A key after `{` or `,`, quoted or bare
+        let k = skip_ws(i + 1);
+        let (key, after_key) = if b.get(k) == Some(&b'"') {
+            let end = string_end(b, k);
+            (&line[k + 1..end.saturating_sub(1).max(k + 1)], end)
+        } else {
+            let end = (k..b.len())
+                .find(|&j| !(b[j].is_ascii_alphanumeric() || b"_-.".contains(&b[j])))
+                .unwrap_or(b.len());
+            (&line[k..end], end)
+        };
+        let sep = skip_ws(after_key);
+        if key.is_empty() || !matches!(b.get(sep), Some(b':' | b'=')) {
+            i += 1;
+            continue;
+        }
+        let start = skip_ws(sep + 1);
+        // Nested objects and lists are scanned in turn
+        if start >= b.len() || matches!(b[start], b'{' | b'[') {
+            i = start;
+            continue;
+        }
+        let quoted = b[start] == b'"';
+        let end = if quoted {
+            string_end(b, start)
+        } else {
+            let end = (start..b.len())
+                .find(|&j| b",}]".contains(&b[j]))
+                .unwrap_or(b.len());
+            start + line[start..end].trim_end().len()
+        };
+        if secret_key(key) && end > start {
+            out.push_str(&line[last..start]);
+            out.push_str(if quoted {
+                "\"••••••\""
+            } else {
+                HIDDEN
+            });
+            last = end;
+            count += 1;
+        }
+        i = end.max(i + 1);
+    }
+    out.push_str(&line[last..]);
+    (out, count)
+}
+
+/// The password of `scheme://user:password@host`; the count hidden
+// Every index is at an ASCII byte found by the scan, a char boundary
+#[allow(clippy::string_slice)]
+fn mask_url_passwords(line: &str) -> (String, usize) {
+    let (mut out, mut rest, mut count) = (String::new(), line, 0);
+    while let Some(pos) = rest.find("://") {
+        let start = pos + 3;
+        let authority_end = rest[start..]
+            .find(|c: char| c == '/' || c.is_whitespace() || "\"',}]".contains(c))
+            .map_or(rest.len(), |e| start + e);
+        let authority = &rest[start..authority_end];
+        match authority.rfind('@').and_then(|at| {
+            authority[..at]
+                .find(':')
+                .map(|colon| (start + colon + 1, start + at))
+        }) {
+            Some((from, to)) if to > from => {
+                out.push_str(&rest[..from]);
+                out.push_str(HIDDEN);
+                count += 1;
+                out.push_str(&rest[to..authority_end]);
+            }
+            _ => out.push_str(&rest[..authority_end]),
+        }
+        rest = &rest[authority_end..];
+    }
+    out.push_str(rest);
+    (out, count)
 }
 
 /// Text being typed for the filter (lists) or search (config)
@@ -1590,6 +1715,93 @@ auth: bWU6aHVudGVyMg==
         assert!(text.contains("username: me"));
         assert!(text.contains("path: /etc/cri/conf.d/20-customization.part"));
         assert!(text.contains("kind: RegistryAuthConfig"));
+    }
+
+    /// Each case: secrets that must not appear in the masked text
+    fn assert_hidden(config: &str, secrets: &[&str]) {
+        let (lines, _) = masked(config);
+        let text = lines.join("\n");
+        for secret in secrets {
+            assert!(!text.contains(secret), "{secret} leaked:\n{text}");
+        }
+    }
+
+    #[test]
+    fn masks_registry_auth_in_single_line_json() {
+        // A dockerconfigjson file written by machine.files, on one line
+        assert_hidden(
+            r#"    files:
+        - content: |
+            {"auths":{"ghcr.io":{"username":"me","password":"hunter2","auth":"bWU6aHVudGVyMg=="}}}
+          path: /var/lib/kubelet/config.json
+"#,
+            &["hunter2", "bWU6aHVudGVyMg=="],
+        );
+        // As a JSON value of a YAML key
+        assert_hidden(
+            r#"    .dockerconfigjson: {"auths":{"r":{"auth":"c2VjcmV0"}}}
+"#,
+            &["c2VjcmV0"],
+        );
+    }
+
+    #[test]
+    fn masks_pgp_private_key_blocks() {
+        assert_hidden(
+            "    files:
+        - content: |
+            -----BEGIN PGP PRIVATE KEY BLOCK-----
+
+            lQOYBGPGPSECRET
+            =abcd
+            -----END PGP PRIVATE KEY BLOCK-----
+          path: /var/etc/signing.asc
+",
+            &["lQOYBGPGPSECRET", "=abcd"],
+        );
+    }
+
+    #[test]
+    fn masks_credentials_in_urls() {
+        assert_hidden(
+            "machine:
+    registries:
+        mirrors:
+            docker.io:
+                endpoints:
+                    - https://robot:s3cr3t@mirror.example.com
+    env:
+        https_proxy: http://proxyuser:pr0xyp4ss@proxy:3128
+",
+            &["s3cr3t", "pr0xyp4ss"],
+        );
+        let (lines, _) = masked(
+            "    - https://robot:s3cr3t@mirror.example.com/v2\n    - https://mirror.example.com:5000/v2\n",
+        );
+        assert_eq!(lines[0], "    - https://robot:••••••@mirror.example.com/v2");
+        assert_eq!(lines[1], "    - https://mirror.example.com:5000/v2");
+    }
+
+    #[test]
+    fn masks_secrets_in_flow_maps() {
+        assert_hidden(
+            "    auth: {username: me, password: hunter2}
+    registry: {username: me, password: hunter3}
+    creds: {token: tk-123}
+    - {name: x, secret: s-456}
+",
+            &["hunter2", "hunter3", "tk-123", "s-456"],
+        );
+        // Non-ASCII text and unterminated strings neither panic nor leak
+        assert_hidden(
+            "    {ключ: значение, password: пароль}\n    {\"token\": \"abc\n    https://ü:pässwört@höst/\n",
+            &["пароль", "abc", "pässwört"],
+        );
+        let (lines, _) = masked(
+            "    registry: {username: me, password: hunter3}\n    {\"name\": \"a\", \"auth\": \"x\\\"y\"}\n",
+        );
+        assert_eq!(lines[0], "    registry: {username: me, password: ••••••}");
+        assert_eq!(lines[1], "    {\"name\": \"a\", \"auth\": \"••••••\"}");
     }
 
     #[test]
