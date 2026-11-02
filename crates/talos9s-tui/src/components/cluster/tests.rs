@@ -1021,3 +1021,17 @@ fn nodes_to_query_fall_back_through_the_sources() {
     );
     assert!(nodes_to_query(&[], &[], &[]).is_empty());
 }
+
+/// `a` toggles auto-refresh, as in every view that has it
+#[test]
+fn a_toggles_auto_refresh() {
+    use crate::components::Component;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut c = ClusterComponent::default();
+    let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+    assert!(c.auto_refresh);
+    c.handle_key_event(a).unwrap();
+    assert!(!c.auto_refresh);
+    c.handle_key_event(a).unwrap();
+    assert!(c.auto_refresh);
+}

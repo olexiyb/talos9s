@@ -863,6 +863,20 @@ impl NetworkStatsComponent {
 mod tests {
     use super::*;
 
+    /// `a` toggles auto-refresh, as in every view that has it
+    #[test]
+    fn a_toggles_auto_refresh() {
+        use crate::components::Component;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut c = NetworkStatsComponent::new("n".into(), "10.0.0.1".into());
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(!c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(c.auto_refresh);
+    }
+
     #[test]
     fn large_counts_fit_their_cells() {
         assert_eq!(short_count(147_301), "147301");

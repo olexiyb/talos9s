@@ -1792,6 +1792,20 @@ fn process_cpu_percents(
 mod tests {
     use super::*;
 
+    /// `a` toggles auto-refresh, as in every view that has it
+    #[test]
+    fn a_toggles_auto_refresh() {
+        use crate::components::Component;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut c = ProcessesComponent::new("t".into(), Vec::new());
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(!c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(c.auto_refresh);
+    }
+
     fn process(pid: i32, ppid: i32, command: &str, mem: u64) -> ProcessInfo {
         ProcessInfo {
             pid,

@@ -1297,6 +1297,20 @@ impl crate::components::BackgroundRefresh for WorkloadHealthComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `a` toggles auto-refresh, as in every view that has it
+    #[test]
+    fn a_toggles_auto_refresh() {
+        use crate::components::Component;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut c = WorkloadHealthComponent::new(None);
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(!c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(c.auto_refresh);
+    }
     use k8s_openapi::api::core::v1::{PodCondition, PodStatus};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 

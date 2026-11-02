@@ -1295,6 +1295,20 @@ impl crate::components::BackgroundRefresh for EtcdComponent {
 mod tests {
     use super::*;
 
+    /// `a` toggles auto-refresh, as in every view that has it
+    #[test]
+    fn a_toggles_auto_refresh() {
+        use crate::components::Component;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut c = EtcdComponent::new();
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(!c.auto_refresh);
+        c.handle_key_event(a).unwrap();
+        assert!(c.auto_refresh);
+    }
+
     const MIB: i64 = 1 << 20;
 
     fn member(
