@@ -2,29 +2,10 @@
 //!
 //! Provides persistent logging of all node operations for compliance and debugging.
 
-use chrono::{DateTime, Local};
+use chrono::Local;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-
-/// Audit log entry
-#[derive(Debug, Clone)]
-pub struct AuditEntry {
-    /// Timestamp of the event
-    pub timestamp: DateTime<Local>,
-    /// User who initiated the operation (from environment)
-    pub user: String,
-    /// Cluster context name
-    pub cluster: String,
-    /// Operation type
-    pub operation: String,
-    /// Target node
-    pub node: String,
-    /// Result (success/failure/in_progress)
-    pub result: AuditResult,
-    /// Additional details
-    pub details: String,
-}
 
 /// Result of an audited operation
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,26 +90,6 @@ impl AuditLogger {
         }
     }
 
-    /// Get the path to the audit log
-    pub fn log_path(&self) -> &PathBuf {
-        &self.log_path
-    }
-
-    /// Log an operation start
-    pub fn log_start(&self, operation: &str, node: &str, details: &str) {
-        self.log(operation, node, AuditResult::Started, details);
-    }
-
-    /// Log an operation success
-    pub fn log_success(&self, operation: &str, node: &str, details: &str) {
-        self.log(operation, node, AuditResult::Success, details);
-    }
-
-    /// Log an operation failure
-    pub fn log_failure(&self, operation: &str, node: &str, details: &str) {
-        self.log(operation, node, AuditResult::Failure, details);
-    }
-
     /// Log an audit entry
     fn log(&self, operation: &str, node: &str, result: AuditResult, details: &str) {
         if !self.enabled {
@@ -138,48 +99,25 @@ impl AuditLogger {
         // One entry per line: a newline in an error message must not
         // forge a second entry
         let one_line = |text: &str| text.replace(['\n', '\r'], " ");
-        let entry = AuditEntry {
-            timestamp: Local::now(),
-            user: self.user.clone(),
-            cluster: self.cluster.clone(),
-            operation: one_line(operation),
-            node: one_line(node),
-            result,
-            details: one_line(details),
-        };
-
-        if let Err(e) = self.write_entry(&entry) {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
-
-    /// Write an entry to the audit log file
-    fn write_entry(&self, entry: &AuditEntry) -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)?;
-
         // Format: [timestamp] [cluster] [user] [operation] [node] [result] details
         let line = format!(
             "[{}] [{}] [{}] [{}] [{}] [{}] {}\n",
-            entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
-            entry.cluster,
-            entry.user,
-            entry.operation,
-            entry.node,
-            entry.result,
-            entry.details
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            self.cluster,
+            self.user,
+            one_line(operation),
+            one_line(node),
+            result,
+            one_line(details)
         );
-
-        file.write_all(line.as_bytes())?;
-        Ok(())
-    }
-}
-
-impl Default for AuditLogger {
-    fn default() -> Self {
-        Self::new("unknown")
+        let written = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .and_then(|mut file| file.write_all(line.as_bytes()));
+        if let Err(e) = written {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
     }
 }
 
@@ -194,28 +132,28 @@ pub fn init_audit_logger(cluster: &str) {
 }
 
 /// Get the global audit logger
-pub fn audit_logger() -> Option<std::sync::MutexGuard<'static, AuditLogger>> {
+fn audit_logger() -> Option<std::sync::MutexGuard<'static, AuditLogger>> {
     AUDIT_LOGGER.get().and_then(|l| l.lock().ok())
 }
 
 /// Log an operation start (convenience function)
 pub fn audit_start(operation: &str, node: &str, details: &str) {
     if let Some(logger) = audit_logger() {
-        logger.log_start(operation, node, details);
+        logger.log(operation, node, AuditResult::Started, details);
     }
 }
 
 /// Log an operation success (convenience function)
 pub fn audit_success(operation: &str, node: &str, details: &str) {
     if let Some(logger) = audit_logger() {
-        logger.log_success(operation, node, details);
+        logger.log(operation, node, AuditResult::Success, details);
     }
 }
 
 /// Log an operation failure (convenience function)
 pub fn audit_failure(operation: &str, node: &str, details: &str) {
     if let Some(logger) = audit_logger() {
-        logger.log_failure(operation, node, details);
+        logger.log(operation, node, AuditResult::Failure, details);
     }
 }
 
@@ -252,9 +190,10 @@ mod tests {
             user: "me".into(),
             enabled: true,
         };
-        logger.log_failure(
+        logger.log(
             "REBOOT",
             "bc1",
+            AuditResult::Failure,
             "failed:\n[x] [bc] [me] [REBOOT] [bc1] [SUCCESS] ok",
         );
         let log = std::fs::read_to_string(dir.path().join("audit.log")).unwrap();

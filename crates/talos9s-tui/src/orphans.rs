@@ -10,7 +10,7 @@
 //! so a volume without a PV whose PVC still exists is being provisioned, not
 //! orphaned.
 
-use crate::linstor_volumes::{Issue, Severity};
+use crate::linstor_volumes::Issue;
 use k8s_openapi::api::core::v1::{PersistentVolume, PersistentVolumeClaim};
 use kube::Client;
 use kube::api::{Api, ListParams};
@@ -51,10 +51,7 @@ impl Orphan {
                 None => format!("orphaned: PV {pv} Released"),
             },
         };
-        Issue {
-            severity: Severity::Warning,
-            text,
-        }
+        Issue::warning(text)
     }
 
     /// The PV to delete before the volume, if any

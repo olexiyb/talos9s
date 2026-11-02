@@ -84,19 +84,16 @@ pub async fn fetch_linstor(client: &Client) -> Result<Option<LinstorStatus>, kub
         Some(Err(e)) => return Ok(Some(LinstorStatus::Unreachable(e))),
         Some(Ok(base)) => base,
     };
-    let path = format!("{base}/v1/nodes");
-
-    let pools_path = format!("{base}/v1/view/storage-pools");
-    let (nodes, pools) = tokio::join!(get_json(client, &path), get_json(client, &pools_path));
+    let (nodes_path, pools_path) = (
+        format!("{base}/v1/nodes"),
+        format!("{base}/v1/view/storage-pools"),
+    );
+    let (nodes, pools) = tokio::join!(get_json(client, &nodes_path), get_json(client, &pools_path));
     let status = match nodes {
         Ok(json) => {
-            let pools = match pools {
-                Ok(json) => Some(json),
-                Err(e) => {
-                    tracing::debug!("LINSTOR storage pools unavailable: {}", e);
-                    None
-                }
-            };
+            let pools = pools
+                .inspect_err(|e| tracing::debug!("LINSTOR storage pools unavailable: {}", e))
+                .ok();
             LinstorStatus::Nodes(nodes_from(&json, pools.as_ref()))
         }
         Err(e) => LinstorStatus::Unreachable(e),
@@ -112,7 +109,12 @@ pub(crate) async fn controller_base(
 ) -> Result<Option<Result<String, String>>, kube::Error> {
     let services: Api<Service> = Api::all(client.clone());
     let params = ListParams::default().fields(&format!("metadata.name={CONTROLLER_SERVICE}"));
-    let Some(service) = services.list(&params).await?.items.into_iter().next() else {
+    let Some(service) = crate::kube_list::list(&services, &params)
+        .await?
+        .items
+        .into_iter()
+        .next()
+    else {
         return Ok(None);
     };
     Ok(Some(proxy_path(&service, "").ok_or_else(|| {
@@ -125,8 +127,7 @@ pub(crate) async fn get_json(client: &Client, path: &str) -> Result<Value, Strin
     let request = http::Request::get(path)
         .body(Vec::new())
         .map_err(|e| e.to_string())?;
-    let body = client
-        .request_text(request)
+    let body = crate::kube_list::bounded(client.request_text(request))
         .await
         .map_err(|e| e.to_string())?;
     serde_json::from_str(&body).map_err(|e| format!("unexpected LINSTOR response: {e}"))

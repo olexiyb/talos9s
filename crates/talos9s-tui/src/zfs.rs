@@ -80,21 +80,32 @@ const ZFS_GROUP: &str = "zfs.openebs.io";
 /// before we can treat it as "no ZFS"; the cluster view lists ZFS pools on
 /// every refresh. The group list is always served, so ask it first.
 async fn zfs_installed(client: &Client) -> Result<bool, kube::Error> {
-    let groups = client.list_api_groups().await?;
+    let groups = crate::kube_list::bounded(client.list_api_groups()).await?;
     Ok(groups.groups.iter().any(|g| g.name == ZFS_GROUP))
 }
 
 /// OpenEBS ZFS LocalPV volumes, `None` when the `ZFSVolume` CRD isn't
 /// installed. Their PVC names come from the PVs, set by the caller.
 pub async fn fetch_zfs_volumes(client: &Client) -> Result<Option<Vec<ZfsVolume>>, kube::Error> {
+    Ok(list_zfs(client, "ZFSVolume", "zfsvolumes")
+        .await?
+        .map(zfs_volumes_from))
+}
+
+/// All objects of a ZFS LocalPV kind, `None` when the CRD isn't installed
+async fn list_zfs(
+    client: &Client,
+    kind: &str,
+    plural: &str,
+) -> Result<Option<Vec<DynamicObject>>, kube::Error> {
     if !zfs_installed(client).await? {
         return Ok(None);
     }
-    let gvk = GroupVersionKind::gvk(ZFS_GROUP, "v1", "ZFSVolume");
-    let resource = ApiResource::from_gvk_with_plural(&gvk, "zfsvolumes");
+    let gvk = GroupVersionKind::gvk(ZFS_GROUP, "v1", kind);
+    let resource = ApiResource::from_gvk_with_plural(&gvk, plural);
     let api: Api<DynamicObject> = Api::all_with(client.clone(), &resource);
     match crate::kube_list::list(&api, &ListParams::default()).await {
-        Ok(list) => Ok(Some(zfs_volumes_from(list.items))),
+        Ok(list) => Ok(Some(list.items)),
         Err(kube::Error::Api(e)) if e.code == 404 => Ok(None),
         Err(e) => Err(e),
     }
@@ -177,23 +188,17 @@ pub fn apply_zfs_mounts(
 
 /// Problems of a ZFS LocalPV volume, worst first
 pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issue> {
-    use crate::linstor_volumes::{Issue, Severity, format_kib, usage_issue};
+    use crate::linstor_volumes::{Issue, format_kib, usage_issue};
     let mut issues = Vec::new();
     match volume.state.as_str() {
         "Ready" => {}
-        "Pending" => issues.push(Issue {
-            severity: Severity::Warning,
-            text: format!("{}: volume Pending", volume.node),
-        }),
+        "Pending" => issues.push(Issue::warning(format!("{}: volume Pending", volume.node))),
         // A new ZFSVolume has no status until the node agent picks it up
-        "Unknown" => issues.push(Issue {
-            severity: Severity::Warning,
-            text: format!("{}: volume state unknown", volume.node),
-        }),
-        state => issues.push(Issue {
-            severity: Severity::Error,
-            text: format!("{}: volume {state}", volume.node),
-        }),
+        "Unknown" => issues.push(Issue::warning(format!(
+            "{}: volume state unknown",
+            volume.node
+        ))),
+        state => issues.push(Issue::error(format!("{}: volume {state}", volume.node))),
     }
     if let Some((size, used)) = volume.fs {
         if let Some(issue) = usage_issue(&volume.node, used / 1024, size / 1024) {
@@ -202,15 +207,12 @@ pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issu
         if let Some(capacity) = volume.capacity
             && size < capacity / 100 * ZFS_QUOTA_BELOW_CAPACITY_PCT
         {
-            issues.push(Issue {
-                severity: Severity::Warning,
-                text: format!(
-                    "{}: dataset {} below capacity {}: resize not applied",
-                    volume.node,
-                    format_kib(size / 1024),
-                    format_kib(capacity / 1024)
-                ),
-            });
+            issues.push(Issue::warning(format!(
+                "{}: dataset {} below capacity {}: resize not applied",
+                volume.node,
+                format_kib(size / 1024),
+                format_kib(capacity / 1024)
+            )));
         }
     }
     issues.sort_by_key(|i| i.severity);
@@ -223,21 +225,10 @@ pub fn zfs_volume_issues(volume: &ZfsVolume) -> Vec<crate::linstor_volumes::Issu
 pub async fn fetch_zfs_pools(
     client: &Client,
 ) -> Result<HashMap<String, Vec<ZfsPool>>, kube::Error> {
-    if !zfs_installed(client).await? {
+    let Some(nodes) = list_zfs(client, "ZFSNode", "zfsnodes").await? else {
         return Ok(HashMap::new());
-    }
-    let gvk = GroupVersionKind::gvk(ZFS_GROUP, "v1", "ZFSNode");
-    let resource = ApiResource::from_gvk_with_plural(&gvk, "zfsnodes");
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), &resource);
-
-    let list = match crate::kube_list::list(&api, &ListParams::default()).await {
-        Ok(list) => list,
-        Err(kube::Error::Api(e)) if e.code == 404 => return Ok(HashMap::new()),
-        Err(e) => return Err(e),
     };
-
-    Ok(list
-        .items
+    Ok(nodes
         .into_iter()
         .filter_map(|obj| {
             let node = obj.metadata.name?;

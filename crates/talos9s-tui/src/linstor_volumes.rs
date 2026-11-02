@@ -25,7 +25,7 @@ use crate::linstor::{
 use futures::StreamExt;
 use k8s_openapi::serde_json::Value;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use talos_rs::{MountUsage, TalosClient};
 use talos9s_core::constants::{
@@ -54,6 +54,11 @@ pub struct LinstorVolume {
 }
 
 impl LinstorVolume {
+    /// The replica in use (DRBD Primary), if any
+    pub fn primary(&self) -> Option<&Replica> {
+        self.replicas.iter().find(|r| r.in_use)
+    }
+
     /// Replicas holding data (not diskless tie-breakers or clients)
     pub fn diskful_replicas(&self) -> usize {
         self.replicas.iter().filter(|r| !r.diskless).count()
@@ -263,11 +268,30 @@ impl HasHealth for Severity {
     }
 }
 
+/// DRBD connection state of a link that won't reconnect by itself
+const STANDALONE: &str = "StandAlone";
+
 /// A problem found on a volume
 #[derive(Debug, Clone, PartialEq)]
 pub struct Issue {
     pub severity: Severity,
     pub text: String,
+}
+
+impl Issue {
+    pub fn warning(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            text: text.into(),
+        }
+    }
+
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Error,
+            text: text.into(),
+        }
+    }
 }
 
 /// The LINSTOR satellite pod running on a node, where `drbdadm` can be run
@@ -626,29 +650,21 @@ pub async fn observe_drbd(
                 continue;
             };
             let client = talos.with_node(ip);
+            let mut add = |probe, path| probes.push(((vi, ri), probe, client.clone(), path));
             let debugfs = format!("/sys/kernel/debug/drbd/resources/{}", volume.resource);
             if let Some(minor) = replica.minor {
-                probes.push((
-                    (vi, ri),
-                    Probe::Size,
-                    client.clone(),
-                    format!("/sys/block/drbd{minor}/size"),
-                ));
+                add(Probe::Size, format!("/sys/block/drbd{minor}/size"));
             }
             for peer in &replica.peers {
                 let conn = format!("{debugfs}/connections/{}", peer.peer);
-                probes.push((
-                    (vi, ri),
+                add(
                     Probe::PeerDevice(peer.peer.clone()),
-                    client.clone(),
                     format!("{conn}/{}/proc_drbd", volume.volume_number),
-                ));
-                probes.push((
-                    (vi, ri),
+                );
+                add(
                     Probe::PeerConnection(peer.peer.clone()),
-                    client.clone(),
                     format!("{conn}/debug"),
-                ));
+                );
             }
         }
     }
@@ -775,11 +791,11 @@ fn established_confirmed(replica: &Replica, peer: &str, seen: &PeerObserved) -> 
 /// connect), per LINSTOR or the kernel
 fn standalone(replica: &Replica, peer: &str) -> bool {
     let kernel = replica.observed(peer).and_then(|p| p.cs.as_deref());
-    kernel == Some("StandAlone")
+    kernel == Some(STANDALONE)
         || replica
             .peers
             .iter()
-            .any(|p| p.peer == peer && !p.connected && p.message == "StandAlone")
+            .any(|p| p.peer == peer && !p.connected && p.message == STANDALONE)
 }
 
 /// `(resource, peer)` links a node's kernel log shows as StandAlone because
@@ -831,10 +847,10 @@ fn split_brain_links(log: &str) -> Vec<(String, String)> {
                 continue;
             };
             let to = to.split_whitespace().next().unwrap_or_default();
-            if to == "StandAlone" {
+            if to == STANDALONE {
                 let after_split_brain = pending.remove(&link).unwrap_or(false);
                 result.insert(link, after_split_brain);
-            } else if from == "StandAlone" || matches!(to, "Unconnected" | "Connecting") {
+            } else if from == STANDALONE || matches!(to, "Unconnected" | "Connecting") {
                 // Left StandAlone, or tried connecting again
                 pending.remove(&link);
                 result.remove(&link);
@@ -862,7 +878,7 @@ struct BrokenLink<'a> {
 
 impl BrokenLink<'_> {
     fn standalone(&self) -> bool {
-        self.ends.iter().any(|(_, state)| *state == "StandAlone")
+        self.ends.iter().any(|(_, state)| *state == STANDALONE)
     }
 
     fn text(&self) -> String {
@@ -891,44 +907,38 @@ impl BrokenLink<'_> {
 
 /// Links not connected, once per pair, sorted
 fn broken_links(volume: &LinstorVolume) -> Vec<BrokenLink<'_>> {
-    let mut links: Vec<BrokenLink> = Vec::new();
+    let mut links: BTreeMap<(&str, &str), BrokenLink> = BTreeMap::new();
     for r in volume.replicas.iter().filter(|r| r.drbd_layer) {
         for p in r.peers.iter().filter(|p| !p.connected) {
-            let (a, b) = if r.node < p.peer {
-                (r.node.as_str(), p.peer.as_str())
-            } else {
-                (p.peer.as_str(), r.node.as_str())
-            };
+            let (a, b) = ordered_pair(&r.node, &p.peer);
             let state = if standalone(r, &p.peer) {
-                "StandAlone"
+                STANDALONE
             } else {
                 p.message.as_str()
             };
-            let split_brain = r.observed(&p.peer).is_some_and(|seen| seen.split_brain);
-            let Some(link) = (match links.iter().position(|l| l.a == a && l.b == b) {
-                Some(i) => links.get_mut(i),
-                None => {
-                    links.push(BrokenLink {
-                        a,
-                        b,
-                        ends: Vec::new(),
-                        split_brain: false,
-                    });
-                    links.last_mut()
-                }
-            }) else {
-                continue;
-            };
+            let link = links.entry((a, b)).or_insert_with(|| BrokenLink {
+                a,
+                b,
+                ends: Vec::new(),
+                split_brain: false,
+            });
             link.ends.push((r.node.as_str(), state));
-            link.split_brain |= split_brain;
+            link.split_brain |= r.observed(&p.peer).is_some_and(|seen| seen.split_brain);
         }
     }
-    for link in &mut links {
-        link.ends
-            .sort_by_key(|(node, state)| (*state != "StandAlone", *node));
-    }
-    links.sort_by(|x, y| (x.a, x.b).cmp(&(y.a, y.b)));
     links
+        .into_values()
+        .map(|mut link| {
+            link.ends
+                .sort_by_key(|(node, state)| (*state != STANDALONE, *node));
+            link
+        })
+        .collect()
+}
+
+/// The two nodes of a link in sorted order, so each pair has one key
+fn ordered_pair<'a>(x: &'a str, y: &'a str) -> (&'a str, &'a str) {
+    if x < y { (x, y) } else { (y, x) }
 }
 
 /// Mounted filesystems per node name, one Mounts call per node, each
@@ -1093,7 +1103,7 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
             );
         }
     }
-    if let Some(node) = volume.replicas.iter().find(|r| r.in_use).map(|r| &r.node)
+    if let Some(node) = volume.primary().map(|r| &r.node)
         && let Some((used, size)) = volume.usage_kib()
         && let Some(issue) = usage_issue(node, used, size)
     {
@@ -1187,7 +1197,7 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
         for (peer, seen) in peers {
             if let Some(oos) = seen.out_of_sync_kib() {
                 let established = established_per_kernel(r, peer, seen);
-                let peer_is_primary = volume.replicas.iter().any(|p| &p.node == peer && p.in_use);
+                let peer_is_primary = volume.primary().is_some_and(|p| &p.node == peer);
                 if !established {
                     let progress = seen
                         .sync
@@ -1313,7 +1323,7 @@ fn standalone_remedies(
     let exec = |node: &str, drbdadm: &str| drbdadm_on(satellites, kubectl, node, drbdadm);
     let target = |peer: &str| drbdadm_target(volume, peer);
     let replica = |node: &str| volume.replicas.iter().find(|r| r.node == node);
-    let primary = volume.replicas.iter().find(|r| r.in_use);
+    let primary = volume.primary();
     let oos = |from: &Replica, to: &str| from.observed(to).and_then(|p| p.oos_kib).unwrap_or(0);
     // `node` holds exactly the Primary's data
     let in_sync_with = |primary: &Replica, node: &str| {
@@ -1363,7 +1373,7 @@ fn standalone_remedies(
         let standalone_ends: Vec<&str> = link
             .ends
             .iter()
-            .filter(|(_, state)| *state == "StandAlone")
+            .filter(|(_, state)| *state == STANDALONE)
             .map(|(node, _)| *node)
             .collect();
         let other = |node: &str| if node == a { b } else { a };
@@ -1406,7 +1416,7 @@ fn stale_bit_remedies(
     satellites: &HashMap<String, SatellitePod>,
     kubectl: &str,
 ) -> Vec<Remedy> {
-    let Some(primary) = volume.replicas.iter().find(|r| r.in_use) else {
+    let Some(primary) = volume.primary() else {
         return Vec::new();
     };
     let target = |peer: &str| drbdadm_target(volume, peer);
@@ -1432,10 +1442,8 @@ fn stale_bit_remedies(
             via_primary.push(peer);
         } else if peer == primary.node {
             via_primary.push(holder);
-        } else if holder < peer {
-            between_secondaries.push((holder, peer));
         } else {
-            between_secondaries.push((peer, holder));
+            between_secondaries.push(ordered_pair(holder, peer));
         }
     }
     via_primary.sort_unstable();
@@ -1587,14 +1595,7 @@ mod tests {
                 resource("bc2", false, disk, &[("bc1", true, "Established")]),
             ]);
             let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
-            assert_eq!(
-                issues,
-                [Issue {
-                    severity: Severity::Warning,
-                    text: text.to_string()
-                }],
-                "{disk}"
-            );
+            assert_eq!(issues, [Issue::warning(text)], "{disk}");
         }
 
         // No disk_state at all is unknown too
@@ -1752,11 +1753,8 @@ mod tests {
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         assert!(volume_issues(&volume).is_empty());
         volume.replicas[0].drbd = Some(DrbdObserved {
-            fs_size_kib: None,
-            fs_used_kib: None,
-            io_suspended: None,
             size_kib: Some(6 * 1024 * 1024),
-            peers: HashMap::new(),
+            ..Default::default()
         });
         let issues = volume_issues(&volume);
         assert_eq!(issues.len(), 1);
@@ -1785,8 +1783,7 @@ mod tests {
             size_kib: Some(11 * gib + 8),
             fs_size_kib: Some(10 * gib),
             fs_used_kib: Some(9 * gib),
-            io_suspended: None,
-            peers: HashMap::new(),
+            ..Default::default()
         });
         let issues = volume_issues(&volume);
         assert_eq!(issues.len(), 1);
@@ -1854,10 +1851,8 @@ mod tests {
         let gib = 1024 * 1024;
         let with_fs = |fs: u64, device: u64| DrbdObserved {
             fs_size_kib: Some(fs),
-            fs_used_kib: None,
-            io_suspended: None,
             size_kib: Some(device),
-            peers: HashMap::new(),
+            ..Default::default()
         };
         // Healthy overheads measured on real volumes
         for (fs, device) in [
@@ -1888,20 +1883,9 @@ mod tests {
         )]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         let observed = |oos, ap| DrbdObserved {
-            fs_size_kib: None,
-            fs_used_kib: None,
-            io_suspended: None,
             size_kib: Some(11 * 1024 * 1024 + 8),
-            peers: HashMap::from([(
-                "bc2".to_string(),
-                PeerObserved {
-                    cs: Some("Established".to_string()),
-                    oos_kib: Some(oos),
-                    ap_in_flight_kib: Some(ap),
-                    sync: None,
-                    split_brain: false,
-                },
-            )]),
+            peers: HashMap::from([("bc2".to_string(), established_peer(oos, ap))]),
+            ..Default::default()
         };
         volume.replicas[0].drbd = Some(observed(0, 0));
         assert!(volume_issues(&volume).is_empty());
@@ -1912,6 +1896,16 @@ mod tests {
         assert!(issues.iter().all(|i| i.severity == Severity::Error));
         assert!(issues[0].text.contains("out of sync"));
         assert!(issues[1].text.contains("underflowed"));
+    }
+
+    /// What debugfs shows for an Established link
+    fn established_peer(oos_kib: u64, ap_in_flight_kib: u64) -> PeerObserved {
+        PeerObserved {
+            cs: Some("Established".to_string()),
+            oos_kib: Some(oos_kib),
+            ap_in_flight_kib: Some(ap_in_flight_kib),
+            ..Default::default()
+        }
     }
 
     /// The bc aftermath: Primary bc1, bits bc1↔bc2 and bc4→bc2
@@ -1926,25 +1920,12 @@ mod tests {
         ]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         let seen = |oos: &[(&str, u64)]| DrbdObserved {
-            fs_size_kib: None,
-            fs_used_kib: None,
-            io_suspended: None,
             size_kib: Some(11 * 1024 * 1024 + 8),
             peers: oos
                 .iter()
-                .map(|(peer, oos)| {
-                    (
-                        peer.to_string(),
-                        PeerObserved {
-                            cs: Some("Established".to_string()),
-                            oos_kib: Some(*oos),
-                            ap_in_flight_kib: Some(0),
-                            sync: None,
-                            split_brain: false,
-                        },
-                    )
-                })
+                .map(|(peer, oos)| (peer.to_string(), established_peer(*oos, 0)))
                 .collect(),
+            ..Default::default()
         };
         volume.replicas[0].drbd = Some(seen(&[("bc2", 924), ("bc4", 0)]));
         volume.replicas[1].drbd = Some(seen(&[("bc1", 924), ("bc4", 0)]));

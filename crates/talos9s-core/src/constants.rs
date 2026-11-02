@@ -50,6 +50,10 @@ pub const SYN_SENT_WARN: usize = 50;
 /// A pod Pending for less than this is being scheduled or pulled, not stuck
 pub const POD_PENDING_GRACE_SECS: i64 = 120;
 
+/// Upper bound for one Kubernetes API request made through `kube_list`;
+/// kube-rs otherwise waits minutes on a dead API server
+pub const K8S_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Memory in use (percent) that is a warning / critical. One source for the
 /// dashboard's colors and the diagnostics verdicts, so they never disagree.
 pub const MEMORY_WARN_PERCENT: f64 = 80.0;
