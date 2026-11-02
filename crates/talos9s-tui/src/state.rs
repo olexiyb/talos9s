@@ -102,6 +102,10 @@ pub struct WorkloadsSettings {
     pub show_healthy: Option<bool>,
     /// Rows in namespace sections (`S`)
     pub by_namespace: Option<bool>,
+    /// The pod list instead of the workloads (`P`)
+    pub pods: Option<bool>,
+    /// The pod list's sort (`PodSort` name)
+    pub pod_sort: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -742,6 +742,139 @@ pub fn list_rows<'a>(
     rows
 }
 
+/// How the pod list (`P`) is sorted (`1`-`5`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PodSort {
+    /// Worst first: failing, degraded or not ready, pending, then healthy
+    #[default]
+    Health,
+    Name,
+    Node,
+    /// Most restarts first
+    Restarts,
+    /// Newest first
+    Age,
+}
+
+impl PodSort {
+    pub const ALL: [PodSort; 5] = [
+        PodSort::Health,
+        PodSort::Name,
+        PodSort::Node,
+        PodSort::Restarts,
+        PodSort::Age,
+    ];
+
+    /// Its name in the state file
+    pub fn name(&self) -> &'static str {
+        match self {
+            PodSort::Health => "Health",
+            PodSort::Name => "Name",
+            PodSort::Node => "Node",
+            PodSort::Restarts => "Restarts",
+            PodSort::Age => "Age",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.name() == name)
+    }
+}
+
+/// A pod's health for the pod list: its issue, else not ready counts as
+/// degraded (a finished pod is fine)
+pub fn pod_health(pod: &PodFacts, now: i64) -> WorkloadHealth {
+    match pod.issue(now) {
+        Some(issue) => issue.severity(),
+        None if !pod.ready && pod.phase.as_deref() != Some("Succeeded") => WorkloadHealth::Degraded,
+        None => WorkloadHealth::Healthy,
+    }
+}
+
+/// Who runs a pod, short: `deploy/api`, `sts/db`, `ds/cilium`, else its
+/// owner reference (`Job/backup-29`, `Node/bc1` for a static pod), or `-`
+pub fn pod_owner(pod: &PodFacts, rs_owners: Option<&ReplicaSetOwners>) -> String {
+    match pod_workload(pod, rs_owners) {
+        PodWorkload::Known(kind, name) => {
+            let short = match kind {
+                WorkloadKind::Deployment => "deploy",
+                WorkloadKind::StatefulSet => "sts",
+                WorkloadKind::DaemonSet => "ds",
+            };
+            format!("{short}/{name}")
+        }
+        PodWorkload::UnknownDeployment | PodWorkload::None => pod
+            .owner
+            .as_ref()
+            .map_or_else(|| "-".to_string(), |(kind, name)| format!("{kind}/{name}")),
+    }
+}
+
+/// The rows of the pod list (`P`): every pod in `pods`, healthy ones only
+/// with `show_healthy`, filtered on namespace, name, node and owner, sorted
+/// by `sort` (within namespace sections with `by_namespace`)
+pub fn pod_rows<'a>(
+    pods: &'a [PodFacts],
+    rs_owners: Option<&ReplicaSetOwners>,
+    options: &ListOptions,
+    sort: PodSort,
+    now: i64,
+) -> Vec<ListRow<'a>> {
+    let needle = options
+        .filter
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .map(str::to_lowercase);
+    let mut found: Vec<(&PodFacts, WorkloadHealth)> = pods
+        .iter()
+        .map(|p| (p, pod_health(p, now)))
+        .filter(|(p, health)| {
+            (options.show_healthy || *health != WorkloadHealth::Healthy)
+                && needle.as_deref().is_none_or(|n| {
+                    let hit = |s: &str| s.to_lowercase().contains(n);
+                    hit(&p.namespace)
+                        || hit(&p.name)
+                        || p.node.as_deref().is_some_and(hit)
+                        || hit(&pod_owner(p, rs_owners))
+                })
+        })
+        .collect();
+    found.sort_by(|(a, ha), (b, hb)| {
+        let by_name = || {
+            a.namespace
+                .cmp(&b.namespace)
+                .then_with(|| a.name.cmp(&b.name))
+        };
+        let key = match sort {
+            PodSort::Health => ha.cmp(hb),
+            PodSort::Name => std::cmp::Ordering::Equal,
+            PodSort::Node => a.node.cmp(&b.node),
+            PodSort::Restarts => b.restarts().cmp(&a.restarts()),
+            // Undated last
+            PodSort::Age => b
+                .created
+                .unwrap_or(i64::MIN)
+                .cmp(&a.created.unwrap_or(i64::MIN)),
+        };
+        let key = if options.by_namespace {
+            a.namespace.cmp(&b.namespace).then(key)
+        } else {
+            key
+        };
+        key.then_with(by_name)
+    });
+    let mut rows = Vec::new();
+    let mut section: Option<&'a str> = None;
+    for (pod, _) in found {
+        if options.by_namespace && section != Some(pod.namespace.as_str()) {
+            section = Some(pod.namespace.as_str());
+            rows.push(ListRow::Namespace(pod.namespace.as_str()));
+        }
+        rows.push(ListRow::Member(pod));
+    }
+    rows
+}
+
 /// Counts for the summary line
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Summary {
@@ -1187,6 +1320,80 @@ mod tests {
         let expanded = ["db-1".to_string()].into_iter().collect();
         let rows = focus_rows(Some(&w), &[&a, &b], &expanded);
         assert_eq!(names(&rows), ["db", "  db-0", "  db-1", "    pg"]);
+    }
+
+    #[test]
+    fn pod_list_sorts_filters_and_sections() {
+        let mut crashing = PodFacts {
+            name: "api-1".into(),
+            namespace: "web".into(),
+            ..owned("StatefulSet", "api", Some("bc2"), false)
+        };
+        crashing.containers[0].waiting_reason = Some("CrashLoopBackOff".into());
+        crashing.containers[0].restarts = 3;
+        let job = PodFacts {
+            name: "backup-29".into(),
+            phase: Some("Succeeded".into()),
+            ready: false,
+            created: Some(NOW - 60),
+            ..owned("Job", "backup", Some("bc1"), false)
+        };
+        let healthy = PodFacts {
+            name: "db-0".into(),
+            ..owned("StatefulSet", "db", Some("bc3"), true)
+        };
+        let pods = vec![healthy, job, crashing];
+        let names = |rows: Vec<ListRow>| names(&rows);
+        // Problems only by default; a finished Job pod is fine
+        assert_eq!(
+            names(pod_rows(
+                &pods,
+                None,
+                &ListOptions::default(),
+                PodSort::Health,
+                NOW
+            )),
+            ["  api-1"]
+        );
+        let all = ListOptions {
+            show_healthy: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            names(pod_rows(&pods, None, &all, PodSort::Health, NOW)),
+            ["  api-1", "  backup-29", "  db-0"]
+        );
+        assert_eq!(
+            names(pod_rows(&pods, None, &all, PodSort::Node, NOW))[0],
+            "  backup-29"
+        );
+        assert_eq!(
+            names(pod_rows(&pods, None, &all, PodSort::Restarts, NOW))[0],
+            "  api-1"
+        );
+        assert_eq!(
+            names(pod_rows(&pods, None, &all, PodSort::Age, NOW))[0],
+            "  backup-29"
+        );
+        // Filter on the owner; sections per namespace
+        let owner = ListOptions {
+            filter: Some("job/".into()),
+            ..all
+        };
+        assert_eq!(
+            names(pod_rows(&pods, None, &owner, PodSort::Health, NOW)),
+            ["  backup-29"]
+        );
+        let sections = ListOptions {
+            by_namespace: true,
+            ..all
+        };
+        assert_eq!(
+            names(pod_rows(&pods, None, &sections, PodSort::Health, NOW)),
+            ["# apps", "  backup-29", "  db-0", "# web", "  api-1"]
+        );
+        assert_eq!(pod_owner(&pods[0], None), "sts/db");
+        assert_eq!(pod_owner(&pods[1], None), "Job/backup");
     }
 
     #[test]

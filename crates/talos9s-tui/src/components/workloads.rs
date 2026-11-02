@@ -35,8 +35,8 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use talos9s_core::workloads::{
-    ContainerFacts, EventFacts, ListOptions, ListRow, PodFacts, PodNodes, PodWorkload, ProblemPod,
-    ReplicaSetOwners, Summary, WorkloadHealth, WorkloadInfo, WorkloadKey, WorkloadKind,
+    ContainerFacts, EventFacts, ListOptions, ListRow, PodFacts, PodNodes, PodSort, PodWorkload,
+    ProblemPod, ReplicaSetOwners, Summary, WorkloadHealth, WorkloadInfo, WorkloadKey, WorkloadKind,
     classify_workload, focus_rows, latest_event, place_pods, pod_commands, pod_workload,
     workload_command, workload_pods,
 };
@@ -61,6 +61,10 @@ pub struct WorkloadsSettings {
     pub show_healthy: bool,
     /// Namespace sections (`S`)
     pub by_namespace: bool,
+    /// The pod list instead of the workloads (`P`)
+    pub pods: bool,
+    /// The pod list's sort (`1`-`5`)
+    pub pod_sort: PodSort,
 }
 
 /// Identity of a row, to keep it selected when a refresh moves it
@@ -313,6 +317,9 @@ pub struct WorkloadHealthComponent {
     auto_refresh: bool,
     /// The focused view's logs wrap (`w`), for the next one
     log_wrap: bool,
+    /// Every pod in one list (`P`), sorted by `pod_sort` (`1`-`5`)
+    pod_mode: bool,
+    pod_sort: PodSort,
 
     /// The focused view (Enter): one workload, its pods and their logs
     focus: Option<Focus>,
@@ -350,6 +357,8 @@ impl WorkloadHealthComponent {
             auto_refresh: true,
             focus: None,
             log_wrap: false,
+            pod_mode: false,
+            pod_sort: PodSort::default(),
         }
     }
 
@@ -357,6 +366,8 @@ impl WorkloadHealthComponent {
         WorkloadsSettings {
             show_healthy: self.options.show_healthy,
             by_namespace: self.options.by_namespace,
+            pods: self.pod_mode,
+            pod_sort: self.pod_sort,
         }
     }
 
@@ -373,6 +384,8 @@ impl WorkloadHealthComponent {
     pub fn set_settings(&mut self, settings: WorkloadsSettings) {
         self.options.show_healthy = settings.show_healthy;
         self.options.by_namespace = settings.by_namespace;
+        self.pod_mode = settings.pods;
+        self.pod_sort = settings.pod_sort;
     }
 
     /// Access loaded data immutably
@@ -686,6 +699,15 @@ impl WorkloadHealthComponent {
     fn list_rows(&self) -> Vec<ListRow<'_>> {
         self.data().map_or_else(Vec::new, |d| {
             let Some(focus) = &self.focus else {
+                if self.pod_mode {
+                    return talos9s_core::workloads::pod_rows(
+                        d.all_pods.as_deref().unwrap_or_default(),
+                        d.rs_owners.as_ref(),
+                        &self.options,
+                        self.pod_sort,
+                        chrono::Utc::now().timestamp(),
+                    );
+                }
                 return talos9s_core::workloads::list_rows(&d.workloads, &d.pods, &self.options);
             };
             let all = d.all_pods.as_deref().unwrap_or_default();
@@ -955,7 +977,118 @@ impl WorkloadHealthComponent {
         }
     }
 
+    /// A row of the pod list (`P`)
+    fn pod_table_row(&self, row: &ListRow, now: i64) -> Row<'static> {
+        let dim = Style::default().dim();
+        match row {
+            ListRow::Member(pod) => {
+                let (status, color) = Self::pod_status(pod, now);
+                let (ready, total) = pod.containers_ready();
+                let rs = self.data().and_then(|d| d.rs_owners.as_ref());
+                let age = pod.created.map_or_else(
+                    || "-".to_string(),
+                    |c| talos9s_core::format_secs_human((now - c).unsigned_abs()),
+                );
+                let restarts = pod.restarts();
+                Row::new(vec![
+                    Cell::from("●").style(Style::default().fg(color)),
+                    Cell::from(pod.namespace.clone()).style(dim),
+                    Cell::from(pod.name.clone()),
+                    Cell::from(format!("{ready}/{total}")),
+                    Cell::from(pod.node.clone().unwrap_or_else(|| "-".to_string())),
+                    Cell::from(status).style(if pod.issue(now).is_some() {
+                        Style::default().fg(color)
+                    } else {
+                        dim
+                    }),
+                    Cell::from(restarts.to_string()).style(if restarts > 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        dim
+                    }),
+                    Cell::from(age).style(dim),
+                    Cell::from(talos9s_core::workloads::pod_owner(pod, rs)).style(dim),
+                ])
+            }
+            ListRow::Namespace(ns) => Row::new(vec![
+                Cell::from(""),
+                Cell::from(ns.to_string()).style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            _ => Row::new(Vec::<Cell>::new()),
+        }
+    }
+
+    /// The pod list (`P`): one row per pod, the sorted column marked
+    fn draw_pod_list(&mut self, frame: &mut Frame, area: Rect) {
+        let now = chrono::Utc::now().timestamp();
+        let rows = self.list_rows();
+        let selectable = Self::selectable(&rows);
+        let table_rows: Vec<Row> = rows.iter().map(|r| self.pod_table_row(r, now)).collect();
+        let namespace_width = rows
+            .iter()
+            .filter_map(|r| match r {
+                ListRow::Member(pod) => Some(pod.namespace.chars().count()),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(9)
+            .clamp(9, 20);
+        let widths = [
+            Constraint::Length(1),
+            Constraint::Length(talos9s_core::convert::to_u16(namespace_width)),
+            Constraint::Fill(3),
+            Constraint::Length(5),
+            Constraint::Length(8),
+            Constraint::Fill(2),
+            // `RESTARTS▼`
+            Constraint::Length(9),
+            Constraint::Length(6),
+            Constraint::Fill(2),
+        ];
+        // `1`-`5` sort by these; the sorted one is marked
+        let sorted = |label: &str, by: PodSort| {
+            if self.pod_sort == by {
+                Cell::from(format!("{label}▼")).style(Style::default().fg(Color::Cyan))
+            } else {
+                Cell::from(label.to_string())
+            }
+        };
+        let header = Row::new(vec![
+            Cell::from(""),
+            Cell::from("NAMESPACE"),
+            sorted("NAME", PodSort::Name),
+            Cell::from("READY"),
+            sorted("NODE", PodSort::Node),
+            sorted("STATE", PodSort::Health),
+            sorted("RESTARTS", PodSort::Restarts),
+            sorted("AGE", PodSort::Age),
+            Cell::from("OWNER"),
+        ])
+        .style(Style::default().add_modifier(Modifier::DIM))
+        .bottom_margin(1);
+        let row_count = table_rows.len();
+        self.table_state
+            .select(selectable.get(self.selected).copied());
+        let table = Table::new(table_rows, widths)
+            .header(header)
+            .row_highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            );
+        frame.render_stateful_widget(table, area, &mut self.table_state);
+        self.rows =
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
+    }
+
     fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
+        if self.pod_mode && self.focus.is_none() {
+            return self.draw_pod_list(frame, area);
+        }
         let rows = self.list_rows();
         let selectable = Self::selectable(&rows);
         let table_rows: Vec<Row> = rows.iter().map(|r| self.table_row(r)).collect();
@@ -1188,7 +1321,13 @@ impl WorkloadHealthComponent {
                 Some(key) if listed(key) => (Some(key.clone()), None),
                 _ => (None, Some((pod.namespace.clone(), pod.name.clone()))),
             },
+            // From the pod list: the pod alone, its containers listed
+            ListRow::Member(pod) => (None, Some((pod.namespace.clone(), pod.name.clone()))),
             _ => return,
+        };
+        let expanded: HashSet<String> = match &pod {
+            Some((_, name)) if workload.is_none() => [name.clone()].into_iter().collect(),
+            _ => HashSet::new(),
         };
         let id = row_id(row);
         let mut logs = LogPane::default();
@@ -1196,7 +1335,7 @@ impl WorkloadHealthComponent {
         self.focus = Some(Focus {
             workload,
             pod,
-            expanded: HashSet::new(),
+            expanded,
             logs,
             back: (self.selected, self.selected_id.clone()),
         });
@@ -1488,26 +1627,33 @@ impl WorkloadHealthComponent {
             }
         };
         // No `<j/k>` or `<r>`: they move and refresh in every view, and the
-        // line must fit 85 columns
-        Line::from(vec![
-            Span::styled("</>", crate::ui_ext::KEY),
+        // line must fit 85 columns; the pod list's sort takes `<y>`'s place
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
+        let mut spans = vec![
+            key("</>"),
             Span::raw(" filter  "),
-            Span::styled("<A>", crate::ui_ext::KEY),
-            Span::raw(" healthy:"),
+            key("<A>"),
+            Span::raw(" all:"),
             on_off(self.options.show_healthy),
             Span::raw(" "),
-            Span::styled("<S>", crate::ui_ext::KEY),
+            key("<S>"),
             Span::raw(" ns:"),
             on_off(self.options.by_namespace),
             Span::raw(" "),
-            Span::styled("<Enter>", crate::ui_ext::KEY),
-            Span::raw(" pods+logs  "),
-            Span::styled("<y>", crate::ui_ext::KEY),
-            Span::raw(" copy  "),
-            Span::styled("<a>", crate::ui_ext::KEY),
-            Span::raw(" auto:"),
-            on_off(self.auto_refresh),
-        ])
+            key("<P>"),
+            Span::raw(" pods:"),
+            on_off(self.pod_mode),
+            Span::raw(" "),
+            key("<Enter>"),
+            Span::raw(" logs  "),
+        ];
+        if self.pod_mode {
+            spans.extend([key("<1-5>"), Span::raw(" sort ")]);
+        } else {
+            spans.extend([key("<y>"), Span::raw(" copy  ")]);
+        }
+        spans.extend([key("<a>"), Span::raw(" auto:"), on_off(self.auto_refresh)]);
+        Line::from(spans)
     }
 
     fn handle_filter_key(&mut self, key: KeyEvent) {
@@ -1582,6 +1728,19 @@ impl Component for WorkloadHealthComponent {
             KeyCode::Char('A') => {
                 self.options.show_healthy = !self.options.show_healthy;
                 self.options_changed();
+                Ok(None)
+            }
+            KeyCode::Char('P') => {
+                self.pod_mode = !self.pod_mode;
+                self.options_changed();
+                Ok(None)
+            }
+            KeyCode::Char(c @ '1'..='5') if self.pod_mode => {
+                let i = usize::from(u8::try_from(c).unwrap_or(b'1') - b'1');
+                if let Some(&sort) = PodSort::ALL.get(i) {
+                    self.pod_sort = sort;
+                    self.options_changed();
+                }
                 Ok(None)
             }
             KeyCode::Char('S') => {
@@ -1864,6 +2023,52 @@ mod tests {
         assert!(width(&c) <= 85, "{}", width(&c));
         // Nothing read yet: nothing to open
         assert!(press(&mut c, KeyCode::Char('v')).is_none());
+    }
+
+    /// `P` lists every pod, `1`-`5` sort it, Enter opens a pod with its
+    /// containers; the key line fits in both modes
+    #[test]
+    fn p_lists_pods() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        let pod = |name: &str, restarts| PodFacts {
+            namespace: "apps".into(),
+            name: name.into(),
+            phase: Some("Running".into()),
+            ready: true,
+            containers: vec![ContainerFacts {
+                name: "app".into(),
+                ready: true,
+                restarts,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        if let Some(d) = c.state.data_mut() {
+            d.all_pods = Some(vec![pod("a", 0), pod("b", 7)]);
+        }
+        assert!(c.key_hints_line().width() <= 85);
+        press(&mut c, KeyCode::Char('P'));
+        assert!(
+            c.key_hints_line().width() <= 85,
+            "{}",
+            c.key_hints_line().width()
+        );
+        // Healthy pods only with `A`
+        assert!(c.list_rows().is_empty());
+        press(&mut c, KeyCode::Char('A'));
+        press(&mut c, KeyCode::Char('4'));
+        let first = |c: &WorkloadHealthComponent| match c.list_rows().first() {
+            Some(ListRow::Member(p)) => p.name.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(first(&c), "b", "most restarts first");
+        assert_eq!(c.settings().pod_sort, PodSort::Restarts);
+        press(&mut c, KeyCode::Enter);
+        assert_eq!(c.list_rows().len(), 2, "the pod and its container");
+        press(&mut c, KeyCode::Esc);
+        assert!(c.focus.is_none());
+        assert_eq!(first(&c), "b");
     }
 
     /// Typing filters live; Esc drops a kept filter before leaving the view

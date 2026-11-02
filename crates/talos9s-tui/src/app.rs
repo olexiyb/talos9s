@@ -664,6 +664,13 @@ impl App {
         self.settings.workloads = workloads::WorkloadsSettings {
             show_healthy: state.workloads.show_healthy.unwrap_or(false),
             by_namespace: state.workloads.by_namespace.unwrap_or(false),
+            pods: state.workloads.pods.unwrap_or(false),
+            pod_sort: state
+                .workloads
+                .pod_sort
+                .as_deref()
+                .and_then(talos9s_core::workloads::PodSort::from_name)
+                .unwrap_or_default(),
         };
         let item = by_name(state.view.as_deref());
         self.update = state.update.clone();
@@ -736,6 +743,8 @@ impl App {
             workloads: crate::state::WorkloadsSettings {
                 show_healthy: Some(workloads.show_healthy),
                 by_namespace: Some(workloads.by_namespace),
+                pods: Some(workloads.pods),
+                pod_sort: Some(workloads.pod_sort.name().to_string()),
             },
             update: self.update.clone(),
         }
@@ -2281,6 +2290,8 @@ mod tests {
         let settings = workloads::WorkloadsSettings {
             show_healthy: true,
             by_namespace: true,
+            pods: true,
+            pod_sort: talos9s_core::workloads::PodSort::Age,
         };
         w.set_settings(settings);
         app.show_component(
@@ -2293,6 +2304,8 @@ mod tests {
         let saved = app.current_state().workloads;
         assert_eq!(saved.show_healthy, Some(true));
         assert_eq!(saved.by_namespace, Some(true));
+        assert_eq!(saved.pods, Some(true));
+        assert_eq!(saved.pod_sort.as_deref(), Some("Age"));
     }
 
     /// `w` in the logs is remembered for the next logs view and run, one
