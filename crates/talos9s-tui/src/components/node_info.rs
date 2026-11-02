@@ -39,15 +39,38 @@ pub enum NodeInfoTab {
     Extensions,
 }
 
-impl NodeInfoTab {
-    const ALL: [NodeInfoTab; 3] = [
-        NodeInfoTab::Containers,
-        NodeInfoTab::Config,
-        NodeInfoTab::Extensions,
-    ];
+impl NodeInfoTab {}
 
-    fn index(&self) -> usize {
-        Self::ALL.iter().position(|t| t == self).unwrap_or(0)
+/// One value per tab, indexed by the tab
+#[derive(Debug, Clone, Default)]
+pub struct PerTab<T>([T; 3]);
+
+impl<T> PerTab<T> {
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+}
+
+impl<T> std::ops::Index<NodeInfoTab> for PerTab<T> {
+    type Output = T;
+    fn index(&self, tab: NodeInfoTab) -> &T {
+        let [containers, config, extensions] = &self.0;
+        match tab {
+            NodeInfoTab::Containers => containers,
+            NodeInfoTab::Config => config,
+            NodeInfoTab::Extensions => extensions,
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<NodeInfoTab> for PerTab<T> {
+    fn index_mut(&mut self, tab: NodeInfoTab) -> &mut T {
+        let [containers, config, extensions] = &mut self.0;
+        match tab {
+            NodeInfoTab::Containers => containers,
+            NodeInfoTab::Config => config,
+            NodeInfoTab::Extensions => extensions,
+        }
     }
 }
 
@@ -94,7 +117,7 @@ pub struct NodeInfoData {
     pub extensions: Vec<ExtensionInfo>,
     pub extensions_error: Option<String>,
     /// Per tab: a load of its source finished, with data or an error
-    pub attempted: [bool; 3],
+    pub attempted: PerTab<bool>,
 }
 
 /// Masked configs fetched this session, by context and node. A large config
@@ -154,7 +177,9 @@ pub fn config_outline(lines: &[ConfigLine]) -> Vec<ConfigSection> {
     }
     for (n, &(start, end)) in documents.iter().enumerate() {
         let top = |key: &str| {
-            texts[start..end]
+            texts
+                .get(start..end)
+                .unwrap_or_default()
                 .iter()
                 .find(|t| key_of(t).is_some_and(|(indent, k)| indent == 0 && k == key))
                 .and_then(|t| value_of(t, key))
@@ -178,7 +203,9 @@ pub fn config_outline(lines: &[ConfigLine]) -> Vec<ConfigSection> {
         let children = |from: usize, to: usize, indent: usize| -> Vec<(usize, &str)> {
             (from..to)
                 .filter_map(|i| {
-                    key_of(texts[i])
+                    texts
+                        .get(i)
+                        .and_then(|t| key_of(t))
                         .filter(|(ind, _)| *ind == indent)
                         .map(|(_, k)| (i, k))
                 })
@@ -195,7 +222,7 @@ pub fn config_outline(lines: &[ConfigLine]) -> Vec<ConfigSection> {
         };
         let first_indent = |from: usize, to: usize| {
             (from..to).find_map(|i| {
-                let t = texts[i];
+                let t = texts.get(i)?;
                 let trimmed = t.trim_start();
                 (!trimmed.is_empty() && !trimmed.starts_with('#')).then(|| t.len() - trimmed.len())
             })
@@ -228,15 +255,17 @@ pub fn config_outline(lines: &[ConfigLine]) -> Vec<ConfigSection> {
                 };
                 let items: Vec<usize> = (s2 + 1..e2)
                     .filter(|&i| {
-                        let t = texts[i];
-                        t.len() - t.trim_start().len() == item_indent
-                            && t.trim_start().starts_with("- ")
+                        texts.get(i).is_some_and(|t| {
+                            t.len() - t.trim_start().len() == item_indent
+                                && t.trim_start().starts_with("- ")
+                        })
                     })
                     .collect();
                 for (j, &item) in items.iter().enumerate() {
                     let item_end = items.get(j + 1).copied().unwrap_or(e2);
                     let name = (item..item_end).find_map(|i| {
-                        value_of(texts[i], "name").or_else(|| value_of(texts[i], "path"))
+                        let t = texts.get(i)?;
+                        value_of(t, "name").or_else(|| value_of(t, "path"))
                     });
                     if let Some(name) = name {
                         out.push(ConfigSection {
@@ -304,8 +333,9 @@ pub fn mask_config(text: &str) -> (Vec<ConfigLine>, usize) {
     let finish = |lines: &mut Vec<ConfigLine>, hiding: Option<(usize, usize, usize)>| {
         if let Some((_, at, count)) = hiding
             && count > 0
+            && let Some(placeholder) = lines.get_mut(at)
         {
-            lines[at]
+            placeholder
                 .text
                 .push_str(&format!("  ({count} lines hidden)"));
         }
@@ -404,9 +434,9 @@ fn mask_inline(line: &str, hidden: &mut usize) -> ConfigLine {
 fn string_end(b: &[u8], start: usize) -> usize {
     let mut i = start + 1;
     while i < b.len() {
-        match b[i] {
-            b'\\' => i += 2,
-            b'"' => return i + 1,
+        match b.get(i) {
+            Some(b'\\') => i += 2,
+            Some(b'"') => return i + 1,
             _ => i += 1,
         }
     }
@@ -419,19 +449,19 @@ fn string_end(b: &[u8], start: usize) -> usize {
 fn mask_flow_values(line: &str) -> (String, usize) {
     let b = line.as_bytes();
     let skip_ws = |mut i: usize| {
-        while i < b.len() && b[i].is_ascii_whitespace() {
+        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
             i += 1;
         }
         i
     };
     let (mut out, mut last, mut count, mut i) = (String::new(), 0, 0, 0);
     while i < b.len() {
-        match b[i] {
-            b'"' => {
+        match b.get(i) {
+            Some(b'"') => {
                 i = string_end(b, i);
                 continue;
             }
-            b'{' | b',' => {}
+            Some(b'{' | b',') => {}
             _ => {
                 i += 1;
                 continue;
@@ -444,7 +474,10 @@ fn mask_flow_values(line: &str) -> (String, usize) {
             (&line[k + 1..end.saturating_sub(1).max(k + 1)], end)
         } else {
             let end = (k..b.len())
-                .find(|&j| !(b[j].is_ascii_alphanumeric() || b"_-.".contains(&b[j])))
+                .find(|&j| {
+                    b.get(j)
+                        .is_none_or(|c| !(c.is_ascii_alphanumeric() || b"_-.".contains(c)))
+                })
                 .unwrap_or(b.len());
             (&line[k..end], end)
         };
@@ -455,16 +488,16 @@ fn mask_flow_values(line: &str) -> (String, usize) {
         }
         let start = skip_ws(sep + 1);
         // Nested objects and lists are scanned in turn
-        if start >= b.len() || matches!(b[start], b'{' | b'[') {
+        if matches!(b.get(start), None | Some(b'{' | b'[')) {
             i = start;
             continue;
         }
-        let quoted = b[start] == b'"';
+        let quoted = b.get(start) == Some(&b'"');
         let end = if quoted {
             string_end(b, start)
         } else {
             let end = (start..b.len())
-                .find(|&j| b",}]".contains(&b[j]))
+                .find(|&j| b.get(j).is_some_and(|c| b",}]".contains(c)))
                 .unwrap_or(b.len());
             start + line[start..end].trim_end().len()
         };
@@ -536,7 +569,7 @@ pub struct NodeInfoComponent {
     reload_all: bool,
     auto_refresh: bool,
     /// Per tab
-    queries: [Query; 3],
+    queries: PerTab<Query>,
     containers_table: TableState,
     extensions_table: TableState,
     /// First config line shown, and the first column
@@ -618,7 +651,7 @@ impl NodeInfoComponent {
             && let Some(data) = self.state.data_mut()
         {
             data.config = Some(config);
-            data.attempted[NodeInfoTab::Config.index()] = true;
+            data.attempted[NodeInfoTab::Config] = true;
             // The containers and extensions still load
             self.reload_all = false;
         }
@@ -665,10 +698,14 @@ impl NodeInfoComponent {
             match tab {
                 NodeInfoTab::Containers => true,
                 NodeInfoTab::Config => {
-                    self.reload_all || data.config_error.is_some() || !data.attempted[1]
+                    self.reload_all
+                        || data.config_error.is_some()
+                        || !data.attempted[NodeInfoTab::Config]
                 }
                 NodeInfoTab::Extensions => {
-                    self.reload_all || data.extensions_error.is_some() || !data.attempted[2]
+                    self.reload_all
+                        || data.extensions_error.is_some()
+                        || !data.attempted[NodeInfoTab::Extensions]
                 }
             }
         };
@@ -735,7 +772,7 @@ impl NodeInfoComponent {
                 (Err(e), Err(_)) => data.containers_error = Some(e),
             }
             sort_containers(&mut data.containers);
-            data.attempted[NodeInfoTab::Containers.index()] = true;
+            data.attempted[NodeInfoTab::Containers] = true;
         }
         if let Some(config) = config {
             match config {
@@ -756,7 +793,7 @@ impl NodeInfoComponent {
                 }
                 Err(e) => data.config_error = Some(e.to_string()),
             }
-            data.attempted[NodeInfoTab::Config.index()] = true;
+            data.attempted[NodeInfoTab::Config] = true;
         }
         if let Some(extensions) = extensions {
             match extensions {
@@ -766,7 +803,7 @@ impl NodeInfoComponent {
                 }
                 Err(e) => data.extensions_error = Some(e.to_string()),
             }
-            data.attempted[NodeInfoTab::Extensions.index()] = true;
+            data.attempted[NodeInfoTab::Extensions] = true;
         }
         if want_config && want_extensions {
             self.reload_all = false;
@@ -782,18 +819,16 @@ impl NodeInfoComponent {
     }
 
     fn query(&self) -> &Query {
-        &self.queries[self.tab.index()]
+        &self.queries[self.tab]
     }
 
     fn query_mut(&mut self) -> &mut Query {
-        &mut self.queries[self.tab.index()]
+        &mut self.queries[self.tab]
     }
 
     /// Containers shown: pod sandboxes left out, filtered
     fn visible_containers(&self) -> Vec<&ContainerInfo> {
-        let filter = self.queries[NodeInfoTab::Containers.index()]
-            .text
-            .to_lowercase();
+        let filter = self.queries[NodeInfoTab::Containers].text.to_lowercase();
         self.data()
             .map(|d| {
                 d.containers
@@ -811,9 +846,7 @@ impl NodeInfoComponent {
     }
 
     fn visible_extensions(&self) -> Vec<&ExtensionInfo> {
-        let filter = self.queries[NodeInfoTab::Extensions.index()]
-            .text
-            .to_lowercase();
+        let filter = self.queries[NodeInfoTab::Extensions].text.to_lowercase();
         self.data()
             .map(|d| {
                 d.extensions
@@ -905,9 +938,7 @@ impl NodeInfoComponent {
 
     /// Scroll the config to the next (or previous) line matching the search
     fn search_config(&mut self, forward: bool) {
-        let needle = self.queries[NodeInfoTab::Config.index()]
-            .text
-            .to_lowercase();
+        let needle = self.queries[NodeInfoTab::Config].text.to_lowercase();
         if needle.is_empty() {
             return;
         }
@@ -924,7 +955,11 @@ impl NodeInfoComponent {
                     (self.config_scroll + n - i % n) % n
                 }
             })
-            .find(|&i| lines[i].text.to_lowercase().contains(&needle));
+            .find(|&i| {
+                lines
+                    .get(i)
+                    .is_some_and(|l| l.text.to_lowercase().contains(&needle))
+            });
         if let Some(i) = found {
             if let Some(section) = self.section_for_line(i) {
                 self.config_section = section;
@@ -1004,7 +1039,7 @@ impl NodeInfoComponent {
             })
             .collect();
         let mut title = format!(" Containers: {running} running, {exited} exited ");
-        let filter = &self.queries[NodeInfoTab::Containers.index()].text;
+        let filter = &self.queries[NodeInfoTab::Containers].text;
         if !filter.is_empty() {
             title.push_str(&format!("· {} match \"{filter}\" ", visible.len()));
         }
@@ -1110,7 +1145,10 @@ impl NodeInfoComponent {
             .map(|(i, section)| {
                 // Size, not lines: a manifest can be one enormous line
                 let count = short_size(
-                    config.lines[section.start..section.end]
+                    config
+                        .lines
+                        .get(section.start..section.end)
+                        .unwrap_or_default()
                         .iter()
                         .map(|l| l.text.len() + 1)
                         .sum(),
@@ -1151,11 +1189,12 @@ impl NodeInfoComponent {
             .config_scroll
             .clamp(start, end.saturating_sub(1).max(start));
         let total = config.lines.len();
-        let needle = self.queries[NodeInfoTab::Config.index()]
-            .text
-            .to_lowercase();
+        let needle = self.queries[NodeInfoTab::Config].text.to_lowercase();
         let number_width = total.to_string().len();
-        let lines: Vec<Line> = config.lines[..end]
+        let lines: Vec<Line> = config
+            .lines
+            .get(..end)
+            .unwrap_or_default()
             .iter()
             .enumerate()
             .skip(scroll)
@@ -1197,7 +1236,8 @@ impl NodeInfoComponent {
             .selected()
             .and_then(|i| visible.get(i))
             .map(|e| (*e).clone());
-        let chunks = Layout::vertical([Constraint::Min(5), Constraint::Length(5)]).split(area);
+        let [table_area, detail_area] =
+            Layout::vertical([Constraint::Min(5), Constraint::Length(5)]).areas(area);
         let header = Row::new(
             ["NAME", "VERSION", "AUTHOR"]
                 .map(|h| Cell::from(h).style(Style::default().add_modifier(Modifier::BOLD))),
@@ -1228,8 +1268,8 @@ impl NodeInfoComponent {
                 .title_style(Style::default().fg(Color::Cyan)),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        frame.render_stateful_widget(table, chunks[0], &mut self.extensions_table);
-        self.content_area = chunks[0];
+        frame.render_stateful_widget(table, table_area, &mut self.extensions_table);
+        self.content_area = table_area;
 
         let detail = match selected {
             Some(e) => vec![
@@ -1250,7 +1290,7 @@ impl NodeInfoComponent {
                         .title(" Details ")
                         .title_style(Style::default().fg(Color::Yellow)),
                 ),
-            chunks[1],
+            detail_area,
         );
     }
 
@@ -1545,7 +1585,7 @@ impl Component for NodeInfoComponent {
         }
         // Containers, Machine config and Extensions are separate menu
         // entries: no tab bar, and the window title names the node
-        let attempted = self.data().is_some_and(|d| d.attempted[self.tab.index()]);
+        let attempted = self.data().is_some_and(|d| d.attempted[self.tab]);
         if !attempted {
             let what = match self.tab {
                 NodeInfoTab::Containers => "containers",

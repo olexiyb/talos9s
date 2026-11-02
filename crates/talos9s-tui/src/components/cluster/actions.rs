@@ -152,7 +152,7 @@ impl ClusterComponent {
                         format!("{} control plane", cluster.name)
                     }
                     NodeListItem::WorkersHeader(_) => format!("{} workers", cluster.name),
-                    _ => names[0].clone(),
+                    _ => names.first().cloned().unwrap_or_default(),
                 };
                 Action::ShowWorkloads(title, Some(names))
             }
@@ -244,10 +244,14 @@ impl ClusterComponent {
 
     /// Navigate to the currently selected menu item (1-based index, 0 = on node)
     pub(super) fn navigate_to_selected_menu(&self) -> Result<Option<Action>> {
-        if self.selected_menu_item == 0 || self.selected_menu_item > NavMenuItem::ALL.len() {
+        let Some(item) = self
+            .selected_menu_item
+            .checked_sub(1)
+            .and_then(|i| NavMenuItem::ALL.get(i))
+        else {
             return Ok(None);
-        }
-        Ok(self.action_for(NavMenuItem::ALL[self.selected_menu_item - 1]))
+        };
+        Ok(self.action_for(*item))
     }
 
     /// The view a menu item shows for the current selection. Views of a

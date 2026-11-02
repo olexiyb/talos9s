@@ -54,8 +54,10 @@ pub async fn prefer_reachable_addresses(
     for (member, ip) in members.iter_mut().zip(reachable) {
         match ip {
             Some(ip) => {
-                if let Some(pos) = member.addresses.iter().position(|a| *a == ip) {
-                    member.addresses[..=pos].rotate_right(1);
+                if let Some(pos) = member.addresses.iter().position(|a| *a == ip)
+                    && let Some(head) = member.addresses.get_mut(..=pos)
+                {
+                    head.rotate_right(1);
                 }
             }
             None => tracing::warn!(

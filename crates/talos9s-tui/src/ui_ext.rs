@@ -76,7 +76,10 @@ pub fn spinner() -> &'static str {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    FRAMES[(millis / 100 % FRAMES.len() as u128) as usize]
+    FRAMES
+        .get((millis / 100 % FRAMES.len() as u128) as usize)
+        .copied()
+        .unwrap_or(FRAMES[0])
 }
 
 /// A window title with a "refreshing" marker appended while `refreshing`

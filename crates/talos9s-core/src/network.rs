@@ -171,15 +171,21 @@ pub fn route_table_lines(content: &str) -> Vec<String> {
 
     for line in route_lines {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 8 {
-            let iface = parts[0];
-            let destination = route_hex_to_ip(parts[1]);
-            let gateway = route_hex_to_ip(parts[2]);
-            let flags = parts[3];
-            let _refcnt = parts[4];
-            let _use = parts[5];
-            let metric = parts[6];
-            let mask = route_hex_to_ip(parts[7]);
+        if let [
+            iface,
+            destination,
+            gateway,
+            flags,
+            _refcnt,
+            _use,
+            metric,
+            mask,
+            ..,
+        ] = parts[..]
+        {
+            let destination = route_hex_to_ip(destination);
+            let gateway = route_hex_to_ip(gateway);
+            let mask = route_hex_to_ip(mask);
 
             // Decode flags
             let flag_val = u32::from_str_radix(flags, 16).unwrap_or(0);

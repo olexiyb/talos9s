@@ -293,11 +293,11 @@ impl StorageComponent {
 
     /// Draw the disks view
     fn draw_disks_view(&mut self, frame: &mut Frame, area: Rect) {
-        let chunks = Layout::vertical([
+        let [table_area, detail_area] = Layout::vertical([
             Constraint::Min(5),    // Table
             Constraint::Length(5), // Detail section
         ])
-        .split(area);
+        .areas(area);
 
         // Draw disk table
         let header = Row::new(vec![
@@ -359,9 +359,9 @@ impl StorageComponent {
             )))
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        frame.render_stateful_widget(table, chunks[0], &mut self.disk_table_state);
+        frame.render_stateful_widget(table, table_area, &mut self.disk_table_state);
         self.rows = crate::ui_ext::RowHits::new(
-            chunks[0],
+            table_area,
             true,
             1,
             self.disk_table_state.offset(),
@@ -369,7 +369,7 @@ impl StorageComponent {
         );
 
         // Draw detail section
-        self.draw_disk_detail(frame, chunks[1]);
+        self.draw_disk_detail(frame, detail_area);
     }
 
     /// Draw disk detail section
@@ -428,11 +428,11 @@ impl StorageComponent {
 
     /// Draw the volumes view
     fn draw_volumes_view(&mut self, frame: &mut Frame, area: Rect) {
-        let chunks = Layout::vertical([
+        let [table_area, detail_area] = Layout::vertical([
             Constraint::Min(5),    // Table
             Constraint::Length(5), // Detail section
         ])
-        .split(area);
+        .areas(area);
 
         // Draw volume table
         let header = Row::new(vec![
@@ -493,9 +493,9 @@ impl StorageComponent {
             )))
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        frame.render_stateful_widget(table, chunks[0], &mut self.volume_table_state);
+        frame.render_stateful_widget(table, table_area, &mut self.volume_table_state);
         self.rows = crate::ui_ext::RowHits::new(
-            chunks[0],
+            table_area,
             true,
             1,
             self.volume_table_state.offset(),
@@ -503,7 +503,7 @@ impl StorageComponent {
         );
 
         // Draw detail section
-        self.draw_volume_detail(frame, chunks[1]);
+        self.draw_volume_detail(frame, detail_area);
     }
 
     /// Draw volume detail section

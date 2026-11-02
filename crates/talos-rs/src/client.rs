@@ -243,9 +243,9 @@ impl TalosClient {
         // When nodes is empty or same as endpoints, skip the header
         if !self.nodes.is_empty() {
             let valid_nodes = self.filtered_target_nodes();
-            if valid_nodes.len() == 1 {
+            if let [node] = valid_nodes.as_slice() {
                 // Single node: use "node" header (direct proxy, no aggregation)
-                if let Ok(value) = valid_nodes[0].parse() {
+                if let Ok(value) = node.parse() {
                     request.metadata_mut().insert("node", value);
                 }
             } else if !valid_nodes.is_empty() {

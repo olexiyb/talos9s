@@ -1189,14 +1189,20 @@ impl Component for LifecycleComponent {
             .unwrap_or_default();
 
         // Layout
-        let chunks = Layout::vertical([
+        let [
+            header_area,
+            versions_area,
+            checks_area,
+            nodes_area,
+            alerts_area,
+        ] = Layout::vertical([
             Constraint::Length(1),  // Header
             Constraint::Length(10), // Versions section
             Constraint::Length(7),  // Pre-Operation Checks (4 lines + border + padding)
             Constraint::Min(6),     // Node table
             Constraint::Length(6),  // Alerts (3 lines + border)
         ])
-        .split(area);
+        .areas(area);
 
         // Header
         let header = Paragraph::new(format!(" Lifecycle │ {context_name}")).style(
@@ -1204,19 +1210,19 @@ impl Component for LifecycleComponent {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
-        frame.render_widget(header, chunks[0]);
+        frame.render_widget(header, header_area);
 
         // Versions section
-        self.draw_versions_section(frame, chunks[1]);
+        self.draw_versions_section(frame, versions_area);
 
         // Pre-Operation Checks
-        self.draw_pre_op_checks(frame, chunks[2]);
+        self.draw_pre_op_checks(frame, checks_area);
 
         // Node table
-        self.draw_node_table(frame, chunks[3]);
+        self.draw_node_table(frame, nodes_area);
 
         // Alerts
-        self.draw_alerts_section(frame, chunks[4]);
+        self.draw_alerts_section(frame, alerts_area);
 
         Ok(())
     }

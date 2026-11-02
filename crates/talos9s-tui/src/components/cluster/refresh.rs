@@ -115,7 +115,13 @@ impl ClusterComponent {
         let interval =
             std::time::Duration::from_secs(talos9s_core::constants::refresh_intervals::SLOW);
         for (idx, cluster) in self.clusters.iter().enumerate() {
-            if self.background_refresh[idx].is_some() || cluster.context.is_none() {
+            let (Some(running), Some(&refreshed_at)) = (
+                self.background_refresh.get(idx),
+                self.cluster_refreshed_at.get(idx),
+            ) else {
+                continue;
+            };
+            if running.is_some() || cluster.context.is_none() {
                 continue;
             }
             // The first load always runs, and so does reconnecting a cluster
@@ -125,7 +131,7 @@ impl ClusterComponent {
             // only what the tree needs. Looking at a cluster whose last
             // refresh was the light one refreshes it right away.
             let detailed = idx == self.active_cluster;
-            let due = match self.cluster_refreshed_at[idx] {
+            let due = match refreshed_at {
                 None => true,
                 Some(at) if cluster.client.is_none() => at.elapsed() >= RECONNECT_INTERVAL,
                 Some(at) => {
@@ -143,7 +149,10 @@ impl ClusterComponent {
             if let Some(slot) = self.refresh_progress.get_mut(idx) {
                 *slot = Some(progress_rx);
             }
-            self.background_refresh[idx] = Some(tokio::spawn(async move {
+            let Some(slot) = self.background_refresh.get_mut(idx) else {
+                continue;
+            };
+            *slot = Some(tokio::spawn(async move {
                 let refresh = cluster.refresh(config_path.as_deref(), detailed, Some(&progress));
                 match tokio::time::timeout(CLUSTER_REFRESH_TIMEOUT, refresh).await {
                     Ok(()) => cluster,
@@ -159,9 +168,14 @@ impl ClusterComponent {
     pub fn apply_background_refresh(&mut self) {
         let mut changed = false;
         for idx in 0..self.background_refresh.len() {
-            let running = self.background_refresh[idx]
-                .as_ref()
-                .is_some_and(|handle| !handle.is_finished());
+            let Some(running) = self
+                .background_refresh
+                .get(idx)
+                .and_then(Option::as_ref)
+                .map(|handle| !handle.is_finished())
+            else {
+                continue;
+            };
             // A running refresh: show what it has so far
             if running {
                 let snapshot = self
@@ -175,18 +189,17 @@ impl ClusterComponent {
                 }
                 continue;
             }
-            if self.background_refresh[idx].is_none() {
-                continue;
-            }
             if let Some(slot) = self.refresh_progress.get_mut(idx) {
                 *slot = None;
             }
-            let Some(handle) = self.background_refresh[idx].take() else {
+            let Some(handle) = self.background_refresh.get_mut(idx).and_then(Option::take) else {
                 continue;
             };
             // Always mark the attempt so a failing refresh is retried on
             // schedule, not on every tick.
-            self.cluster_refreshed_at[idx] = Some(std::time::Instant::now());
+            if let Some(at) = self.cluster_refreshed_at.get_mut(idx) {
+                *at = Some(std::time::Instant::now());
+            }
 
             let fresh = match crate::task::poll_finished(handle) {
                 Some(Ok(fresh)) => fresh,

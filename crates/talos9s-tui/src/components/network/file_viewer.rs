@@ -18,7 +18,7 @@ impl NetworkStatsComponent {
     pub fn file_viewer_needs_fetch(&self) -> bool {
         self.file_viewer
             .as_ref()
-            .map(|v| v.lines.len() == 1 && v.lines[0] == "Loading...")
+            .map(|v| matches!(v.lines.as_slice(), [only] if only == "Loading..."))
             .unwrap_or(false)
     }
 

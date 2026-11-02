@@ -508,7 +508,9 @@ impl SecurityComponent {
 
             // Skip headers (need to re-borrow data)
             if let Some(d) = self.data()
-                && d.items[new_sel].kind != SecurityItemKind::SectionHeader
+                && d.items
+                    .get(new_sel)
+                    .is_some_and(|item| item.kind != SecurityItemKind::SectionHeader)
             {
                 break;
             }
@@ -537,7 +539,9 @@ impl SecurityComponent {
 
             // Skip headers (need to re-borrow data)
             if let Some(d) = self.data()
-                && d.items[new_sel].kind != SecurityItemKind::SectionHeader
+                && d.items
+                    .get(new_sel)
+                    .is_some_and(|item| item.kind != SecurityItemKind::SectionHeader)
             {
                 break;
             }
@@ -663,12 +667,12 @@ impl Component for SecurityComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let chunks = Layout::vertical([
+        let [header_area, content_area, details_area] = Layout::vertical([
             Constraint::Length(3), // Header
             Constraint::Fill(1),   // Content
             Constraint::Length(5), // Details
         ])
-        .split(area);
+        .areas(area);
 
         // Get data for rendering (default values if not yet loaded)
         let (context_display, cert_summary) = if let Some(data) = self.data() {
@@ -697,27 +701,27 @@ impl Component for SecurityComponent {
                 .borders(Borders::BOTTOM)
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
-        frame.render_widget(header, chunks[0]);
+        frame.render_widget(header, header_area);
 
         // Content - render items or error/loading state
         self.lines = Default::default();
         if self.state.is_loading() && !self.state.has_data() {
             let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, chunks[1]);
+            frame.render_widget(loading, content_area);
         } else if let Some(error) = self.state.error() {
             if !self.state.has_data() {
                 let error_msg = Paragraph::new(format!("Error: {error}"))
                     .style(Style::default().fg(Color::Red));
-                frame.render_widget(error_msg, chunks[1]);
+                frame.render_widget(error_msg, content_area);
             } else {
-                self.render_items(frame, chunks[1]);
+                self.render_items(frame, content_area);
             }
         } else {
-            self.render_items(frame, chunks[1]);
+            self.render_items(frame, content_area);
         }
 
         // Details panel
-        self.render_details(frame, chunks[2]);
+        self.render_details(frame, details_area);
 
         Ok(())
     }

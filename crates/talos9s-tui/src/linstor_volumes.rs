@@ -661,7 +661,9 @@ pub async fn observe_drbd(
         let Some(content) = content else {
             continue;
         };
-        let replica = &mut volumes[vi].replicas[ri];
+        let Some(replica) = volumes.get_mut(vi).and_then(|v| v.replicas.get_mut(ri)) else {
+            continue;
+        };
         let observed = replica.drbd.get_or_insert_with(DrbdObserved::default);
         match probe {
             // 512-byte sectors
@@ -857,8 +859,11 @@ impl BrokenLink<'_> {
 
     fn text(&self) -> String {
         let (a, b) = (self.a, self.b);
-        let states = if self.ends.iter().all(|(_, s)| *s == self.ends[0].1) {
-            self.ends[0].1.to_string()
+        let first = self.ends.first().map(|(_, s)| *s);
+        let states = if let Some(first) = first
+            && self.ends.iter().all(|(_, s)| *s == first)
+        {
+            first.to_string()
         } else {
             self.ends
                 .iter()
@@ -892,8 +897,8 @@ fn broken_links(volume: &LinstorVolume) -> Vec<BrokenLink<'_>> {
                 p.message.as_str()
             };
             let split_brain = r.observed(&p.peer).is_some_and(|seen| seen.split_brain);
-            let index = match links.iter().position(|l| l.a == a && l.b == b) {
-                Some(i) => i,
+            let Some(link) = (match links.iter().position(|l| l.a == a && l.b == b) {
+                Some(i) => links.get_mut(i),
                 None => {
                     links.push(BrokenLink {
                         a,
@@ -901,10 +906,11 @@ fn broken_links(volume: &LinstorVolume) -> Vec<BrokenLink<'_>> {
                         ends: Vec::new(),
                         split_brain: false,
                     });
-                    links.len() - 1
+                    links.last_mut()
                 }
+            }) else {
+                continue;
             };
-            let link = &mut links[index];
             link.ends.push((r.node.as_str(), state));
             link.split_brain |= split_brain;
         }
@@ -1029,9 +1035,9 @@ fn parse_proc_drbd(content: &str) -> ProcDrbd {
         .filter(|l| l.contains("cs:"))
         .and_then(|l| l.split_whitespace().last())
         .filter(|f| f.len() == 6)
-        .and_then(|f| match f.as_bytes()[0] {
-            b's' => Some(true),
-            b'r' => Some(false),
+        .and_then(|f| match f.as_bytes().first() {
+            Some(b's') => Some(true),
+            Some(b'r') => Some(false),
             _ => None,
         });
     ProcDrbd {
@@ -1478,7 +1484,7 @@ pub fn format_kib(kib: u64) -> String {
     if unit == 0 {
         format!("{kib} KiB")
     } else {
-        format!("{value:.1} {}", UNITS[unit])
+        format!("{value:.1} {}", UNITS.get(unit).unwrap_or(&"PiB"))
     }
 }
 

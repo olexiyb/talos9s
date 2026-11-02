@@ -309,23 +309,22 @@ impl ClusterComponent {
 
         // Split inner area: nodes list at top, nav menu at bottom
         let menu_height = NavMenuItem::ALL.len() as u16 + 1; // +1 for separator
-        let pane_layout = Layout::vertical([
+        let [list, menu] = Layout::vertical([
             Constraint::Min(3),              // Nodes list
             Constraint::Length(menu_height), // Navigation menu (vertical)
         ])
-        .split(inner);
+        .areas(inner);
 
         if self.clusters.is_empty() {
             let msg = Paragraph::new(Line::from(Span::styled(
                 "  No clusters found",
                 Style::default().dim(),
             )));
-            frame.render_widget(msg, pane_layout[0]);
+            frame.render_widget(msg, list);
         } else {
-            let (lines, row_items) = self.node_list_lines(Some(pane_layout[0].width));
+            let (lines, row_items) = self.node_list_lines(Some(list.width));
             // A tree taller than the pane scrolls, keeping the selected row
             // in view; the rows the mouse can hit are the visible ones
-            let list = pane_layout[0];
             let height = list.height as usize;
             let total = lines.len();
             // (`lines` borrow the tree, so the scroll is stored after drawing)
@@ -353,10 +352,10 @@ impl ClusterComponent {
             hits.node_list = list;
             hits.node_rows = row_items.into_iter().skip(scroll).take(height).collect();
         }
-        self.hits.borrow_mut().menu = pane_layout[1];
+        self.hits.borrow_mut().menu = menu;
 
         // Draw navigation menu
-        self.draw_nav_menu(frame, pane_layout[1]);
+        self.draw_nav_menu(frame, menu);
     }
 
     /// Draw the navigation menu (vertical list)

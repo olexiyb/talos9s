@@ -195,7 +195,10 @@ impl WizardData {
 
     /// Get current spinner character
     pub fn spinner(&self) -> &'static str {
-        SPINNER_FRAMES[self.spinner_frame % SPINNER_FRAMES.len()]
+        SPINNER_FRAMES
+            .get(self.spinner_frame % SPINNER_FRAMES.len())
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Advance spinner to next frame
@@ -363,8 +366,8 @@ impl WizardComponent {
     fn confirm_disk_selection(&mut self) {
         let disks = self.data.installable_disks();
         let idx = self.selected_disk_index();
-        if idx < disks.len() {
-            self.data.selected_disk = Some(disks[idx].clone());
+        if let Some(&disk) = disks.get(idx) {
+            self.data.selected_disk = Some(disk.clone());
             self.transition(WizardState::ConfigureCluster);
         }
     }
@@ -571,31 +574,37 @@ impl WizardComponent {
 
     /// Draw disk selection state
     fn draw_select_disk(&mut self, frame: &mut Frame, area: Rect) {
-        let layout = Layout::vertical([
+        let [
+            instructions_area,
+            table_area,
+            details_area,
+            warning_area,
+            help_area,
+        ] = Layout::vertical([
             Constraint::Length(2), // Instructions
             Constraint::Min(8),    // Disk table
             Constraint::Length(8), // Disk details
             Constraint::Length(2), // Warning
             Constraint::Length(1), // Help
         ])
-        .split(area);
+        .areas(area);
 
         // Instructions
         let instructions = Paragraph::new(Line::from(vec![Span::raw(
             "  Select the disk where Talos will be installed:",
         )]))
         .style(Style::default().fg(Color::White));
-        frame.render_widget(instructions, layout[0]);
+        frame.render_widget(instructions, instructions_area);
 
         // Disk table or volume table
         if self.viewing_volumes {
-            self.draw_volume_table(frame, layout[1]);
+            self.draw_volume_table(frame, table_area);
         } else {
-            self.draw_disk_table(frame, layout[1]);
+            self.draw_disk_table(frame, table_area);
         }
 
         // Disk details
-        self.draw_disk_details(frame, layout[2]);
+        self.draw_disk_details(frame, details_area);
 
         // Warning
         let warning = Paragraph::new(Line::from(vec![
@@ -610,7 +619,7 @@ impl WizardComponent {
                 Style::default().fg(Color::Yellow),
             ),
         ]));
-        frame.render_widget(warning, layout[3]);
+        frame.render_widget(warning, warning_area);
 
         // Help
         let help = Line::from(vec![
@@ -630,7 +639,7 @@ impl WizardComponent {
             Span::styled(" [q] ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ]);
-        frame.render_widget(Paragraph::new(help), layout[4]);
+        frame.render_widget(Paragraph::new(help), help_area);
     }
 
     /// Draw disk table
@@ -746,8 +755,7 @@ impl WizardComponent {
         let disks = self.data.installable_disks();
         let idx = self.selected_disk_index();
 
-        let content = if idx < disks.len() {
-            let disk = disks[idx];
+        let content = if let Some(&disk) = disks.get(idx) {
             vec![
                 Line::from(vec![
                     Span::styled("  Device:    ", Style::default().fg(Color::DarkGray)),
@@ -813,7 +821,15 @@ impl WizardComponent {
 
     /// Draw configure cluster state
     fn draw_configure_cluster(&self, frame: &mut Frame, area: Rect) {
-        let layout = Layout::vertical([
+        let [
+            disk_area,
+            cluster_area,
+            endpoint_area,
+            type_area,
+            dir_area,
+            _spacer,
+            help_area,
+        ] = Layout::vertical([
             Constraint::Length(3), // Selected disk
             Constraint::Length(2), // Cluster name
             Constraint::Length(2), // K8s endpoint
@@ -822,7 +838,7 @@ impl WizardComponent {
             Constraint::Fill(1),   // Spacer
             Constraint::Length(1), // Help
         ])
-        .split(area);
+        .areas(area);
 
         // Selected disk (read-only)
         let disk_info = self
@@ -844,7 +860,7 @@ impl WizardComponent {
             Span::styled(&disk_info, Style::default().fg(Color::Green)),
             Span::styled(" ✓", Style::default().fg(Color::Green)),
         ]));
-        frame.render_widget(disk_line, layout[0]);
+        frame.render_widget(disk_line, disk_area);
 
         // Cluster name field
         let cluster_style = if self.active_field == ConfigField::ClusterName {
@@ -861,7 +877,7 @@ impl WizardComponent {
                 Span::raw("")
             },
         ]));
-        frame.render_widget(cluster_field, layout[1]);
+        frame.render_widget(cluster_field, cluster_area);
 
         // K8s endpoint field
         let endpoint_style = if self.active_field == ConfigField::K8sEndpoint {
@@ -878,7 +894,7 @@ impl WizardComponent {
                 Span::raw("")
             },
         ]));
-        frame.render_widget(endpoint_field, layout[2]);
+        frame.render_widget(endpoint_field, endpoint_area);
 
         // Node type selector
         let type_line = Paragraph::new(Line::from(vec![
@@ -906,7 +922,7 @@ impl WizardComponent {
                 Span::raw("")
             },
         ]));
-        frame.render_widget(type_line, layout[3]);
+        frame.render_widget(type_line, type_area);
 
         // Output dir field
         let dir_style = if self.active_field == ConfigField::OutputDir {
@@ -923,7 +939,7 @@ impl WizardComponent {
                 Span::raw("")
             },
         ]));
-        frame.render_widget(dir_field, layout[4]);
+        frame.render_widget(dir_field, dir_area);
 
         // Help
         let help = Line::from(vec![
@@ -936,7 +952,7 @@ impl WizardComponent {
             Span::styled(" [Esc] ", Style::default().fg(Color::Cyan)),
             Span::raw("Back"),
         ]);
-        frame.render_widget(Paragraph::new(help), layout[6]);
+        frame.render_widget(Paragraph::new(help), help_area);
     }
 
     /// Draw config ready state
@@ -1384,28 +1400,28 @@ impl Component for WizardComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let layout = Layout::vertical([
+        let [header, content] = Layout::vertical([
             Constraint::Length(1), // Header
             Constraint::Fill(1),   // Content
         ])
-        .split(area);
+        .areas(area);
 
         // Draw header
-        self.draw_header(frame, layout[0]);
+        self.draw_header(frame, header);
 
         // Draw content based on state
         match &self.state.clone() {
-            WizardState::Connecting => self.draw_connecting(frame, layout[1]),
-            WizardState::SelectDisk => self.draw_select_disk(frame, layout[1]),
-            WizardState::ConfigureCluster => self.draw_configure_cluster(frame, layout[1]),
-            WizardState::ConfigReady => self.draw_config_ready(frame, layout[1]),
-            WizardState::Applying => self.draw_applying(frame, layout[1]),
-            WizardState::WaitingReboot => self.draw_waiting_reboot(frame, layout[1]),
-            WizardState::ReadyToBootstrap => self.draw_ready_bootstrap(frame, layout[1]),
-            WizardState::Bootstrapping => self.draw_bootstrapping(frame, layout[1]),
-            WizardState::WaitingHealthy => self.draw_waiting_healthy(frame, layout[1]),
-            WizardState::Complete => self.draw_complete(frame, layout[1]),
-            WizardState::Error(msg) => self.draw_error(frame, layout[1], msg),
+            WizardState::Connecting => self.draw_connecting(frame, content),
+            WizardState::SelectDisk => self.draw_select_disk(frame, content),
+            WizardState::ConfigureCluster => self.draw_configure_cluster(frame, content),
+            WizardState::ConfigReady => self.draw_config_ready(frame, content),
+            WizardState::Applying => self.draw_applying(frame, content),
+            WizardState::WaitingReboot => self.draw_waiting_reboot(frame, content),
+            WizardState::ReadyToBootstrap => self.draw_ready_bootstrap(frame, content),
+            WizardState::Bootstrapping => self.draw_bootstrapping(frame, content),
+            WizardState::WaitingHealthy => self.draw_waiting_healthy(frame, content),
+            WizardState::Complete => self.draw_complete(frame, content),
+            WizardState::Error(msg) => self.draw_error(frame, content, msg),
         }
 
         if let Some(confirm) = self.confirming {
