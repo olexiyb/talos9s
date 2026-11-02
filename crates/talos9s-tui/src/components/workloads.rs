@@ -798,42 +798,23 @@ impl WorkloadHealthComponent {
         (restarts, None)
     }
 
-    /// Navigate to previous item
-    fn select_prev(&mut self) {
+    /// Move the selection among namespaces, or among the drilled-down
+    /// namespace's workloads and problem pods
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        use crate::ui_ext::moved;
         if self.drill_down {
             let total = self
                 .data()
                 .and_then(|d| d.namespaces.get(self.selected_namespace))
-                .map(|ns| ns.workloads.len() + ns.problem_pods.len())
-                .unwrap_or(0);
-            if total > 0 {
-                self.selected_item = self.selected_item.saturating_sub(1);
+                .map_or(0, |ns| ns.workloads.len() + ns.problem_pods.len());
+            if let Some(i) = moved(self.selected_item, total, step) {
+                self.selected_item = i;
             }
         } else {
-            let ns_count = self.data().map(|d| d.namespaces.len()).unwrap_or(0);
-            if ns_count > 0 {
-                self.selected_namespace = self.selected_namespace.saturating_sub(1);
-                self.table_state.select(Some(self.selected_namespace));
-            }
-        }
-    }
-
-    /// Navigate to next item
-    fn select_next(&mut self) {
-        if self.drill_down {
-            let total = self
-                .data()
-                .and_then(|d| d.namespaces.get(self.selected_namespace))
-                .map(|ns| ns.workloads.len() + ns.problem_pods.len())
-                .unwrap_or(0);
-            if total > 0 {
-                self.selected_item = (self.selected_item + 1).min(total - 1);
-            }
-        } else {
-            let ns_count = self.data().map(|d| d.namespaces.len()).unwrap_or(0);
-            if ns_count > 0 {
-                self.selected_namespace = (self.selected_namespace + 1).min(ns_count - 1);
-                self.table_state.select(Some(self.selected_namespace));
+            let ns_count = self.data().map_or(0, |d| d.namespaces.len());
+            if let Some(i) = moved(self.selected_namespace, ns_count, step) {
+                self.selected_namespace = i;
+                self.table_state.select(Some(i));
             }
         }
     }
@@ -1194,12 +1175,8 @@ impl Component for WorkloadHealthComponent {
                     Ok(Some(Action::Back))
                 }
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
-                Ok(None)
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_selection(step);
                 Ok(None)
             }
             KeyCode::Enter => {

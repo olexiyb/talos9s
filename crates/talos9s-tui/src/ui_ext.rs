@@ -255,6 +255,28 @@ pub enum Move {
     Next,
     First,
     Last,
+    /// Up (negative) or down by this many rows: page keys
+    By(isize),
+}
+
+/// Rows `PageUp`/`PageDown` move in lists that don't track their height
+pub const PAGE_ROWS: isize = 10;
+
+impl Move {
+    /// The move a list key means in every view: `j`/`k` and arrows,
+    /// `g`/`G` and `Home`/`End`, `PageUp`/`PageDown`
+    pub fn from_key(key: &crossterm::event::KeyEvent) -> Option<Self> {
+        use crossterm::event::KeyCode;
+        Some(match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Self::Prev,
+            KeyCode::Down | KeyCode::Char('j') => Self::Next,
+            KeyCode::Home | KeyCode::Char('g') => Self::First,
+            KeyCode::End | KeyCode::Char('G') => Self::Last,
+            KeyCode::PageUp => Self::By(-PAGE_ROWS),
+            KeyCode::PageDown => Self::By(PAGE_ROWS),
+            _ => return None,
+        })
+    }
 }
 
 /// The cursor after `step` in a list of `len`, kept inside it; `None` for
@@ -266,6 +288,7 @@ pub fn moved(cursor: usize, len: usize, step: Move) -> Option<usize> {
         Move::Next => (cursor + 1).min(last),
         Move::First => 0,
         Move::Last => last,
+        Move::By(delta) => cursor.saturating_add_signed(delta).min(last),
     })
 }
 
@@ -500,6 +523,21 @@ mod tests {
         // A list that shrank under the cursor
         assert_eq!(moved(9, 3, Move::Prev), Some(2));
         assert_eq!(moved(0, 0, Move::Next), None);
+        // Pages stop at the ends, no wrap-around
+        assert_eq!(moved(5, 30, Move::By(-PAGE_ROWS)), Some(0));
+        assert_eq!(moved(25, 30, Move::By(PAGE_ROWS)), Some(29));
+    }
+
+    #[test]
+    fn list_keys_mean_the_same_move_everywhere() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let step = |code| Move::from_key(&KeyEvent::new(code, KeyModifiers::NONE));
+        assert!(matches!(step(KeyCode::Char('j')), Some(Move::Next)));
+        assert!(matches!(step(KeyCode::Up), Some(Move::Prev)));
+        assert!(matches!(step(KeyCode::Char('G')), Some(Move::Last)));
+        assert!(matches!(step(KeyCode::Home), Some(Move::First)));
+        assert!(matches!(step(KeyCode::PageDown), Some(Move::By(PAGE_ROWS))));
+        assert!(step(KeyCode::Char('x')).is_none());
     }
 
     #[test]

@@ -758,29 +758,17 @@ impl LifecycleComponent {
         }
     }
 
-    /// Navigation: select next node
-    fn select_next(&mut self) {
-        let new_index = if let Some(data) = self.data_mut() {
-            data.node_statuses.select_next();
-            Some(data.node_statuses.selected_index())
-        } else {
-            None
-        };
-        if let Some(idx) = new_index {
-            self.table_state.select(Some(idx));
-        }
-    }
-
-    /// Navigation: select previous node
-    fn select_prev(&mut self) {
-        let new_index = if let Some(data) = self.data_mut() {
-            data.node_statuses.select_prev();
-            Some(data.node_statuses.selected_index())
-        } else {
-            None
-        };
-        if let Some(idx) = new_index {
-            self.table_state.select(Some(idx));
+    /// Move the selection in the table
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        if let Some(data) = self.state.data_mut()
+            && let Some(i) = crate::ui_ext::moved(
+                data.node_statuses.selected_index(),
+                data.node_statuses.len(),
+                step,
+            )
+        {
+            data.node_statuses.select(i);
+            self.table_state.select(Some(i));
         }
     }
 
@@ -1134,12 +1122,8 @@ impl Component for LifecycleComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
-                Ok(None)
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_selection(step);
                 Ok(None)
             }
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),

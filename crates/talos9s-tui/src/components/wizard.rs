@@ -342,23 +342,12 @@ impl WizardComponent {
         self.disk_table_state.selected().unwrap_or(0)
     }
 
-    /// Move disk selection up
-    fn select_prev_disk(&mut self) {
-        let disks = self.data.installable_disks();
-        if !disks.is_empty() {
-            let i = self.selected_disk_index();
-            let new_i = if i == 0 { disks.len() - 1 } else { i - 1 };
-            self.disk_table_state.select(Some(new_i));
-        }
-    }
-
-    /// Move disk selection down
-    fn select_next_disk(&mut self) {
-        let disks = self.data.installable_disks();
-        if !disks.is_empty() {
-            let i = self.selected_disk_index();
-            let new_i = (i + 1) % disks.len();
-            self.disk_table_state.select(Some(new_i));
+    /// Move the disk selection
+    fn move_disk_selection(&mut self, step: crate::ui_ext::Move) {
+        let len = self.data.installable_disks().len();
+        let cursor = self.selected_disk_index();
+        if let Some(i) = crate::ui_ext::moved(cursor, len, step) {
+            self.disk_table_state.select(Some(i));
         }
     }
 
@@ -375,12 +364,8 @@ impl WizardComponent {
     /// Handle key events for SelectDisk state
     fn handle_select_disk_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.select_prev_disk();
-                None
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.select_next_disk();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_disk_selection(step);
                 None
             }
             KeyCode::Enter => {

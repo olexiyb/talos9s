@@ -484,70 +484,40 @@ impl SecurityComponent {
         }
     }
 
-    /// Move selection up
-    fn select_prev(&mut self) {
-        let Some(data) = self.data() else {
+    /// Move the selection, skipping section headers; stays put when no
+    /// item lies that way
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        use crate::ui_ext::Move;
+        let Some(items) = self.data().map(|d| &d.items) else {
             return;
         };
-        if data.items.is_empty() {
-            return;
-        }
-
-        let items_len = data.items.len();
-        let mut new_sel = self.selected;
-        loop {
-            new_sel = if new_sel == 0 {
-                items_len - 1
-            } else {
-                new_sel - 1
-            };
-
-            // Skip headers (need to re-borrow data)
-            if let Some(d) = self.data()
-                && d.items
-                    .get(new_sel)
-                    .is_some_and(|item| item.kind != SecurityItemKind::SectionHeader)
-            {
-                break;
-            }
-
-            // Prevent infinite loop
-            if new_sel == self.selected {
-                break;
-            }
-        }
-        self.selected = new_sel;
-    }
-
-    /// Move selection down
-    fn select_next(&mut self) {
-        let Some(data) = self.data() else {
+        let Some(target) = crate::ui_ext::moved(self.selected, items.len(), step) else {
             return;
         };
-        if data.items.is_empty() {
-            return;
+        let is_item = |i: &usize| {
+            items
+                .get(*i)
+                .is_some_and(|item| item.kind != SecurityItemKind::SectionHeader)
+        };
+        // Past a header in the direction of travel, else back towards the cursor
+        let towards_end = match step {
+            Move::Next | Move::Last => true,
+            Move::Prev | Move::First => false,
+            Move::By(delta) => delta > 0,
+        };
+        let found = if towards_end {
+            (target..items.len())
+                .find(is_item)
+                .or_else(|| (self.selected..target).rev().find(is_item))
+        } else {
+            (0..=target)
+                .rev()
+                .find(is_item)
+                .or_else(|| (target + 1..=self.selected).find(is_item))
+        };
+        if let Some(i) = found {
+            self.selected = i;
         }
-
-        let items_len = data.items.len();
-        let mut new_sel = self.selected;
-        loop {
-            new_sel = (new_sel + 1) % items_len;
-
-            // Skip headers (need to re-borrow data)
-            if let Some(d) = self.data()
-                && d.items
-                    .get(new_sel)
-                    .is_some_and(|item| item.kind != SecurityItemKind::SectionHeader)
-            {
-                break;
-            }
-
-            // Prevent infinite loop
-            if new_sel == self.selected {
-                break;
-            }
-        }
-        self.selected = new_sel;
     }
 
     /// Get currently selected item
@@ -639,12 +609,8 @@ impl Component for SecurityComponent {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.select_prev();
-                Ok(None)
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.select_next();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_selection(step);
                 Ok(None)
             }
             _ => Ok(None),
@@ -836,6 +802,37 @@ mod tests {
 
     fn kinds(k: &[&str]) -> Vec<String> {
         k.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    #[test]
+    fn selection_skips_headers_and_stops_at_the_ends() {
+        use crate::ui_ext::Move;
+        let item = |kind| SecurityItem {
+            kind,
+            name: String::new(),
+            status: ItemStatus::Info,
+            message: String::new(),
+            details: None,
+        };
+        let mut c = SecurityComponent::new("test".into(), None);
+        c.state.set_data(SecurityData {
+            items: vec![
+                item(SecurityItemKind::SectionHeader),
+                item(SecurityItemKind::Certificate),
+                item(SecurityItemKind::SectionHeader),
+                item(SecurityItemKind::Rbac),
+            ],
+            ..Default::default()
+        });
+        c.selected = 1;
+        c.move_selection(Move::Next);
+        assert_eq!(c.selected, 3, "skips the header between");
+        c.move_selection(Move::Next);
+        assert_eq!(c.selected, 3, "stays at the end");
+        c.move_selection(Move::First);
+        assert_eq!(c.selected, 1, "the top is a header: first item below it");
+        c.move_selection(Move::Prev);
+        assert_eq!(c.selected, 1, "stays at the start");
     }
 
     #[test]

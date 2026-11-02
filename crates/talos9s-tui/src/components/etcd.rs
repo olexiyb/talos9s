@@ -786,20 +786,14 @@ impl EtcdComponent {
         Ok(())
     }
 
-    /// Navigate to previous member
-    fn select_prev(&mut self) {
-        if let Some(data) = self.state.data_mut() {
-            data.members.select_prev_no_wrap();
-            self.table_state.select(Some(data.members.selected_index()));
-        }
-        self.follow_selected_log();
-    }
-
-    /// Navigate to next member
-    fn select_next(&mut self) {
-        if let Some(data) = self.state.data_mut() {
-            data.members.select_next_no_wrap();
-            self.table_state.select(Some(data.members.selected_index()));
+    /// Move the selection in the table
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        if let Some(data) = self.state.data_mut()
+            && let Some(i) =
+                crate::ui_ext::moved(data.members.selected_index(), data.members.len(), step)
+        {
+            data.members.select(i);
+            self.table_state.select(Some(i));
         }
         self.follow_selected_log();
     }
@@ -1193,12 +1187,8 @@ impl Component for EtcdComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
-                Ok(None)
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_selection(step);
                 Ok(None)
             }
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),

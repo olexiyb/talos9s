@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 /// let mut list = SelectableList::new(vec!["a", "b", "c"]);
 ///
 /// assert_eq!(list.selected(), Some(&"a"));
-/// list.select_next();
+/// list.select(1);
 /// assert_eq!(list.selected(), Some(&"b"));
-/// list.select_prev();
-/// assert_eq!(list.selected(), Some(&"a"));
+/// list.select(7);
+/// assert_eq!(list.selected(), Some(&"c"));
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectableList<T> {
@@ -84,38 +84,6 @@ impl<T> SelectableList<T> {
         index == self.selected_index
     }
 
-    /// Move selection to the next item (wraps to start)
-    pub fn select_next(&mut self) {
-        if !self.items.is_empty() {
-            self.selected_index = (self.selected_index + 1) % self.items.len();
-        }
-    }
-
-    /// Move selection to the next item (no wrap, stops at end)
-    pub fn select_next_no_wrap(&mut self) {
-        if self.selected_index + 1 < self.items.len() {
-            self.selected_index += 1;
-        }
-    }
-
-    /// Move selection to the previous item (wraps to end)
-    pub fn select_prev(&mut self) {
-        if !self.items.is_empty() {
-            self.selected_index = if self.selected_index == 0 {
-                self.items.len() - 1
-            } else {
-                self.selected_index - 1
-            };
-        }
-    }
-
-    /// Move selection to the previous item (no wrap, stops at start)
-    pub fn select_prev_no_wrap(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-        }
-    }
-
     /// Select a specific index
     ///
     /// Clamps to valid range if index is out of bounds.
@@ -124,18 +92,6 @@ impl<T> SelectableList<T> {
             self.selected_index = 0;
         } else {
             self.selected_index = index.min(self.items.len() - 1);
-        }
-    }
-
-    /// Select the first item
-    pub fn select_first(&mut self) {
-        self.selected_index = 0;
-    }
-
-    /// Select the last item
-    pub fn select_last(&mut self) {
-        if !self.items.is_empty() {
-            self.selected_index = self.items.len() - 1;
         }
     }
 
@@ -242,46 +198,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_selectable_list_navigation() {
-        let mut list = SelectableList::new(vec!["a", "b", "c"]);
-
-        assert_eq!(list.selected_index(), 0);
-        assert_eq!(list.selected(), Some(&"a"));
-
-        list.select_next();
-        assert_eq!(list.selected_index(), 1);
-        assert_eq!(list.selected(), Some(&"b"));
-
-        list.select_next();
-        list.select_next();
-        // Should wrap to start
-        assert_eq!(list.selected_index(), 0);
-
-        list.select_prev();
-        // Should wrap to end
-        assert_eq!(list.selected_index(), 2);
-    }
-
-    #[test]
-    fn test_selectable_list_no_wrap() {
-        let mut list = SelectableList::new(vec!["a", "b", "c"]);
-
-        list.select_prev_no_wrap();
-        assert_eq!(list.selected_index(), 0); // Stays at start
-
-        list.select_last();
-        list.select_next_no_wrap();
-        assert_eq!(list.selected_index(), 2); // Stays at end
-    }
-
-    #[test]
     fn test_selectable_list_empty() {
         let mut list: SelectableList<i32> = SelectableList::empty();
 
         assert!(list.is_empty());
         assert_eq!(list.selected(), None);
 
-        list.select_next();
+        list.select(3);
         assert_eq!(list.selected_index(), 0);
 
         list.push(42);

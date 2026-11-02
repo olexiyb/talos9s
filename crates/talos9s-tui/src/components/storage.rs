@@ -235,55 +235,18 @@ impl StorageComponent {
         self.volume_table_state.selected().unwrap_or(0)
     }
 
-    /// Move selection up
-    fn select_prev(&mut self) {
-        match self.view_mode {
-            StorageViewMode::Disks => {
-                if let Some(data) = self.data()
-                    && !data.disks.is_empty()
-                {
-                    let i = self.selected_disk_index();
-                    let new_i = if i == 0 { data.disks.len() - 1 } else { i - 1 };
-                    self.disk_table_state.select(Some(new_i));
-                }
-            }
-            StorageViewMode::Partitions => {
-                if let Some(data) = self.data()
-                    && !data.volumes.is_empty()
-                {
-                    let i = self.selected_volume_index();
-                    let new_i = if i == 0 {
-                        data.volumes.len() - 1
-                    } else {
-                        i - 1
-                    };
-                    self.volume_table_state.select(Some(new_i));
-                }
-            }
-        }
-    }
-
-    /// Move selection down
-    fn select_next(&mut self) {
-        match self.view_mode {
-            StorageViewMode::Disks => {
-                if let Some(data) = self.data()
-                    && !data.disks.is_empty()
-                {
-                    let i = self.selected_disk_index();
-                    let new_i = (i + 1) % data.disks.len();
-                    self.disk_table_state.select(Some(new_i));
-                }
-            }
-            StorageViewMode::Partitions => {
-                if let Some(data) = self.data()
-                    && !data.volumes.is_empty()
-                {
-                    let i = self.selected_volume_index();
-                    let new_i = (i + 1) % data.volumes.len();
-                    self.volume_table_state.select(Some(new_i));
-                }
-            }
+    /// Move the selection in the open table
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        let len = self.data().map_or(0, |d| match self.view_mode {
+            StorageViewMode::Disks => d.disks.len(),
+            StorageViewMode::Partitions => d.volumes.len(),
+        });
+        let table = match self.view_mode {
+            StorageViewMode::Disks => &mut self.disk_table_state,
+            StorageViewMode::Partitions => &mut self.volume_table_state,
+        };
+        if let Some(i) = crate::ui_ext::moved(table.selected().unwrap_or(0), len, step) {
+            table.select(Some(i));
         }
     }
 
@@ -577,11 +540,8 @@ impl Component for StorageComponent {
             KeyCode::Esc | KeyCode::Char('q') => {
                 return Ok(Some(Action::Back));
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.select_prev();
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.select_next();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_selection(step);
             }
             KeyCode::Char('r') => {
                 return Ok(Some(Action::Refresh));
