@@ -18,3 +18,4 @@
 /*.local.xml
 # Go plugin default, not relevant to this Rust project
 /go.imports.xml
+/git_toolbox_prj.xml
