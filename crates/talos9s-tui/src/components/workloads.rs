@@ -892,15 +892,23 @@ impl WorkloadHealthComponent {
                             "Not ready".into()
                         }
                     });
-                let color = if c.ready { Color::Green } else { Color::Yellow };
+                let init = talos9s_core::pod_logs::is_init(pod, c);
+                // A finished init container is done, not "not ready"
+                let done = matches!(c.terminated, Some((0, _)));
+                let fine = c.ready || done;
+                let color = if fine { Color::Green } else { Color::Yellow };
                 Row::new(vec![
                     Cell::from("·").style(Style::default().fg(color)),
-                    Cell::from("Ctr"),
+                    Cell::from(if init { "Init" } else { "Ctr" }),
                     Cell::from(pod.namespace.clone()).style(dim),
                     Cell::from(format!("    └ {}", c.name)),
-                    Cell::from(if c.ready { "1/1" } else { "0/1" }),
+                    Cell::from(match (c.ready, done) {
+                        (true, _) => "1/1",
+                        (false, true) => "-",
+                        (false, false) => "0/1",
+                    }),
                     Cell::from(""),
-                    Cell::from(format!("{state} · restarts {}", c.restarts)).style(if c.ready {
+                    Cell::from(format!("{state} · restarts {}", c.restarts)).style(if fine {
                         dim
                     } else {
                         Style::default().fg(color)
@@ -1368,9 +1376,14 @@ impl WorkloadHealthComponent {
             Span::raw(" levels  "),
         ];
         spans.extend(search);
+        // `<p>` only where a container shown has a previous run
+        if logs.previous() || logs.has_previous() {
+            spans.extend([
+                key("<p>"),
+                Span::raw(if logs.previous() { " now  " } else { " prev  " }),
+            ]);
+        }
         spans.extend([
-            key("<p>"),
-            Span::raw(if logs.previous() { " now  " } else { " prev  " }),
             key("<w>"),
             Span::raw(" wrap  "),
             key("<y>"),
@@ -1927,9 +1940,17 @@ mod tests {
             namespace: "apps".into(),
             name: name.into(),
             owner: Some(("ReplicaSet".into(), "api-7f".into())),
+            init_containers: vec![ContainerFacts {
+                name: "migrate".into(),
+                terminated: Some((0, Some("Completed".into()))),
+                ..Default::default()
+            }],
             containers: vec![
+                // Restarted once: it has a previous run
                 ContainerFacts {
                     name: "app".into(),
+                    restarts: 1,
+                    last_terminated: Some((1, Some("Error".into()))),
                     ..Default::default()
                 },
                 ContainerFacts {
@@ -1958,10 +1979,18 @@ mod tests {
         assert!(command(&c).contains("deployment/api --all-pods"));
         press(&mut c, KeyCode::Char('j'));
         assert!(command(&c).contains("logs api-7f-a --all-containers"));
+        // Expanded: the finished init container too, which the merge skips
         press(&mut c, KeyCode::Enter);
-        assert_eq!(c.list_rows().len(), 5);
+        assert_eq!(c.list_rows().len(), 6);
+        press(&mut c, KeyCode::Char('j'));
+        assert_eq!(command(&c), "kubectl -n apps logs api-7f-a -c migrate");
+        // No previous run there: `p` does nothing and isn't offered
+        press(&mut c, KeyCode::Char('p'));
+        assert_eq!(command(&c), "kubectl -n apps logs api-7f-a -c migrate");
+        assert!(!c.key_hints_line().to_string().contains("<p>"));
         press(&mut c, KeyCode::Char('j'));
         assert_eq!(command(&c), "kubectl -n apps logs api-7f-a -c app");
+        assert!(c.key_hints_line().to_string().contains("<p>"));
         press(&mut c, KeyCode::Char('p'));
         assert_eq!(
             command(&c),

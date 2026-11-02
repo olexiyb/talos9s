@@ -137,6 +137,10 @@ impl LogPane {
         }
         self.viewer_problem = None;
         self.sources = sources;
+        // No earlier run among these: back to the current one
+        if !self.has_previous() {
+            self.previous = false;
+        }
         self.read = None;
         self.scroll = None;
         self.pending = Some(Instant::now());
@@ -144,6 +148,11 @@ impl LogPane {
 
     pub fn previous(&self) -> bool {
         self.previous
+    }
+
+    /// One of the containers shown has a previous run (`p` works)
+    pub fn has_previous(&self) -> bool {
+        self.sources.iter().any(|s| s.has_previous)
     }
 
     pub fn set_wrap(&mut self, wrap: bool) {
@@ -412,6 +421,8 @@ impl LogPane {
             }
             KeyCode::Char('n') if !self.query.is_empty() => self.jump_to_match(true),
             KeyCode::Char('N') if !self.query.is_empty() => self.jump_to_match(false),
+            // Nothing to switch to: no container shown has restarted
+            KeyCode::Char('p') if !self.previous && !self.has_previous() => return false,
             KeyCode::Char('p') => {
                 self.previous = !self.previous;
                 self.read = None;
@@ -703,6 +714,7 @@ mod tests {
             pod: pod.into(),
             container: "app".into(),
             label: pod.into(),
+            has_previous: true,
         }
     }
 

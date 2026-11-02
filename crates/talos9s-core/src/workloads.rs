@@ -607,7 +607,7 @@ pub enum ListRow<'a> {
 }
 
 /// The rows of the focused view (Enter on a workload): the workload, each
-/// of its pods, and the log containers of the `expanded` pods under them.
+/// of its pods, and every container of the `expanded` pods under them.
 /// Without a workload (a pod of none), only `pods`.
 pub fn focus_rows<'a>(
     workload: Option<&'a WorkloadInfo>,
@@ -619,7 +619,7 @@ pub fn focus_rows<'a>(
         rows.push(ListRow::Member(pod));
         if expanded.contains(&pod.name) {
             rows.extend(
-                crate::pod_logs::log_containers(pod)
+                crate::pod_logs::all_containers(pod)
                     .into_iter()
                     .map(|container| ListRow::Container { pod, container }),
             );

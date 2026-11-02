@@ -14,6 +14,9 @@ pub struct LogSource {
     pub container: String,
     /// Shown before each line when several sources are merged
     pub label: String,
+    /// The container has a previous run to read (`--previous`): the kubelet
+    /// keeps the last terminated one only
+    pub has_previous: bool,
 }
 
 /// A merged line
@@ -36,17 +39,33 @@ pub fn log_containers(pod: &PodFacts) -> Vec<&ContainerFacts> {
         .collect()
 }
 
+/// Every container of `pod`, init containers first: the rows under an
+/// expanded pod
+pub fn all_containers(pod: &PodFacts) -> Vec<&ContainerFacts> {
+    pod.init_containers.iter().chain(&pod.containers).collect()
+}
+
+/// Whether `container` is one of `pod`'s init containers
+pub fn is_init(pod: &PodFacts, container: &ContainerFacts) -> bool {
+    pod.init_containers
+        .iter()
+        .any(|c| std::ptr::eq(c, container))
+}
+
 /// The sources for `pods` (all their log containers), or for one container
-/// of a single pod. Labels name what tells the sources apart: the pod, the
-/// container, or both.
+/// of a single pod, a finished init container too. Labels name what tells
+/// the sources apart: the pod, the container, or both.
 pub fn log_sources(pods: &[&PodFacts], container: Option<&str>) -> Vec<LogSource> {
     let several_pods = pods.len() > 1;
     let mut sources = Vec::new();
     for pod in pods {
-        let containers: Vec<&ContainerFacts> = log_containers(pod)
-            .into_iter()
-            .filter(|c| container.is_none_or(|name| c.name == name))
-            .collect();
+        let containers: Vec<&ContainerFacts> = match container {
+            Some(name) => all_containers(pod)
+                .into_iter()
+                .filter(|c| c.name == name)
+                .collect(),
+            None => log_containers(pod),
+        };
         let several_containers = containers.len() > 1;
         for c in containers {
             let label = match (several_pods, several_containers) {
@@ -60,6 +79,7 @@ pub fn log_sources(pods: &[&PodFacts], container: Option<&str>) -> Vec<LogSource
                 pod: pod.name.clone(),
                 container: c.name.clone(),
                 label,
+                has_previous: c.last_terminated.is_some(),
             });
         }
     }
@@ -148,6 +168,15 @@ mod tests {
         let mut stuck = pod("web-c", &["app"]);
         stuck.init_containers[0].terminated = Some((1, Some("Error".into())));
         assert_eq!(labels(log_sources(&[&stuck], None)), ["init", "app"]);
+        // A finished init container: left out of the merge, read on its own
+        assert_eq!(labels(log_sources(&[&a], Some("init"))), [""]);
+        assert!(is_init(&a, &a.init_containers[0]));
+        assert!(!is_init(&a, &a.containers[0]));
+        // A previous run only where a container terminated before
+        assert!(!log_sources(&[&a], None).iter().any(|s| s.has_previous));
+        let mut restarted = pod("web-d", &["app"]);
+        restarted.containers[0].last_terminated = Some((1, Some("Error".into())));
+        assert!(log_sources(&[&restarted], None)[0].has_previous);
         assert_eq!(tail_per_source(4, 1000), 250);
         assert_eq!(tail_per_source(40, 1000), 50);
     }
