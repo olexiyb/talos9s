@@ -1569,17 +1569,13 @@ impl Component for ProcessesComponent {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         // Check loading state
-        if self.state.is_loading() && !self.state.has_data() {
-            let loading =
-                Paragraph::new("Loading processes...").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, area);
-            return Ok(());
-        }
-
-        if let Some(err) = self.state.error() {
-            let error =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error, area);
+        if crate::ui_ext::draw_load_gate(
+            frame,
+            area,
+            self.state.is_loading() && !self.state.has_data(),
+            self.state.error(),
+            "Loading processes...",
+        ) {
             return Ok(());
         }
 

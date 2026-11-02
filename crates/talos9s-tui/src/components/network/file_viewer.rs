@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 use talos_rs::TalosError;
 
@@ -168,10 +168,7 @@ impl NetworkStatsComponent {
         // Create a centered overlay
         let overlay_width = (area.width * 4 / 5).min(100);
         let overlay_height = (area.height * 3 / 4).min(30);
-        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-        // Clear the area
-        frame.render_widget(Clear, overlay_area);
+        let overlay_area = crate::ui_ext::open_dialog(frame, area, overlay_width, overlay_height);
 
         // Draw the block
         let block = Block::default()

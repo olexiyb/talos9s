@@ -25,7 +25,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Paragraph, Row, Table, TableState},
 };
 use std::time::{Duration, Instant};
 use talos_rs::TalosClient;
@@ -729,11 +729,7 @@ impl DiagnosticsComponent {
             return;
         };
 
-        let dialog_width = 70.min(area.width.saturating_sub(4));
-        let dialog_height = 15.min(area.height.saturating_sub(4));
-        let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);
-
-        frame.render_widget(Clear, dialog_area);
+        let dialog_area = crate::ui_ext::open_dialog(frame, area, 70, 15);
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -827,15 +823,11 @@ impl DiagnosticsComponent {
 
         let dialog_width = talos9s_core::convert::to_u16(max_line_len)
             .saturating_add(6)
-            .clamp(50, 80)
-            .min(area.width.saturating_sub(4));
+            .clamp(50, 80);
         let dialog_height = talos9s_core::convert::to_u16(content_lines.len())
             .saturating_add(6)
-            .min(20)
-            .min(area.height.saturating_sub(4));
-        let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);
-
-        frame.render_widget(Clear, dialog_area);
+            .min(20);
+        let dialog_area = crate::ui_ext::open_dialog(frame, area, dialog_width, dialog_height);
 
         let block = Block::default()
             .borders(Borders::ALL)

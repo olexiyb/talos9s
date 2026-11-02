@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
@@ -961,16 +961,13 @@ impl NodeOperationsComponent {
 
     /// Draw confirmation dialog
     fn draw_confirmation_dialog(&self, frame: &mut Frame, area: Rect, op_type: OperationType) {
-        let overlay_width = 50.min(area.width.saturating_sub(4));
+        let overlay_width = 50;
         let height = if op_type == OperationType::Shutdown {
             13
         } else {
             10
         };
-        let overlay_height = height.min(area.height.saturating_sub(4));
-        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-        frame.render_widget(Clear, overlay_area);
+        let overlay_area = crate::ui_ext::open_dialog(frame, area, overlay_width, height);
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
@@ -1061,11 +1058,7 @@ impl NodeOperationsComponent {
         op_type: OperationType,
         msg: &str,
     ) {
-        let overlay_width = 50.min(area.width.saturating_sub(4));
-        let overlay_height = 7.min(area.height.saturating_sub(4));
-        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-        frame.render_widget(Clear, overlay_area);
+        let overlay_area = crate::ui_ext::open_dialog(frame, area, 50, 7);
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
@@ -1105,11 +1098,7 @@ impl NodeOperationsComponent {
         success: bool,
         msg: &str,
     ) {
-        let overlay_width = 50.min(area.width.saturating_sub(4));
-        let overlay_height = 8.min(area.height.saturating_sub(4));
-        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-        frame.render_widget(Clear, overlay_area);
+        let overlay_area = crate::ui_ext::open_dialog(frame, area, 50, 8);
 
         let (status_icon, status_color, status_text) = if success {
             ("✓", Color::Green, "Completed")
@@ -1150,12 +1139,7 @@ impl NodeOperationsComponent {
     /// Draw the ready state overlay (safety checks and operation selection)
     fn draw_ready_overlay(&self, frame: &mut Frame, area: Rect) {
         // Calculate centered overlay position
-        let overlay_width = 50.min(area.width.saturating_sub(4));
-        let overlay_height = 19.min(area.height.saturating_sub(4));
-        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-        // Clear the background
-        frame.render_widget(Clear, overlay_area);
+        let overlay_area = crate::ui_ext::open_dialog(frame, area, 50, 19);
 
         // Get data for rendering
         let data = self.data();
@@ -1501,11 +1485,7 @@ impl Component for NodeOperationsComponent {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         if self.state.is_loading() && self.data().map(|d| d.etcd_info.is_none()).unwrap_or(true) {
             // Show loading in overlay
-            let overlay_width = 40.min(area.width.saturating_sub(4));
-            let overlay_height = 5;
-            let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-            frame.render_widget(Clear, overlay_area);
+            let overlay_area = crate::ui_ext::open_dialog(frame, area, 40, 5);
 
             let block = Block::default()
                 .title(" Node Operations ")

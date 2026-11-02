@@ -608,22 +608,17 @@ impl Component for StorageComponent {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         // Check loading state
-        if self.state.is_loading()
-            && self
-                .state
-                .data()
-                .is_none_or(|d| d.disks.is_empty() && d.volumes.is_empty())
-        {
-            let loading = Paragraph::new("Loading storage info...")
-                .style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, area);
-            return Ok(());
-        }
-
-        if let Some(err) = self.state.error() {
-            let error =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error, area);
+        if crate::ui_ext::draw_load_gate(
+            frame,
+            area,
+            self.state.is_loading()
+                && self
+                    .state
+                    .data()
+                    .is_none_or(|d| d.disks.is_empty() && d.volumes.is_empty()),
+            self.state.error(),
+            "Loading storage info...",
+        ) {
             return Ok(());
         }
 

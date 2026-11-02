@@ -1162,23 +1162,14 @@ impl Component for LifecycleComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        // Check loading state (show loading only if no data yet)
-        let has_nodes = self
-            .data()
-            .map(|d| !d.node_statuses.is_empty())
-            .unwrap_or(false);
-
-        if self.state.is_loading() && !has_nodes {
-            let loading = Paragraph::new("Loading lifecycle status...")
-                .style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, area);
-            return Ok(());
-        }
-
-        if let Some(err) = self.state.error() {
-            let error =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error, area);
+        let has_nodes = self.data().is_some_and(|d| !d.node_statuses.is_empty());
+        if crate::ui_ext::draw_load_gate(
+            frame,
+            area,
+            self.state.is_loading() && !has_nodes,
+            self.state.error(),
+            "Loading lifecycle status...",
+        ) {
             return Ok(());
         }
 

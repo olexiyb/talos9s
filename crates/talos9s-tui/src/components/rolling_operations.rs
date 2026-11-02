@@ -18,7 +18,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 use std::sync::{Arc, Mutex};
 use talos_rs::TalosClient;
@@ -630,11 +630,7 @@ impl Component for RollingOperationsComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let overlay_width = 60.min(area.width.saturating_sub(4));
-        let overlay_height = 20.min(area.height.saturating_sub(4));
-        let overlay_area = crate::ui_ext::centered(area, overlay_width, overlay_height);
-
-        frame.render_widget(Clear, overlay_area);
+        let overlay_area = crate::ui_ext::open_dialog(frame, area, 60, 20);
 
         match &self.state {
             RollingState::Selecting => {

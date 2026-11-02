@@ -16,9 +16,8 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Paragraph, TableState},
+    widgets::TableState,
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -858,17 +857,13 @@ impl Component for NetworkStatsComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        if self.state.is_loading() && self.data().is_none() {
-            let loading = Paragraph::new("Loading network stats...")
-                .style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, area);
-            return Ok(());
-        }
-
-        if let Some(err) = self.state.error() {
-            let error =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error, area);
+        if crate::ui_ext::draw_load_gate(
+            frame,
+            area,
+            self.state.is_loading() && self.data().is_none(),
+            self.state.error(),
+            "Loading network stats...",
+        ) {
             return Ok(());
         }
 

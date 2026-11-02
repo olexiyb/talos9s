@@ -269,6 +269,28 @@ pub fn moved(cursor: usize, len: usize, step: Move) -> Option<usize> {
     })
 }
 
+/// Draw the "Loading ..." or "Error: ..." placeholder a view shows instead of
+/// its content; `true` when one was drawn and the view should stop there
+pub fn draw_load_gate(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    loading: bool,
+    error: Option<&str>,
+    loading_text: &str,
+) -> bool {
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::Paragraph;
+    let placeholder = if loading {
+        Paragraph::new(loading_text.to_string()).style(Style::default().fg(Color::DarkGray))
+    } else if let Some(err) = error {
+        Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red))
+    } else {
+        return false;
+    };
+    frame.render_widget(placeholder, area);
+    true
+}
+
 /// A `width` x `height` dialog centered in `area`, never larger than it
 pub fn centered(area: ratatui::layout::Rect, width: u16, height: u16) -> ratatui::layout::Rect {
     use ratatui::layout::Constraint;
@@ -276,6 +298,23 @@ pub fn centered(area: ratatui::layout::Rect, width: u16, height: u16) -> ratatui
         Constraint::Length(width.min(area.width)),
         Constraint::Length(height.min(area.height)),
     )
+}
+
+/// Clear and return the area of a `width` x `height` dialog centered in
+/// `area`, leaving a margin of 2 cells around it on small screens
+pub fn open_dialog(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    width: u16,
+    height: u16,
+) -> ratatui::layout::Rect {
+    let dialog = centered(
+        area,
+        width.min(area.width.saturating_sub(4)),
+        height.min(area.height.saturating_sub(4)),
+    );
+    frame.render_widget(ratatui::widgets::Clear, dialog);
+    dialog
 }
 
 /// Is `mouse` a left button press?

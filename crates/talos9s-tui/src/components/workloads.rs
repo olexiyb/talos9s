@@ -1232,17 +1232,13 @@ impl Component for WorkloadHealthComponent {
         // The workspace frames the view and titles it
         let inner = area;
 
-        if self.state.is_loading() && !self.state.has_data() {
-            let loading =
-                Paragraph::new("Loading workloads...").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, inner);
-            return Ok(());
-        }
-
-        if let Some(err) = self.state.error() {
-            let error =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error, inner);
+        if crate::ui_ext::draw_load_gate(
+            frame,
+            inner,
+            self.state.is_loading() && !self.state.has_data(),
+            self.state.error(),
+            "Loading workloads...",
+        ) {
             return Ok(());
         }
 

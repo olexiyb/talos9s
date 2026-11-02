@@ -228,12 +228,7 @@ impl NetworkStatsComponent {
         };
 
         // Center the dialog
-        let dialog_width = 40u16;
-        let dialog_height = 5u16;
-        let dialog_area = crate::ui_ext::centered(area, dialog_width, dialog_height);
-
-        // Clear the area first (removes any text underneath)
-        frame.render_widget(Clear, dialog_area);
+        let dialog_area = crate::ui_ext::open_dialog(frame, area, 40, 5);
 
         // Draw the dialog block with background
         let block = Block::default()

@@ -1227,20 +1227,14 @@ impl Component for EtcdComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        // Show loading state (only if no data yet)
-        if self.state.is_loading() && !self.state.has_data() {
-            let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(loading, area);
-            return Ok(());
-        }
-
-        // Show error state (only if no data to display)
-        if let Some(err) = self.state.error()
-            && !self.state.has_data()
-        {
-            let error =
-                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
-            frame.render_widget(error, area);
+        // An error hides the view only while there is no data to show
+        if crate::ui_ext::draw_load_gate(
+            frame,
+            area,
+            self.state.is_loading() && !self.state.has_data(),
+            self.state.error().filter(|_| !self.state.has_data()),
+            "Loading...",
+        ) {
             return Ok(());
         }
 
