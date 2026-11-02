@@ -650,7 +650,7 @@ pub async fn observe_drbd(
             let content = tokio::time::timeout(READ_TIMEOUT, client.read_file(&path))
                 .await
                 .ok()
-                .and_then(|r| r.ok());
+                .and_then(std::result::Result::ok);
             (at, probe, content)
         })
         .buffer_unordered(OBSERVE_CONCURRENCY)
@@ -782,6 +782,8 @@ fn standalone(replica: &Replica, peer: &str) -> bool {
 /// connection change came between it and the split-brain: a split-brain
 /// resolved by a later reconnect, or a StandAlone from a later manual
 /// `disconnect`, is not reported.
+// The only slice is past the ASCII prefix "drbd", just checked
+#[allow(clippy::string_slice)]
 fn split_brain_links(log: &str) -> Vec<(String, String)> {
     // Per link: split-brain seen since its last connection attempt, and
     // whether its latest StandAlone followed one
@@ -1106,7 +1108,7 @@ pub fn volume_issues(volume: &LinstorVolume) -> Vec<Issue> {
                 ),
                 // Not reported (satellite not answering): unknown, not broken
                 "" | "Unknown" | "DUnknown" => {
-                    push(Severity::Warning, format!("{}: disk state unknown", r.node))
+                    push(Severity::Warning, format!("{}: disk state unknown", r.node));
                 }
                 _ => push(
                     Severity::Error,
@@ -1314,7 +1316,10 @@ fn standalone_remedies(
     };
 
     let mut remedies = Vec::new();
-    for link in broken_links(volume).into_iter().filter(|l| l.standalone()) {
+    for link in broken_links(volume)
+        .into_iter()
+        .filter(BrokenLink::standalone)
+    {
         let (a, b) = (link.a, link.b);
         let reason = match primary {
             None => Some("no Primary to compare them with".to_string()),
@@ -2255,13 +2260,13 @@ kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate 
         println!("replicas/place_count: {place_summary:?}");
         let used: Vec<f64> = volumes
             .iter()
-            .filter_map(|v| v.usage_kib())
+            .filter_map(super::LinstorVolume::usage_kib)
             .map(|(u, s)| u as f64 / s as f64 * 100.0)
             .collect();
         println!(
             "LINSTOR usage known for {}, max {:.0}%",
             used.len(),
-            used.iter().cloned().fold(0.0, f64::max)
+            used.iter().copied().fold(0.0, f64::max)
         );
         let mounted: Vec<&crate::zfs::ZfsVolume> = zfs.iter().filter(|z| z.fs.is_some()).collect();
         let ratio =

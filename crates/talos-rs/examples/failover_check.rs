@@ -7,6 +7,9 @@
 //!
 //! Usage: cargo run -p talos-rs --example failover_check -- <talosconfig> <context>
 
+// A command-line harness: printing is its output
+#![allow(clippy::print_stdout, clippy::print_stderr, clippy::expect_used)]
+
 use std::time::{Duration, Instant};
 use talos_rs::{TalosClient, TalosConfig};
 
@@ -27,7 +30,7 @@ async fn main() {
     let config = TalosConfig::load_from(&cfg_path).expect("load talosconfig");
     let ctx = config.get_context(ctx_name).expect("context not found");
 
-    println!("context   : {}", ctx_name);
+    println!("context   : {ctx_name}");
     println!("endpoints : {:?}", ctx.endpoints);
     println!("nodes     : {:?}", ctx.nodes);
 
@@ -73,14 +76,11 @@ async fn main() {
             );
         }
         Ok(Err(e)) => {
-            println!("RESULT    : RPC ERROR after {:.2?} — {}", elapsed, e);
+            println!("RESULT    : RPC ERROR after {elapsed:.2?} — {e}");
             std::process::exit(1);
         }
         Err(_) => {
-            println!(
-                "RESULT    : TIMED OUT after {:.2?} (>30s, no failover)",
-                elapsed
-            );
+            println!("RESULT    : TIMED OUT after {elapsed:.2?} (>30s, no failover)");
             std::process::exit(1);
         }
     }

@@ -85,7 +85,10 @@ impl TalosConfig {
 
     /// List all context names
     pub fn context_names(&self) -> Vec<&str> {
-        self.contexts.keys().map(|s| s.as_str()).collect()
+        self.contexts
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 
     /// Get a specific context by name
@@ -153,20 +156,20 @@ fn normalize_endpoint(e: &str) -> String {
         // IPv6 address with brackets - check if port is specified
         if e.contains("]:") {
             // Has port specified: [::1]:50000
-            format!("https://{}", e)
+            format!("https://{e}")
         } else {
             // No port: [::1] -> add default port
-            format!("https://{}:50000", e)
+            format!("https://{e}:50000")
         }
     } else if e.contains("::") || e.matches(':').count() > 1 {
         // Raw IPv6 address without brackets - add brackets and default port
-        format!("https://[{}]:50000", e)
+        format!("https://[{e}]:50000")
     } else if e.contains(':') {
         // IPv4 or hostname with port specified
-        format!("https://{}", e)
+        format!("https://{e}")
     } else {
         // IPv4 or hostname without port - add default Talos API port
-        format!("https://{}:50000", e)
+        format!("https://{e}:50000")
     }
 }
 

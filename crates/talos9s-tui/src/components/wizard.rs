@@ -174,9 +174,9 @@ fn format_poll_error(error: &str) -> String {
 
 impl WizardData {
     pub fn new(endpoint: String) -> Self {
-        let k8s_endpoint = format!("https://{}:6443", endpoint);
+        let k8s_endpoint = format!("https://{endpoint}:6443");
         Self {
-            endpoint: endpoint.clone(),
+            endpoint,
             cluster_name: "talos-cluster".to_string(),
             k8s_endpoint,
             node_type: NodeType::Controlplane,
@@ -319,7 +319,7 @@ impl WizardComponent {
                 self.data.connected = true;
             }
             Err(e) => {
-                self.set_error(format!("Failed to connect: {}", e));
+                self.set_error(format!("Failed to connect: {e}"));
                 return Ok(());
             }
         }
@@ -525,7 +525,7 @@ impl WizardComponent {
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    format!("Step {} of {}: ", step, total),
+                    format!("Step {step} of {total}: "),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(title, Style::default().fg(Color::White)),
@@ -553,7 +553,7 @@ impl WizardComponent {
         let content = Paragraph::new(vec![
             Line::raw(""),
             Line::from(vec![
-                Span::styled(format!("  {} ", spinner), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spinner} "), Style::default().fg(Color::Cyan)),
                 Span::raw("Connecting to "),
                 Span::styled(&self.data.endpoint, Style::default().fg(Color::Cyan)),
                 Span::raw("..."),
@@ -1004,7 +1004,7 @@ impl WizardComponent {
         let content = Paragraph::new(vec![
             Line::raw(""),
             Line::from(vec![
-                Span::styled(format!("  {} ", spinner), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spinner} "), Style::default().fg(Color::Cyan)),
                 Span::styled(
                     "Applying configuration...",
                     Style::default().fg(Color::Yellow),
@@ -1033,7 +1033,7 @@ impl WizardComponent {
         let mut lines = vec![
             Line::raw(""),
             Line::from(vec![
-                Span::styled(format!("  {} ", spinner), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spinner} "), Style::default().fg(Color::Cyan)),
                 Span::styled(
                     "Waiting for node to come back online...",
                     Style::default().fg(Color::Yellow),
@@ -1054,7 +1054,7 @@ impl WizardComponent {
             Line::from(vec![
                 Span::styled("     Elapsed:  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!("{} seconds", elapsed),
+                    format!("{elapsed} seconds"),
                     Style::default().fg(Color::White),
                 ),
             ]),
@@ -1214,7 +1214,7 @@ impl WizardComponent {
         let content = Paragraph::new(vec![
             Line::raw(""),
             Line::from(vec![
-                Span::styled(format!("  {} ", spinner), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spinner} "), Style::default().fg(Color::Cyan)),
                 Span::styled(
                     "Bootstrapping cluster...",
                     Style::default().fg(Color::Yellow),
@@ -1243,7 +1243,7 @@ impl WizardComponent {
         let content = Paragraph::new(vec![
             Line::raw(""),
             Line::from(vec![
-                Span::styled(format!("  {} ", spinner), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {spinner} "), Style::default().fg(Color::Cyan)),
                 Span::styled(
                     "Waiting for cluster to become healthy...",
                     Style::default().fg(Color::Yellow),
@@ -1253,7 +1253,7 @@ impl WizardComponent {
             Line::from(vec![
                 Span::styled("     Elapsed: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!("{} seconds", elapsed),
+                    format!("{elapsed} seconds"),
                     Style::default().fg(Color::White),
                 ),
             ]),
@@ -1325,7 +1325,7 @@ impl WizardComponent {
             Line::raw(""),
             Line::styled("  Error occurred:", Style::default().fg(Color::Red)),
             Line::raw(""),
-            Line::styled(format!("  {}", message), Style::default().fg(Color::White)),
+            Line::styled(format!("  {message}"), Style::default().fg(Color::White)),
             Line::raw(""),
             Line::styled(
                 "  Press [r] to retry, [q] to quit.",
@@ -1348,14 +1348,14 @@ impl Component for WizardComponent {
         // confirm it
         if let Some(confirm) = self.confirming {
             return Ok(match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                KeyCode::Char('y' | 'Y') => {
                     self.confirming = None;
                     Some(match confirm {
                         WizardConfirm::Apply => Action::WizardApplyConfig,
                         WizardConfirm::Bootstrap => Action::WizardBootstrap,
                     })
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                     self.confirming = None;
                     None
                 }
@@ -1481,7 +1481,7 @@ mod tests {
             .buffer()
             .content()
             .iter()
-            .map(|c| c.symbol())
+            .map(ratatui::buffer::Cell::symbol)
             .collect();
         assert!(screen.contains("Install Talos on 10.0.0.5"));
         assert!(screen.contains("will be erased"));

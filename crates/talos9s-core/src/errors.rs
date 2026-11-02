@@ -24,16 +24,16 @@ pub fn format_talos_error(error: &TalosError) -> String {
         TalosError::Grpc(status) => format_grpc_error(status),
         TalosError::Transport(e) => format_transport_error(&e.to_string()),
         TalosError::Tls(msg) => {
-            format!("TLS error: {} - check talosconfig credentials", msg)
+            format!("TLS error: {msg} - check talosconfig credentials")
         }
         TalosError::ConfigNotFound(path) => {
-            format!("Config not found: {}", path)
+            format!("Config not found: {path}")
         }
         TalosError::ConfigInvalid(msg) => {
-            format!("Invalid config: {}", msg)
+            format!("Invalid config: {msg}")
         }
         TalosError::ContextNotFound(ctx) => {
-            format!("Context '{}' not found in talosconfig", ctx)
+            format!("Context '{ctx}' not found in talosconfig")
         }
         _ => error.to_string(),
     }
@@ -51,7 +51,7 @@ fn format_connection_error(msg: &str) -> String {
     } else if lower.contains("dns") || lower.contains("resolve") {
         "DNS resolution failed - check node hostname/IP".to_string()
     } else {
-        format!("Connection failed: {}", msg)
+        format!("Connection failed: {msg}")
     }
 }
 
@@ -85,7 +85,7 @@ fn format_transport_error(msg: &str) -> String {
     } else if lower.contains("broken pipe") {
         "Connection closed unexpectedly".to_string()
     } else {
-        format!("Transport error: {}", msg)
+        format!("Transport error: {msg}")
     }
 }
 

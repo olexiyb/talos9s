@@ -1020,12 +1020,12 @@ pub async fn drain_node_with_progress(
     let pods: Api<Pod> = Api::all(client.clone());
 
     // List pods on this node
-    let list_params = ListParams::default().fields(&format!("spec.nodeName={}", node_name));
+    let list_params = ListParams::default().fields(&format!("spec.nodeName={node_name}"));
 
     let pod_list = pods
         .list(&list_params)
         .await
-        .map_err(|e| K8sError::ApiError(format!("Failed to list pods: {}", e)))?;
+        .map_err(|e| K8sError::ApiError(format!("Failed to list pods: {e}")))?;
 
     let pods_to_evict = match select_pods_to_evict(&pod_list.items, options) {
         Ok(pods) => pods,
@@ -1058,7 +1058,7 @@ pub async fn drain_node_with_progress(
 
     // Report initial count
     if let Some(ref cb) = progress_callback {
-        cb(&format!("Found {} pods to evict", total_pods));
+        cb(&format!("Found {total_pods} pods to evict"));
     }
 
     // Calculate max attempts based on configurable timeout
@@ -1100,8 +1100,7 @@ pub async fn drain_node_with_progress(
                     // Report success
                     if let Some(ref cb) = progress_callback {
                         cb(&format!(
-                            "Evicted {}/{} ({}/{})",
-                            namespace, pod_name, evicted, total_pods
+                            "Evicted {namespace}/{pod_name} ({evicted}/{total_pods})"
                         ));
                     }
 
@@ -1117,8 +1116,7 @@ pub async fn drain_node_with_progress(
                         success = true;
                         if let Some(ref cb) = progress_callback {
                             cb(&format!(
-                                "Pod gone {}/{} ({}/{})",
-                                namespace, pod_name, evicted, total_pods
+                                "Pod gone {namespace}/{pod_name} ({evicted}/{total_pods})"
                             ));
                         }
                         continue;
@@ -1137,8 +1135,7 @@ pub async fn drain_node_with_progress(
                         // Report PDB wait
                         if let Some(ref cb) = progress_callback {
                             cb(&format!(
-                                "Waiting for PDB: {}/{} (retry {}/{})",
-                                namespace, pod_name, attempts, max_attempts
+                                "Waiting for PDB: {namespace}/{pod_name} (retry {attempts}/{max_attempts})"
                             ));
                         }
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -1152,8 +1149,7 @@ pub async fn drain_node_with_progress(
                     if options.force_delete_unmanaged && !pod_info.is_managed {
                         if let Some(ref cb) = progress_callback {
                             cb(&format!(
-                                "Force deleting unmanaged pod {}/{}",
-                                namespace, pod_name
+                                "Force deleting unmanaged pod {namespace}/{pod_name}"
                             ));
                         }
 
@@ -1166,7 +1162,7 @@ pub async fn drain_node_with_progress(
                         match ns_pods.delete(pod_name, &delete_params).await {
                             Ok(_) => {
                                 evicted += 1;
-                                force_deleted_pods.push(format!("{}/{}", namespace, pod_name));
+                                force_deleted_pods.push(format!("{namespace}/{pod_name}"));
                                 tracing::info!(
                                     "Force deleted unmanaged pod {}/{}",
                                     namespace,
@@ -1175,8 +1171,7 @@ pub async fn drain_node_with_progress(
                                 success = true;
                                 if let Some(ref cb) = progress_callback {
                                     cb(&format!(
-                                        "Force deleted {}/{} ({}/{})",
-                                        namespace, pod_name, evicted, total_pods
+                                        "Force deleted {namespace}/{pod_name} ({evicted}/{total_pods})"
                                     ));
                                 }
                             }
@@ -1187,16 +1182,16 @@ pub async fn drain_node_with_progress(
                                     pod_name,
                                     del_err
                                 );
-                                failed_pods.push(format!("{}/{}", namespace, pod_name));
+                                failed_pods.push(format!("{namespace}/{pod_name}"));
                                 if let Some(ref cb) = progress_callback {
-                                    cb(&format!("Failed: {}/{}", namespace, pod_name));
+                                    cb(&format!("Failed: {namespace}/{pod_name}"));
                                 }
                             }
                         }
                     } else {
-                        failed_pods.push(format!("{}/{}", namespace, pod_name));
+                        failed_pods.push(format!("{namespace}/{pod_name}"));
                         if let Some(ref cb) = progress_callback {
-                            cb(&format!("Failed: {}/{}", namespace, pod_name));
+                            cb(&format!("Failed: {namespace}/{pod_name}"));
                         }
                     }
                     break;
@@ -1215,8 +1210,7 @@ pub async fn drain_node_with_progress(
             if options.force_delete_unmanaged && !pod_info.is_managed {
                 if let Some(ref cb) = progress_callback {
                     cb(&format!(
-                        "Force deleting unmanaged pod {}/{} after timeout",
-                        namespace, pod_name
+                        "Force deleting unmanaged pod {namespace}/{pod_name} after timeout"
                     ));
                 }
 
@@ -1229,7 +1223,7 @@ pub async fn drain_node_with_progress(
                 match ns_pods.delete(pod_name, &delete_params).await {
                     Ok(_) => {
                         evicted += 1;
-                        force_deleted_pods.push(format!("{}/{}", namespace, pod_name));
+                        force_deleted_pods.push(format!("{namespace}/{pod_name}"));
                         tracing::info!(
                             "Force deleted unmanaged pod {}/{} after timeout",
                             namespace,
@@ -1237,8 +1231,7 @@ pub async fn drain_node_with_progress(
                         );
                         if let Some(ref cb) = progress_callback {
                             cb(&format!(
-                                "Force deleted {}/{} ({}/{})",
-                                namespace, pod_name, evicted, total_pods
+                                "Force deleted {namespace}/{pod_name} ({evicted}/{total_pods})"
                             ));
                         }
                     }
@@ -1249,16 +1242,16 @@ pub async fn drain_node_with_progress(
                             pod_name,
                             del_err
                         );
-                        failed_pods.push(format!("{}/{}", namespace, pod_name));
+                        failed_pods.push(format!("{namespace}/{pod_name}"));
                         if let Some(ref cb) = progress_callback {
-                            cb(&format!("Timeout: {}/{}", namespace, pod_name));
+                            cb(&format!("Timeout: {namespace}/{pod_name}"));
                         }
                     }
                 }
             } else {
-                failed_pods.push(format!("{}/{}", namespace, pod_name));
+                failed_pods.push(format!("{namespace}/{pod_name}"));
                 if let Some(ref cb) = progress_callback {
-                    cb(&format!("Timeout: {}/{}", namespace, pod_name));
+                    cb(&format!("Timeout: {namespace}/{pod_name}"));
                 }
             }
         }
@@ -1313,7 +1306,7 @@ pub async fn get_node_state(client: &Client, node_name: &str) -> Result<NodeStat
     let node = tokio::time::timeout(NODE_LOOKUP_TIMEOUT, nodes.get(node_name))
         .await
         .map_err(|_| K8sError::ApiError("Timed out getting node".to_string()))?
-        .map_err(|e| K8sError::ApiError(format!("Failed to get node: {}", e)))?;
+        .map_err(|e| K8sError::ApiError(format!("Failed to get node: {e}")))?;
 
     let status = node.status.as_ref();
     let ready = status
@@ -1380,10 +1373,7 @@ pub async fn wait_for_node_ready(
             return Ok(NodeReadyResult {
                 success: false,
                 time_taken_secs: elapsed,
-                error: Some(format!(
-                    "Timed out waiting for node after {}s",
-                    timeout_secs
-                )),
+                error: Some(format!("Timed out waiting for node after {timeout_secs}s")),
             });
         }
         let remaining = timeout_secs - elapsed;
@@ -1391,7 +1381,7 @@ pub async fn wait_for_node_ready(
         match get_node_state(client, node_name).await {
             Ok(state) => {
                 if reboot_finished(boot_id_before.as_deref(), seen_down, &state) {
-                    report(&format!("Node is Ready (took {}s)", elapsed));
+                    report(&format!("Node is Ready (took {elapsed}s)"));
                     return Ok(NodeReadyResult {
                         success: true,
                         time_taken_secs: elapsed,
@@ -1404,8 +1394,7 @@ pub async fn wait_for_node_ready(
                 }
                 if state.ready == NodeConditionStatus::Ready && (same_boot || !seen_down) {
                     report(&format!(
-                        "Waiting for node to begin rebooting ({}s remaining)",
-                        remaining
+                        "Waiting for node to begin rebooting ({remaining}s remaining)"
                     ));
                 } else {
                     let status = match state.ready {
@@ -1413,18 +1402,14 @@ pub async fn wait_for_node_ready(
                         NodeConditionStatus::Ready => "Ready",
                         NodeConditionStatus::Unknown => "Unknown",
                     };
-                    report(&format!(
-                        "Node status: {} ({}s remaining)",
-                        status, remaining
-                    ));
+                    report(&format!("Node status: {status} ({remaining}s remaining)"));
                 }
             }
             Err(_) => {
                 // Gone from the API or the API is down with it
                 seen_down = true;
                 report(&format!(
-                    "Waiting for node to rejoin cluster ({}s remaining)",
-                    remaining
+                    "Waiting for node to rejoin cluster ({remaining}s remaining)"
                 ));
             }
         }

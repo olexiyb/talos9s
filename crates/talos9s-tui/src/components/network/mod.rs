@@ -97,7 +97,10 @@ impl Drop for NetworkTasks {
 
 /// Take a task's result once it has finished, without waiting
 fn take_finished<T>(task: &mut Option<JoinHandle<T>>) -> Option<T> {
-    if !task.as_ref().is_some_and(|t| t.is_finished()) {
+    if !task
+        .as_ref()
+        .is_some_and(tokio::task::JoinHandle::is_finished)
+    {
         return None;
     }
     crate::task::poll_finished(task.take()?)?.ok()
@@ -394,7 +397,7 @@ pub struct NetworkStatsComponent {
 
 impl Default for NetworkStatsComponent {
     fn default() -> Self {
-        Self::new("".to_string(), "".to_string())
+        Self::new(String::new(), String::new())
     }
 }
 
@@ -856,7 +859,7 @@ impl Component for NetworkStatsComponent {
 
         if let Some(err) = self.state.error() {
             let error =
-                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
@@ -950,7 +953,7 @@ mod tests {
         assert!(!conn_warnings(&busy));
         assert!(conn_warnings(&ConnectionCounts {
             close_wait: 150,
-            ..busy.clone()
+            ..busy
         }));
         assert!(conn_warnings(&ConnectionCounts {
             time_wait: 25_000,

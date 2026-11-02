@@ -108,7 +108,7 @@ impl ItemStatus {
 
 impl Default for SecurityComponent {
     fn default() -> Self {
-        Self::new("".to_string(), None)
+        Self::new(String::new(), None)
     }
 }
 
@@ -231,7 +231,7 @@ impl SecurityComponent {
                 }
             }
             Err(e) => {
-                pki.error = Some(format!("Failed to load talosconfig: {}", e));
+                pki.error = Some(format!("Failed to load talosconfig: {e}"));
             }
         }
 
@@ -324,7 +324,7 @@ impl SecurityComponent {
                         )
                         .await
                         .inspect_err(|e| {
-                            tracing::warn!("Failed to read {} key types: {}", status.id, e)
+                            tracing::warn!("Failed to read {} key types: {}", status.id, e);
                         })
                         .ok(),
                         None => None,
@@ -360,11 +360,11 @@ impl SecurityComponent {
                     volumes: vec![
                         VolumeEncryption {
                             name: "STATE".to_string(),
-                            provider: EncryptionProvider::Unknown(format!("{}", e)),
+                            provider: EncryptionProvider::Unknown(format!("{e}")),
                         },
                         VolumeEncryption {
                             name: "EPHEMERAL".to_string(),
-                            provider: EncryptionProvider::Unknown(format!("{}", e)),
+                            provider: EncryptionProvider::Unknown(format!("{e}")),
                         },
                     ],
                 };
@@ -678,7 +678,7 @@ impl Component for SecurityComponent {
                 data.context_name.clone()
             };
             let (valid, warning, _critical, expired) = data.pki_status.summary();
-            let summary = format!("{} valid, {} warning, {} expired", valid, warning, expired);
+            let summary = format!("{valid} valid, {warning} warning, {expired} expired");
             (context, summary)
         } else {
             ("default".to_string(), "loading...".to_string())
@@ -706,7 +706,7 @@ impl Component for SecurityComponent {
             frame.render_widget(loading, chunks[1]);
         } else if let Some(error) = self.state.error() {
             if !self.state.has_data() {
-                let error_msg = Paragraph::new(format!("Error: {}", error))
+                let error_msg = Paragraph::new(format!("Error: {error}"))
                     .style(Style::default().fg(Color::Red));
                 frame.render_widget(error_msg, chunks[1]);
             } else {
@@ -774,7 +774,7 @@ impl SecurityComponent {
                     let padded_name = format!("{:.<width$}", item.name, width = name_width);
 
                     Line::from(vec![
-                        Span::styled(format!("{} ", prefix), Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{prefix} "), Style::default().fg(Color::DarkGray)),
                         Span::styled(indicator, Style::default().fg(color)),
                         Span::raw(" "),
                         Span::styled(padded_name, style),
@@ -836,7 +836,7 @@ mod tests {
     use super::*;
 
     fn kinds(k: &[&str]) -> Vec<String> {
-        k.iter().map(|s| s.to_string()).collect()
+        k.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]

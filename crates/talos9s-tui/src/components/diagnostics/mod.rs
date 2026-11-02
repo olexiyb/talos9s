@@ -155,7 +155,7 @@ impl ClusterShared {
 
 impl Default for DiagnosticsComponent {
     fn default() -> Self {
-        Self::new("".to_string(), "".to_string(), "".to_string(), None)
+        Self::new(String::new(), String::new(), String::new(), None)
     }
 }
 
@@ -170,7 +170,7 @@ impl DiagnosticsComponent {
         table_state.select(Some(0));
 
         let mut context = DiagnosticContext::new();
-        context.node_role = node_role.clone();
+        context.node_role = node_role;
         context.hostname = hostname.clone();
         context.node_endpoint = Some(address.clone());
         context.config_path = config_path.clone();
@@ -762,7 +762,7 @@ impl DiagnosticsComponent {
         ];
         for cmd_line in command.lines() {
             lines.push(Line::from(Span::styled(
-                format!("  {}", cmd_line),
+                format!("  {cmd_line}"),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -846,7 +846,7 @@ impl DiagnosticsComponent {
 
         for line in self.details_content.lines() {
             lines.push(Line::from(Span::styled(
-                format!(" {}", line),
+                format!(" {line}"),
                 Style::default().fg(Color::White),
             )));
         }
@@ -995,7 +995,7 @@ impl Component for DiagnosticsComponent {
                     self.pending_action = None;
                     return Ok(None);
                 }
-                KeyCode::Enter | KeyCode::Char('c') | KeyCode::Char('y') => {
+                KeyCode::Enter | KeyCode::Char('c' | 'y') => {
                     if let Some(cmd) = self.pending_command() {
                         // Kept alive briefly on its own thread so clipboard
                         // managers can read it
@@ -1074,7 +1074,7 @@ impl Component for DiagnosticsComponent {
             .unwrap_or_else(|| (String::new(), String::new(), "Unknown"));
 
         // Header
-        let header_text = format!(" Diagnostics: {} ({}) [{}] ", hostname, address, cni_label);
+        let header_text = format!(" Diagnostics: {hostname} ({address}) [{cni_label}] ");
         let header = Paragraph::new(header_text)
             .style(Style::default().add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::BOTTOM));
@@ -1082,7 +1082,7 @@ impl Component for DiagnosticsComponent {
 
         if let Some(error) = self.state.error() {
             let error_msg =
-                Paragraph::new(format!("Error: {}", error)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {error}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error_msg, chunks[1]);
         } else if self.state.is_loading()
             && self
@@ -1222,7 +1222,7 @@ mod tests {
             .buffer()
             .content()
             .iter()
-            .map(|c| c.symbol())
+            .map(ratatui::buffer::Cell::symbol)
             .collect();
         assert!(screen.contains("service kubelet restart"));
         // The categories with no checks after loading are not "Loading..."

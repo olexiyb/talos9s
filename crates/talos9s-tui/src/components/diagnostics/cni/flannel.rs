@@ -69,10 +69,8 @@ async fn check_br_netfilter(client: &TalosClient, ctx: &DiagnosticContext) -> Di
             } else {
                 ctx.hostname.clone()
             };
-            let combined_command = format!(
-                "sudo modprobe br_netfilter && \\\ndocker restart {}",
-                container_name
-            );
+            let combined_command =
+                format!("sudo modprobe br_netfilter && \\\ndocker restart {container_name}");
             DiagnosticFix {
                 description: "Load br_netfilter on Docker host".to_string(),
                 action: FixAction::HostCommand {
@@ -150,10 +148,8 @@ async fn check_flannel_cni(
                 } else {
                     ctx.hostname.clone()
                 };
-                let combined_command = format!(
-                    "sudo modprobe br_netfilter && \\\ndocker restart {}",
-                    container_name
-                );
+                let combined_command =
+                    format!("sudo modprobe br_netfilter && \\\ndocker restart {container_name}");
                 Some(DiagnosticFix {
                     description: "Load br_netfilter on Docker host".to_string(),
                     action: FixAction::HostCommand {
@@ -185,8 +181,7 @@ async fn check_flannel_cni(
                     description: "Check Flannel pod status".to_string(),
                     action: FixAction::HostCommand {
                         command: format!(
-                            "kubectl get pods -n kube-flannel && docker restart {}",
-                            container_name
+                            "kubectl get pods -n kube-flannel && docker restart {container_name}"
                         ),
                         description: "Check Flannel pods and restart container if needed"
                             .to_string(),

@@ -596,7 +596,7 @@ impl EtcdComponent {
                 let msg = format_talos_error(&e);
                 tracing::warn!("etcd: failed to fetch members: {}", msg);
                 self.state
-                    .set_error_with_retry(format!("Failed to fetch members: {}", msg));
+                    .set_error_with_retry(format!("Failed to fetch members: {msg}"));
                 return Ok(());
             }
             Err(_) => {
@@ -610,7 +610,10 @@ impl EtcdComponent {
         };
 
         // Step 2: Extract control plane IPs from members (hostnames may not be resolvable)
-        let cp_ips: Vec<String> = member_infos.iter().filter_map(|m| m.ip_address()).collect();
+        let cp_ips: Vec<String> = member_infos
+            .iter()
+            .filter_map(talos_rs::EtcdMemberInfo::ip_address)
+            .collect();
 
         tracing::debug!("Fetching etcd status from control planes: {:?}", cp_ips);
 
@@ -811,20 +814,20 @@ impl EtcdComponent {
 
         let member_count = match &data.quorum_state {
             QuorumState::Healthy => format!("{}/{}", data.members.len(), data.members.len()),
-            QuorumState::Degraded { healthy, total } => format!("{}/{}", healthy, total),
-            QuorumState::NoQuorum { healthy, total } => format!("{}/{}", healthy, total),
+            QuorumState::Degraded { healthy, total } => format!("{healthy}/{total}"),
+            QuorumState::NoQuorum { healthy, total } => format!("{healthy}/{total}"),
             QuorumState::Unknown => "?/?".to_string(),
         };
 
         let db_size = format_bytes_signed(data.total_db_size);
 
         let line = Line::from(vec![
-            Span::styled(format!("{} ", indicator), Style::default().fg(color)),
+            Span::styled(format!("{indicator} "), Style::default().fg(color)),
             Span::styled(
                 state_text,
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!("  {} members    ", member_count)),
+            Span::raw(format!("  {member_count} members    ")),
             Span::raw(format!(
                 "Quorum: {} ",
                 match data.quorum_state {
@@ -959,7 +962,7 @@ impl EtcdComponent {
                 let peer_url = url_cell(&member.info.peer_urls);
                 let client_url = url_cell(&member.info.client_urls);
 
-                let status_full = format!("{} {}", status_indicator, status_text);
+                let status_full = format!("{status_indicator} {status_text}");
 
                 // The running process, else (dim) what the config asks for
                 let (listen_peer, listen_client) = match (&member.running, &member.spec) {
@@ -1236,7 +1239,7 @@ impl Component for EtcdComponent {
             && !self.state.has_data()
         {
             let error =
-                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
@@ -1329,7 +1332,7 @@ mod tests {
     }
 
     fn hosts(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| s.to_string()).collect()
+        a.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]
@@ -1455,7 +1458,7 @@ mod tests {
             .buffer()
             .content()
             .iter()
-            .map(|c| c.symbol())
+            .map(ratatui::buffer::Cell::symbol)
             .collect()
     }
 

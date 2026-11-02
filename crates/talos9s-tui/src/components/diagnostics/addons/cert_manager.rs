@@ -25,9 +25,9 @@ pub async fn run_checks(client: &Client) -> Vec<DiagnosticCheck> {
         Ok(list) => assess(&list.items),
         Err(e) => vec![
             DiagnosticCheck::unknown("cert_manager_pods", "cert-manager Pods")
-                .with_details(&format!("Failed to list pods: {}", e)),
+                .with_details(&format!("Failed to list pods: {e}")),
             DiagnosticCheck::unknown("cert_manager_webhook", "cert-manager Webhook")
-                .with_details(&format!("Failed to list pods: {}", e)),
+                .with_details(&format!("Failed to list pods: {e}")),
         ],
     }
 }

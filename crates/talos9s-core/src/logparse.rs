@@ -1,6 +1,9 @@
 //! Parsing of Talos service and kernel log lines: timestamp, level and
 //! message, and the text search the logs view highlights. Pure: no
 //! terminal, no streams.
+// Every slice here is at a position `find` returned on the same string or
+// right after ASCII just checked, so it can't split a character.
+#![allow(clippy::string_slice)]
 
 /// Level of a log line
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -396,7 +399,7 @@ pub fn time_to_sort_key(ts: &str) -> i64 {
 
     // Fallback: extract just time digits from HH:MM:SS or HH:MM format
     // This won't sort correctly across days, but it's the best we can do
-    let digits: String = ts.chars().filter(|c| c.is_ascii_digit()).take(6).collect();
+    let digits: String = ts.chars().filter(char::is_ascii_digit).take(6).collect();
     digits.parse().unwrap_or(0)
 }
 
@@ -443,7 +446,7 @@ pub fn unix_ts_to_time(ts: f64) -> (String, i64) {
     let hours = secs_in_day / 3600;
     let minutes = (secs_in_day % 3600) / 60;
     let seconds = secs_in_day % 60;
-    let short_ts = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+    let short_ts = format!("{hours:02}:{minutes:02}:{seconds:02}");
     // Use the full Unix timestamp as the sort key to preserve date ordering
     let sort_key = ts_secs;
     (short_ts, sort_key)

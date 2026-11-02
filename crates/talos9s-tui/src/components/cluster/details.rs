@@ -122,7 +122,7 @@ impl ClusterComponent {
         let node_name = if node_name_str.is_empty() {
             "node-0".to_string()
         } else {
-            node_name_str.clone()
+            node_name_str
         };
         let node_ip = self.node_ips().get(&node_name).cloned().unwrap_or_default();
         let role = if self.node_is_controlplane(cluster_idx, &node_name) {
@@ -133,7 +133,7 @@ impl ClusterComponent {
 
         if let Some(down) = self.node_offline_for(cluster_idx, &node_name) {
             let block = Block::default()
-                .title(format!(" {} · {} ", node_name, role))
+                .title(format!(" {node_name} · {role} "))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color));
             frame.render_widget(
@@ -146,7 +146,7 @@ impl ClusterComponent {
         }
 
         let title = crate::ui_ext::title_with_refresh(
-            &format!("{} · {}", node_name, role),
+            &format!("{node_name} · {role}"),
             self.node_stats_fetch.is_some(),
             if self.focused_pane == FocusedPane::Services {
                 Color::Cyan
@@ -170,7 +170,7 @@ impl ClusterComponent {
         lines.push(Line::from(""));
         let services_heading = lines.len();
         let services = self.get_node_services(&node_name).cloned();
-        let service_count = services.as_ref().map_or(0, |s| s.len());
+        let service_count = services.as_ref().map_or(0, std::vec::Vec::len);
         if let Some(services) = &services {
             lines.extend(self.services_lines(services));
         }
@@ -262,7 +262,7 @@ impl ClusterComponent {
                 Span::styled(" Memory: ", Style::default().dim()),
                 Span::styled(bar, Style::default().fg(color)),
                 Span::styled(
-                    format!(" {:.1}/{:.1}GB", used_gb, total_gb),
+                    format!(" {used_gb:.1}/{total_gb:.1}GB"),
                     Style::default().dim(),
                 ),
             ]));
@@ -410,7 +410,7 @@ impl ClusterComponent {
             let selector = if is_selected { "▸" } else { " " };
 
             lines.push(Line::from(vec![
-                Span::raw(format!(" {}", selector)),
+                Span::raw(format!(" {selector}")),
                 Span::styled(health_symbol, health_style),
                 Span::raw(" "),
                 Span::styled(svc.id.clone(), name_style),
@@ -532,7 +532,7 @@ pub(super) fn bootstrap_lines(cp_ip: &str) -> Vec<Line<'static>> {
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            format!("    talosctl bootstrap -n {}", cp_ip),
+            format!("    talosctl bootstrap -n {cp_ip}"),
             Style::default().fg(Color::Cyan),
         )]),
         Line::from(""),

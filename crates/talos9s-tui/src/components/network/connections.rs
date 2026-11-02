@@ -33,7 +33,7 @@ impl NetworkStatsComponent {
         let source: Vec<_> = if self.show_all_connections || self.view_mode == ViewMode::Interfaces
         {
             // Show all connections
-            data.connections.to_vec()
+            data.connections.clone()
         } else {
             // In connections view, use interface-filtered list
             self.filtered_connections.clone()
@@ -210,9 +210,9 @@ impl NetworkStatsComponent {
 
         // Format process info
         let process = match (&conn.process_name, conn.process_pid) {
-            (Some(name), Some(pid)) => format!("{} ({})", name, pid),
+            (Some(name), Some(pid)) => format!("{name} ({pid})"),
             (Some(name), None) => name.clone(),
-            (None, Some(pid)) => format!("pid:{}", pid),
+            (None, Some(pid)) => format!("pid:{pid}"),
             (None, None) => "-".to_string(),
         };
 
@@ -324,7 +324,7 @@ impl NetworkStatsComponent {
             Span::raw(&self.hostname),
             Span::raw("  "),
             Span::styled(
-                format!("{} connections", conn_count),
+                format!("{conn_count} connections"),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(filter_label, Style::default().fg(Color::Yellow)),
@@ -335,7 +335,7 @@ impl NetworkStatsComponent {
             let count = end - start + 1;
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
-                format!("-- VISUAL ({} lines) --", count),
+                format!("-- VISUAL ({count} lines) --"),
                 Style::default()
                     .fg(Color::Magenta)
                     .add_modifier(Modifier::BOLD),
@@ -474,18 +474,18 @@ impl NetworkStatsComponent {
                         // Check service health
                         let health_status = services
                             .get(service_name)
-                            .and_then(|s| s.is_healthy())
+                            .and_then(talos_rs::ServiceInfo::is_healthy)
                             .map(|healthy| if healthy { "+" } else { "!" })
                             .unwrap_or("?");
 
                         let process_suffix = conn
                             .process_name
                             .as_ref()
-                            .map(|p| format!(" ({})", p))
+                            .map(|p| format!(" ({p})"))
                             .unwrap_or_default();
 
                         (
-                            format!("[{}{}]{}", health_status, service_name, process_suffix),
+                            format!("[{health_status}{service_name}]{process_suffix}"),
                             Color::Cyan,
                         )
                     } else {
@@ -495,7 +495,7 @@ impl NetworkStatsComponent {
                             .as_ref()
                             .map(|name| {
                                 if let Some(pid) = conn.process_pid {
-                                    format!("{} ({})", name, pid)
+                                    format!("{name} ({pid})")
                                 } else {
                                     name.clone()
                                 }
@@ -588,9 +588,9 @@ impl NetworkStatsComponent {
                 Span::styled(bpf_label, Style::default().fg(bpf_color)),
                 Span::raw("  "),
                 Span::styled("[l]", Style::default().fg(Color::Cyan)),
-                Span::raw(format!(" {}  ", listen_label)),
+                Span::raw(format!(" {listen_label}  ")),
                 Span::styled("[a]", Style::default().fg(Color::Cyan)),
-                Span::raw(format!(" {}  ", all_label)),
+                Span::raw(format!(" {all_label}  ")),
                 Span::styled("[Esc/q]", Style::default().fg(Color::Cyan)),
                 Span::raw(" interfaces"),
             ]
@@ -634,9 +634,9 @@ impl NetworkStatsComponent {
 
         // Format process info
         let process_info = match (&conn.process_name, conn.process_pid) {
-            (Some(name), Some(pid)) => format!("{} (PID: {})", name, pid),
+            (Some(name), Some(pid)) => format!("{name} (PID: {pid})"),
             (Some(name), None) => name.clone(),
-            (None, Some(pid)) => format!("PID: {}", pid),
+            (None, Some(pid)) => format!("PID: {pid}"),
             (None, None) => "-".to_string(),
         };
 
@@ -707,7 +707,7 @@ impl NetworkStatsComponent {
         if let Some(service_name) = port_to_service(conn.local_port) {
             let service_info = services.get(service_name);
             let (health_text, health_color) = service_info
-                .and_then(|s| s.is_healthy())
+                .and_then(talos_rs::ServiceInfo::is_healthy)
                 .map(|healthy| {
                     if healthy {
                         ("healthy", Color::Green)

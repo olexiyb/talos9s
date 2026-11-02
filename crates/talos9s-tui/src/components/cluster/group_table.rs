@@ -125,7 +125,7 @@ impl ClusterComponent {
         let refreshing = self
             .background_refresh
             .get(cluster_idx)
-            .is_some_and(|h| h.is_some());
+            .is_some_and(std::option::Option::is_some);
         let block = Block::default()
             .title(crate::ui_ext::title_with_refresh(
                 &format!("{} · {} nodes", group, nodes.len()),
@@ -224,10 +224,10 @@ impl ClusterComponent {
                         let total_gb = m.mem_total as f64 / 1024.0 / 1024.0 / 1024.0;
                         Cell::from(Line::from(vec![
                             Span::styled(
-                                format!("{:>3.0}%", pct),
+                                format!("{pct:>3.0}%"),
                                 Style::default().fg(memory_color(pct)),
                             ),
-                            Span::styled(format!(" {:.0}G", total_gb), dim),
+                            Span::styled(format!(" {total_gb:.0}G"), dim),
                         ]))
                     }
                     None => pending(),
@@ -264,7 +264,7 @@ impl ClusterComponent {
                 {
                     Some(Some((var, pct))) => Cell::from(Line::from(vec![
                         Span::styled(
-                            format!("{:>3.0}%", pct),
+                            format!("{pct:>3.0}%"),
                             Style::default().fg(memory_color(pct)),
                         ),
                         Span::styled(format!(" {:.0}G free", gib(var.available)), dim),
@@ -283,7 +283,7 @@ impl ClusterComponent {
                 let zfs = match zfs {
                     Some((pool, pct)) => Cell::from(Line::from(vec![
                         Span::styled(
-                            format!("{:>3.0}%", pct),
+                            format!("{pct:>3.0}%"),
                             Style::default().fg(memory_color(pct)),
                         ),
                         Span::styled(format!(" {:.0}G free", gib(pool.free)), dim),
@@ -666,7 +666,7 @@ impl ClusterComponent {
                 .map(|n| Constraint::Length(n.chars().count().max(1) as u16)),
         );
         let mut header = vec![Cell::from(Span::styled(
-            title.clone(),
+            title,
             if down > 0 {
                 Style::default().fg(Color::Red).bold()
             } else {

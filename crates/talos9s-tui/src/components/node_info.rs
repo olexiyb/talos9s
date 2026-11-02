@@ -291,6 +291,8 @@ fn hide_children(key: &str) -> bool {
 /// - a secret key with a nested value or block scalar: everything under it
 /// - `data:` / `stringData:` (Secret manifests): everything under them
 /// - PEM private key blocks anywhere
+// Slices end at the indent (spaces) or at a found ':' / '=': never inside a char
+#[allow(clippy::string_slice)]
 pub fn mask_config(text: &str) -> (Vec<ConfigLine>, usize) {
     let mut lines: Vec<ConfigLine> = Vec::new();
     let mut hidden = 0;

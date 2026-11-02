@@ -8,7 +8,11 @@ impl ClusterComponent {
         let hits = self.hits.borrow();
         if contains(hits.node_list, column, row) {
             let idx = (row - hits.node_list.y) as usize;
-            if hits.node_rows.get(idx).is_some_and(|item| item.is_some()) {
+            if hits
+                .node_rows
+                .get(idx)
+                .is_some_and(std::option::Option::is_some)
+            {
                 return ClickTarget::Row;
             }
         } else if contains(hits.menu, column, row) {
@@ -299,7 +303,7 @@ impl ClusterComponent {
 
         let left_content = Line::from(header_spans);
         let right_content = Span::styled(
-            format!(" {} ", active_name),
+            format!(" {active_name} "),
             Style::default().fg(Color::DarkGray),
         );
 

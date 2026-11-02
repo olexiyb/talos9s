@@ -32,10 +32,7 @@ impl NetworkStatsComponent {
 
                 let bytes_str = NetDevStats::format_bytes(bytes as u64);
                 self.status_message = Some((
-                    format!(
-                        "Capture stopped: {} - press 's' to save, open in Wireshark",
-                        bytes_str
-                    ),
+                    format!("Capture stopped: {bytes_str} - press 's' to save, open in Wireshark"),
                     Instant::now(),
                 ));
             }
@@ -87,15 +84,12 @@ impl NetworkStatsComponent {
                     " [NO filter]"
                 };
                 self.status_message = Some((
-                    format!(
-                        "Capturing on {}{} (save with 's')",
-                        interface, filter_status
-                    ),
+                    format!("Capturing on {interface}{filter_status} (save with 's')"),
                     Instant::now(),
                 ));
             }
             Err(e) => {
-                self.status_message = Some((format!("Capture failed: {}", e), Instant::now()));
+                self.status_message = Some((format!("Capture failed: {e}"), Instant::now()));
                 self.capture.state = CaptureState::Idle;
             }
         }
@@ -119,7 +113,7 @@ impl NetworkStatsComponent {
                     self.capture.state = CaptureState::Idle;
                     self.capture.receiver = None;
                     self.status_message = Some((
-                        format!("Capture auto-stopped at {} - press 's' to save", bytes_str),
+                        format!("Capture auto-stopped at {bytes_str} - press 's' to save"),
                         Instant::now(),
                     ));
                     return;
@@ -157,7 +151,7 @@ impl NetworkStatsComponent {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let filename = format!("{}_{}.pcap", interface, timestamp);
+        let filename = format!("{interface}_{timestamp}.pcap");
         let path = std::path::Path::new("/tmp").join(&filename);
 
         let bytes_saved = self.capture.data.len();
@@ -183,7 +177,7 @@ impl NetworkStatsComponent {
                 } else if bytes_saved >= 1024 {
                     format!("{:.1} KB", bytes_saved as f64 / 1024.0)
                 } else {
-                    format!("{} B", bytes_saved)
+                    format!("{bytes_saved} B")
                 };
                 self.status_message = Some((
                     format!("Saved {} to {}", size_str, path.display()),
@@ -193,7 +187,7 @@ impl NetworkStatsComponent {
                 self.capture.data.clear();
             }
             Err(e) => {
-                self.status_message = Some((format!("Save failed: {}", e), Instant::now()));
+                self.status_message = Some((format!("Save failed: {e}"), Instant::now()));
             }
         }
     }
@@ -239,7 +233,7 @@ impl NetworkStatsComponent {
                 Span::styled(iface, Style::default().fg(Color::Cyan)),
                 Span::raw("  "),
                 Span::styled(
-                    format!("{:02}:{:02}", mins, secs),
+                    format!("{mins:02}:{secs:02}"),
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::raw("  "),

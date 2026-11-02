@@ -114,9 +114,9 @@ pub async fn create_channel_with_endpoint(
     let mut endpoints = Vec::with_capacity(endpoint_urls.len());
     for url in &endpoint_urls {
         let endpoint = Channel::from_shared(url.clone())
-            .map_err(|e| TalosError::Connection(format!("Invalid endpoint URL '{}': {}", url, e)))?
+            .map_err(|e| TalosError::Connection(format!("Invalid endpoint URL '{url}': {e}")))?
             .tls_config(tls_config.clone())
-            .map_err(|e| TalosError::Tls(format!("TLS config error: {:?}", e)))?
+            .map_err(|e| TalosError::Tls(format!("TLS config error: {e:?}")))?
             .connect_timeout(CONNECT_TIMEOUT);
         endpoints.push((url.clone(), endpoint));
     }

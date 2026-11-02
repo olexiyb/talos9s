@@ -35,7 +35,7 @@ mod view;
 fn is_ctrl_c(key: &KeyEvent) -> bool {
     key.kind == KeyEventKind::Press
         && key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && matches!(key.code, KeyCode::Char('c' | 'C'))
 }
 
 /// Two clicks on the same cell within this long open the row, like Enter
@@ -215,7 +215,7 @@ impl App {
         let endpoint = self
             .insecure_endpoint
             .clone()
-            .expect("Insecure mode requires endpoint");
+            .ok_or_else(|| color_eyre::eyre::eyre!("insecure mode needs --endpoint"))?;
 
         let mut wizard = WizardComponent::new(endpoint);
 
@@ -336,7 +336,7 @@ impl App {
                 }
             }
             Err(e) => {
-                wizard.set_error(format!("Failed to generate config: {}", e));
+                wizard.set_error(format!("Failed to generate config: {e}"));
             }
         }
     }
@@ -446,7 +446,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    let msg = format!("Failed to apply config: {}", e);
+                    let msg = format!("Failed to apply config: {e}");
                     audit_failure("INSTALL", &endpoint, &msg);
                     wizard.set_error(msg);
                 }
@@ -488,7 +488,7 @@ impl App {
                     "Bootstrap failed: {}",
                     String::from_utf8_lossy(&out.stderr)
                 )),
-                Ok(Err(e)) => Some(format!("Failed to run bootstrap: {}", e)),
+                Ok(Err(e)) => Some(format!("Failed to run bootstrap: {e}")),
                 Err(_) => Some(format!(
                     "Bootstrap timed out after {}s",
                     BOOTSTRAP_TIMEOUT.as_secs()
@@ -601,7 +601,11 @@ impl App {
     /// Take the check's answer when it is in; a failure is only logged and
     /// tried again next start
     fn poll_update_check(&mut self) {
-        if !self.update_job.as_ref().is_some_and(|j| j.is_finished()) {
+        if !self
+            .update_job
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
             return;
         }
         let Some(job) = self.update_job.take() else {
@@ -818,7 +822,11 @@ impl App {
 
     /// Hand a finished background refresh back to the view's component
     fn poll_refresh_job(&mut self) {
-        if !self.refresh_job.as_ref().is_some_and(|j| j.is_finished()) {
+        if !self
+            .refresh_job
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
             return;
         }
         let Some(job) = self.refresh_job.take() else {
@@ -864,7 +872,7 @@ impl App {
         if self
             .rolling_k8s_fetch
             .as_ref()
-            .is_some_and(|h| h.is_finished())
+            .is_some_and(tokio::task::JoinHandle::is_finished)
             && let Some(Some(Ok(Some(k8s)))) = self
                 .rolling_k8s_fetch
                 .take()
@@ -960,11 +968,13 @@ impl App {
     }
 
     fn view_uses_tab_key(&self) -> bool {
-        self.shown().is_some_and(|c| c.uses_tab_key())
+        self.shown()
+            .is_some_and(super::components::Component::uses_tab_key)
     }
 
     fn view_uses_horizontal_keys(&self) -> bool {
-        self.shown().is_some_and(|c| c.uses_horizontal_keys())
+        self.shown()
+            .is_some_and(super::components::Component::uses_horizontal_keys)
     }
 
     /// `Z` zoom, `[` narrower and `]` wider nodes pane; true when handled
@@ -994,7 +1004,8 @@ impl App {
 
     /// A view is taking typed text (a filter or search), so letters are its
     fn view_captures_text(&self) -> bool {
-        self.shown().is_some_and(|c| c.captures_text())
+        self.shown()
+            .is_some_and(super::components::Component::captures_text)
     }
 
     /// Keys for the tree and menu. Where the dashboard has its services list,
@@ -1136,7 +1147,8 @@ impl App {
 
     /// The keys the view on the right acts on right now, for the bottom line
     fn view_key_hints(&self) -> Option<Line<'static>> {
-        self.shown().and_then(|c| c.key_hints())
+        self.shown()
+            .and_then(super::components::Component::key_hints)
     }
 
     /// Whether a left click at (column, row) is the second of a double-click
@@ -1212,7 +1224,7 @@ impl App {
             }
             View::KubeSpanMatrix => {
                 self.cluster
-                    .draw_kubespan_matrix_pane(frame, right, &self.kubespan_nodes)
+                    .draw_kubespan_matrix_pane(frame, right, &self.kubespan_nodes);
             }
             _ => {
                 if let Some(c) = &mut self.component {
@@ -1589,8 +1601,11 @@ impl App {
 
                 // Set the control plane endpoint for worker nodes to fetch kubeconfig
                 diagnostics.set_controlplane_endpoint(cp_endpoint);
-                diagnostics
-                    .set_talos_context(self.cluster.current_context_name().map(|s| s.to_string()));
+                diagnostics.set_talos_context(
+                    self.cluster
+                        .current_context_name()
+                        .map(std::string::ToString::to_string),
+                );
 
                 // Set the client and refresh data
                 if let Some(client) = self.cluster.client() {
@@ -1851,12 +1866,17 @@ impl App {
                 );
 
                 // Get context and config from cluster component
-                let context = self.cluster.current_context_name().map(|s| s.to_string());
-                let config_path = self.cluster.config_path().map(|s| s.to_string());
+                let context = self
+                    .cluster
+                    .current_context_name()
+                    .map(std::string::ToString::to_string);
+                let config_path = self
+                    .cluster
+                    .config_path()
+                    .map(std::string::ToString::to_string);
 
                 // Create storage component with context for authentication
-                let mut storage =
-                    StorageComponent::new(hostname, address.clone(), context, config_path);
+                let mut storage = StorageComponent::new(hostname, address, context, config_path);
                 storage.set_view_mode(mode);
 
                 let item = match mode {
@@ -1879,8 +1899,14 @@ impl App {
                     NodeInfoTab::Config => NavMenuItem::Config,
                     NodeInfoTab::Extensions => NavMenuItem::Extensions,
                 };
-                let context = self.cluster.current_context_name().map(|s| s.to_string());
-                let config_path = self.cluster.config_path().map(|s| s.to_string());
+                let context = self
+                    .cluster
+                    .current_context_name()
+                    .map(std::string::ToString::to_string);
+                let config_path = self
+                    .cluster
+                    .config_path()
+                    .map(std::string::ToString::to_string);
                 let mut node_info =
                     NodeInfoComponent::new(hostname, address.clone(), context, config_path, tab);
                 if let Some(client) = self.cluster.client() {

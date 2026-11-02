@@ -124,7 +124,7 @@ pub fn resolv_conf_lines(content: &str) -> Vec<String> {
     if !nameservers.is_empty() {
         lines.push("Nameservers:".to_string());
         for ns in &nameservers {
-            lines.push(format!("  • {}", ns));
+            lines.push(format!("  • {ns}"));
         }
         lines.push(String::new());
     }
@@ -132,7 +132,7 @@ pub fn resolv_conf_lines(content: &str) -> Vec<String> {
     if !search_domains.is_empty() {
         lines.push("Search Domains:".to_string());
         for domain in &search_domains {
-            lines.push(format!("  • {}", domain));
+            lines.push(format!("  • {domain}"));
         }
         lines.push(String::new());
     }
@@ -140,14 +140,14 @@ pub fn resolv_conf_lines(content: &str) -> Vec<String> {
     if !options.is_empty() {
         lines.push("Options:".to_string());
         for opt in &options {
-            lines.push(format!("  • {}", opt));
+            lines.push(format!("  • {opt}"));
         }
         lines.push(String::new());
     }
 
     lines.push("─ Raw Content ─".to_string());
     for line in content.lines() {
-        lines.push(format!("  {}", line));
+        lines.push(format!("  {line}"));
     }
 
     lines
