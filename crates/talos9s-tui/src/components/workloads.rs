@@ -514,7 +514,7 @@ impl WorkloadHealthComponent {
                 .as_ref()
                 .and_then(|s| s.ready_replicas)
                 .unwrap_or(0);
-            let desired = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1);
+            let desired = sts.spec.replicas.unwrap_or(1);
             found.push((ns, name, WorkloadKind::StatefulSet, ready, desired, ready));
         }
         for ds in &daemonsets.items {
