@@ -1,6 +1,6 @@
 # Plan: code health — correctness fixes, dead code, simplification, tests
 
-Status: phases 1-5 done (phase 5 partly, see its notes) · Author: Olexiy Buyanskyy · 2026-11-01
+Status: phases 1-6 done (phase 5 partly, see its notes) · Author: Olexiy Buyanskyy · 2026-11-01
 
 ## Summary
 
@@ -278,6 +278,27 @@ semver, `mask_config`, byte formatting (once deduplicated).
    kubespan, file_viewer, capture}`.
 4. **Group diagnostics** (`group.rs:357`) runs cluster-wide checks once per
    node; run them once per cluster.
+
+Done (2026-11-02):
+
+- View dispatch: one `Option<ViewComponent>` (an enum of the twelve
+  components, `app/view.rs`) instead of twelve fields; keys, mouse, hints,
+  drawing, ticks and actions go through `&dyn Component`, refreshes are one
+  `JoinHandle<ViewComponent>` adopted only by the view they ran for, the
+  cache holds the same enum, and `ViewSettings` + `carry_over` keep what
+  outlives a view. An enum rather than a `Box<dyn …>`: refresh is an
+  inherent async method per component, so a trait object would need
+  boxed futures and downcasts to adopt results. app.rs 2,805 → 2,222
+  lines (+199 in view.rs). `.claude/rules/tui-views.md` updated.
+- `cluster.rs` → `cluster/{data, helpers, tree, refresh, stats, actions,
+  keys, frame, nodes_pane, group_table, details, tests}`; the details pane
+  is built from `…_lines()` section builders, three of them tested.
+- `network.rs` → `network/{mod, interfaces, connections, kubespan,
+  services, file_viewer, capture}`.
+- Both splits are pure moves (checked by comparing the sorted lines: only
+  rustfmt re-wrapping, imports and four section comments differ).
+- Group diagnostics load one `ClusterShared` (Kubernetes client, addons,
+  addon checks) per refresh instead of one per node.
 
 ## Tests to add (beyond the regression tests above)
 
