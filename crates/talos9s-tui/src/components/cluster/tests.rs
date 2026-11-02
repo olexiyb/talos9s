@@ -881,3 +881,143 @@ fn group_columns_follow_the_features_present() {
     assert!(pos("ZFS") < pos("Load") && pos("Cores") < pos("Uptime"));
     assert!(pos("Svc") < pos("KSpan") && pos("Tailscale") < pos("Clock"));
 }
+
+fn press(comp: &mut ClusterComponent, code: KeyCode) {
+    comp.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+        .unwrap();
+}
+
+/// Menu hotkeys are single keys, distinct, and don't shadow the tree's own
+/// keys or the app's layout keys
+#[test]
+fn menu_hotkeys_are_unique_and_free() {
+    let reserved = ["q", "r", "j", "k", "l", "o", "O", "a", " ", "Z", "[", "]"];
+    let mut seen = std::collections::HashSet::new();
+    for item in NavMenuItem::ALL {
+        let key = item.hotkey();
+        assert_eq!(key.chars().count(), 1, "{item:?}: {key}");
+        assert!(!reserved.contains(&key), "{item:?} takes reserved {key}");
+        assert!(seen.insert(key), "{key} is used twice");
+    }
+}
+
+/// The menu cursor stops at its first and last entries (index 0 is the
+/// tree, entries are 1-based)
+#[test]
+fn menu_cursor_stays_in_bounds() {
+    let mut comp = two_node_cluster();
+    comp.focused_pane = FocusedPane::Menu;
+    comp.selected_menu_item = 1;
+    press(&mut comp, KeyCode::Up);
+    assert_eq!(comp.selected_menu_item, 1);
+    for _ in 0..NavMenuItem::ALL.len() + 5 {
+        press(&mut comp, KeyCode::Char('j'));
+    }
+    assert_eq!(comp.selected_menu_item, NavMenuItem::ALL.len());
+}
+
+/// Tab and Shift+Tab cycle the windows both ways; entering the menu puts
+/// the cursor on its first entry
+#[test]
+fn tab_cycles_the_windows() {
+    let mut comp = two_node_cluster();
+    comp.focused_pane = FocusedPane::Nodes;
+    comp.selected_menu_item = 0;
+    let mut order = Vec::new();
+    for _ in 0..3 {
+        press(&mut comp, KeyCode::Tab);
+        order.push(comp.focused_pane);
+        if comp.focused_pane == FocusedPane::Menu {
+            assert_eq!(comp.selected_menu_item, 1);
+        }
+    }
+    assert_eq!(
+        order,
+        [FocusedPane::Menu, FocusedPane::Services, FocusedPane::Nodes]
+    );
+    for expected in [FocusedPane::Services, FocusedPane::Menu, FocusedPane::Nodes] {
+        press(&mut comp, KeyCode::BackTab);
+        assert_eq!(comp.focused_pane, expected);
+    }
+}
+
+/// j/k walk the rows shown: a folded group's nodes are skipped, and the
+/// cursor stops at both ends
+#[test]
+fn tree_navigation_skips_folded_groups() {
+    let mut comp = two_node_cluster();
+    let cluster = &mut comp.clusters[0];
+    cluster.expanded = true;
+    cluster.controlplane_expanded = false;
+    cluster.workers_expanded = true;
+    comp.focused_pane = FocusedPane::Nodes;
+    comp.selected_item = NodeListItem::ClusterHeader(0);
+    let mut walked = vec![comp.selected_item.clone()];
+    for _ in 0..4 {
+        press(&mut comp, KeyCode::Char('j'));
+        walked.push(comp.selected_item.clone());
+    }
+    assert_eq!(
+        walked,
+        [
+            NodeListItem::ClusterHeader(0),
+            NodeListItem::ControlPlaneHeader(0),
+            NodeListItem::WorkersHeader(0),
+            NodeListItem::WorkerNode(0, 0),
+            NodeListItem::WorkerNode(0, 0),
+        ]
+    );
+    for _ in 0..4 {
+        press(&mut comp, KeyCode::Up);
+    }
+    assert_eq!(comp.selected_item, NodeListItem::ClusterHeader(0));
+    // Unfolding shows the control plane's node between the two headers
+    comp.selected_item = NodeListItem::ControlPlaneHeader(0);
+    press(&mut comp, KeyCode::Char(' '));
+    press(&mut comp, KeyCode::Down);
+    assert_eq!(comp.selected_item, NodeListItem::ControlPlaneNode(0, 0));
+}
+
+/// Discovery, else etcd, else the last version answers; etcd members
+/// discovery misses are added, and nameless members go by IP
+#[test]
+fn nodes_to_query_fall_back_through_the_sources() {
+    let etcd = |hostname: &str, ip: &str| EtcdMemberInfo {
+        id: 1,
+        hostname: hostname.to_string(),
+        peer_urls: vec![format!("https://{ip}:2380")],
+        client_urls: Vec::new(),
+        is_learner: false,
+    };
+    let discovery = [
+        member("cp1", "10.0.0.1", "controlplane"),
+        member("", "10.0.0.2", "worker"),
+    ];
+    let members = [
+        etcd("cp1", "10.0.0.1"),
+        etcd("cp2", "10.0.0.3"),
+        etcd("", "10.0.0.4"),
+    ];
+    let versions = [ver("10.0.0.9")];
+    let pairs = |v: Vec<(String, String)>| {
+        v.into_iter()
+            .map(|(n, i)| format!("{n}={i}"))
+            .collect::<Vec<_>>()
+    };
+
+    // A rebooting cp2 dropped out of discovery but is still an etcd member;
+    // a nameless etcd member isn't added
+    assert_eq!(
+        pairs(nodes_to_query(&discovery, &members, &versions)),
+        ["cp1=10.0.0.1", "10.0.0.2=10.0.0.2", "cp2=10.0.0.3"]
+    );
+    assert_eq!(
+        pairs(nodes_to_query(&[], &members, &versions)),
+        ["cp1=10.0.0.1", "cp2=10.0.0.3", "10.0.0.4=10.0.0.4"]
+    );
+    assert_eq!(
+        pairs(nodes_to_query(&[], &[], &versions)),
+        ["10.0.0.9=10.0.0.9"]
+    );
+    assert!(nodes_to_query(&[], &[], &[]).is_empty());
+}

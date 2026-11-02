@@ -506,9 +506,14 @@ pub async fn detect_cni_from_k8s(client: &Client) -> Result<CniInfo, K8sError> {
         .await
         .map_err(|e| K8sError::ApiError(e.to_string()))?;
 
+    Ok(cni_info_from(pod_list.items))
+}
+
+/// The CNI and its pods, from kube-system's pods by name
+fn cni_info_from(pods: Vec<Pod>) -> CniInfo {
     let mut cni_info = CniInfo::default();
 
-    for pod in pod_list.items {
+    for pod in pods {
         let name = pod.metadata.name.clone().unwrap_or_default();
         let name_lower = name.to_lowercase();
 
@@ -562,7 +567,7 @@ pub async fn detect_cni_from_k8s(client: &Client) -> Result<CniInfo, K8sError> {
         }
     }
 
-    Ok(cni_info)
+    cni_info
 }
 
 /// Information about an unhealthy pod
@@ -1447,6 +1452,52 @@ mod tests {
             ready,
             boot_id: boot_id.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn cni_pods_are_found_by_name() {
+        use super::super::types::CniType;
+        let pod = |name: &str, ready: bool, restarts: i32| -> Pod {
+            k8s_openapi::serde_json::from_value(json!({
+                "metadata": {"name": name},
+                "spec": {"containers": [], "nodeName": "bc1"},
+                "status": {
+                    "phase": "Running",
+                    "conditions": [{"type": "Ready", "status": if ready { "True" } else { "False" }}],
+                    "containerStatuses": [
+                        {"name": "a", "image": "", "imageID": "", "ready": ready, "restartCount": restarts},
+                        {"name": "b", "image": "", "imageID": "", "ready": ready, "restartCount": 1}
+                    ]
+                }
+            }))
+            .unwrap()
+        };
+        let info = cni_info_from(vec![
+            pod("coredns-1", true, 0),
+            pod("cilium-abcde", true, 2),
+            pod("cilium-operator-1", false, 0),
+            pod("kube-proxy-x", true, 0),
+        ]);
+        assert_eq!(info.cni_type, CniType::Cilium);
+        let names: Vec<_> = info.pods.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["cilium-abcde", "cilium-operator-1"]);
+        // Restarts summed over containers; readiness from the Ready condition
+        assert_eq!(info.pods[0].restart_count, 3);
+        assert!(info.pods[0].ready && !info.pods[1].ready);
+        assert_eq!(info.pods[0].node_name.as_deref(), Some("bc1"));
+
+        assert_eq!(
+            cni_info_from(vec![pod("kube-flannel-ds-1", true, 0)]).cni_type,
+            CniType::Flannel
+        );
+        assert_eq!(
+            cni_info_from(vec![pod("calico-node-1", true, 0)]).cni_type,
+            CniType::Calico
+        );
+        // No CNI pods: unknown, so detection falls back to the node's files
+        let none = cni_info_from(vec![pod("coredns-1", true, 0)]);
+        assert_eq!(none.cni_type, CniType::Unknown);
+        assert!(none.pods.is_empty());
     }
 
     #[test]

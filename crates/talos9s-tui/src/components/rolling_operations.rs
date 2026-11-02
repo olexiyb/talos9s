@@ -896,3 +896,49 @@ impl RollingOperationsComponent {
         frame.render_widget(paragraph, area);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(name: &str) -> RollingNodeInfo {
+        RollingNodeInfo {
+            hostname: name.to_string(),
+            address: String::new(),
+            is_controlplane: false,
+            selection_order: None,
+        }
+    }
+
+    /// Nodes run in the order they were picked; unpicking one closes the gap
+    #[test]
+    fn unpicking_a_node_renumbers_the_later_ones() {
+        let mut ops = RollingOperationsComponent::new();
+        ops.set_nodes(["a", "b", "c", "d"].map(node).to_vec());
+        for cursor in [2, 0, 3, 1] {
+            ops.cursor = cursor;
+            ops.toggle_current();
+        }
+        let order = |ops: &RollingOperationsComponent| {
+            ops.selected_nodes()
+                .iter()
+                .map(|n| n.hostname.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        assert_eq!(order(&ops), "c,a,d,b");
+        // Unpick a (2nd): d and b move up one
+        ops.cursor = 0;
+        ops.toggle_current();
+        assert_eq!(order(&ops), "c,d,b");
+        let orders: Vec<_> = ops.nodes.iter().map(|n| n.selection_order).collect();
+        assert_eq!(orders, [None, Some(3), Some(1), Some(2)]);
+        // Picked again, it goes last
+        ops.toggle_current();
+        assert_eq!(order(&ops), "c,d,b,a");
+        // A cursor past the list changes nothing
+        ops.cursor = 9;
+        ops.toggle_current();
+        assert_eq!(order(&ops), "c,d,b,a");
+    }
+}

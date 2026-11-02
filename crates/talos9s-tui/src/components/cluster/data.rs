@@ -17,6 +17,70 @@ pub(super) struct NodeFetch {
 
 pub(super) use talos9s_core::stats::most_common;
 
+/// The nodes a refresh queries, `(name, IP)`: discovery's members, else
+/// etcd's, else the nodes that answered the version call before; plus etcd
+/// members discovery doesn't list. A nameless member goes by its IP.
+pub(super) fn nodes_to_query(
+    discovery: &[DiscoveryMember],
+    etcd: &[EtcdMemberInfo],
+    versions: &[VersionInfo],
+) -> Vec<(String, String)> {
+    let mut nodes: Vec<(String, String)> = if !discovery.is_empty() {
+        discovery
+            .iter()
+            .filter_map(|m| {
+                m.addresses.first().map(|ip| {
+                    let name = if !m.hostname.is_empty() {
+                        m.hostname.clone()
+                    } else {
+                        ip.clone()
+                    };
+                    (name, ip.clone())
+                })
+            })
+            .collect()
+    } else if !etcd.is_empty() {
+        etcd.iter()
+            .filter_map(|m| {
+                m.ip_address().map(|ip| {
+                    let name = if !m.hostname.is_empty() {
+                        m.hostname.clone()
+                    } else {
+                        ip.clone()
+                    };
+                    (name, ip)
+                })
+            })
+            .collect()
+    } else if !versions.is_empty() {
+        // Tertiary fallback: use nodes from previous version queries
+        versions
+            .iter()
+            .map(|v| {
+                let ip = talos_rs::host_of(&v.node).to_string();
+                (v.node.clone(), ip)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Also etcd members discovery doesn't list: a rebooting control plane
+    // can drop out of discovery while it is still an etcd member
+    let listed = |nodes: &[(String, String)], name: &str, ip: &str| {
+        nodes.iter().any(|(n, i)| n == name || i == ip)
+    };
+    for m in etcd {
+        if let Some(ip) = m.ip_address()
+            && !m.hostname.is_empty()
+            && !listed(&nodes, &m.hostname, &ip)
+        {
+            nodes.push((m.hostname.clone(), ip));
+        }
+    }
+    nodes
+}
+
 /// Simple etcd status for header display
 #[derive(Debug, Clone, Default)]
 pub(super) struct EtcdSummary {
@@ -369,72 +433,21 @@ impl ClusterData {
         }
 
         // Determine which nodes to query
-        let mut nodes_to_query: Vec<(String, String)> = if !cluster.discovery_members.is_empty() {
-            cluster
-                .discovery_members
-                .iter()
-                .filter_map(|m| {
-                    m.addresses.first().map(|ip| {
-                        let name = if !m.hostname.is_empty() {
-                            m.hostname.clone()
-                        } else {
-                            ip.clone()
-                        };
-                        (name, ip.clone())
-                    })
-                })
-                .collect()
-        } else if !cluster.etcd_members.is_empty() {
-            cluster
-                .etcd_members
-                .iter()
-                .filter_map(|m| {
-                    m.ip_address().map(|ip| {
-                        let name = if !m.hostname.is_empty() {
-                            m.hostname.clone()
-                        } else {
-                            ip.clone()
-                        };
-                        (name, ip)
-                    })
-                })
-                .collect()
-        } else if !cluster.versions.is_empty() {
-            // Tertiary fallback: use nodes from previous version queries
-            tracing::debug!(
-                "Using version info as fallback node source for {}",
-                cluster.name
-            );
-            cluster
-                .versions
-                .iter()
-                .map(|v| {
-                    let ip = talos_rs::host_of(&v.node).to_string();
-                    (v.node.clone(), ip)
-                })
-                .collect()
-        } else {
+        let mut nodes_to_query = nodes_to_query(
+            &cluster.discovery_members,
+            &cluster.etcd_members,
+            &cluster.versions,
+        );
+        if nodes_to_query.is_empty() {
             tracing::warn!(
                 "No node sources available for {}, skipping queries",
                 cluster.name
             );
-            Vec::new()
-        };
-
-        // Also query etcd members discovery doesn't list (a rebooting control
-        // plane can drop out of discovery while it is still an etcd member) and
-        // recently seen nodes nothing lists any more, so they show as offline.
+        }
+        // Recently seen nodes nothing lists any more, so they show as offline
         let listed = |nodes: &[(String, String)], name: &str, ip: &str| {
             nodes.iter().any(|(n, i)| n == name || i == ip)
         };
-        for m in &cluster.etcd_members {
-            if let Some(ip) = m.ip_address()
-                && !m.hostname.is_empty()
-                && !listed(&nodes_to_query, &m.hostname, &ip)
-            {
-                nodes_to_query.push((m.hostname.clone(), ip));
-            }
-        }
         for (name, ip, _) in &previous {
             let expired = cluster
                 .offline

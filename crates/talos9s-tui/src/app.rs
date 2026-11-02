@@ -1296,13 +1296,7 @@ impl App {
         match component {
             // Streams don't survive being put aside: logs start over
             ViewComponent::MultiLogs(mut logs) => logs.stop_streaming(),
-            cached => {
-                self.view_cache.retain(|(k, _)| *k != key);
-                self.view_cache.push((key, cached));
-                if self.view_cache.len() > VIEW_CACHE_SIZE {
-                    self.view_cache.remove(0);
-                }
-            }
+            cached => cache_insert(&mut self.view_cache, key, cached),
         }
     }
 
@@ -1331,25 +1325,14 @@ impl App {
             }
             return Ok(());
         }
-        let now = Instant::now();
-        match &self.pending_target {
-            Some((pending, due)) if *pending == key => {
-                if now < *due {
-                    return Ok(());
-                }
-            }
-            _ => {
-                let delay = if self.pane == NavMenuItem::Logs {
-                    FOLLOW_DELAY_LOGS
-                } else {
-                    FOLLOW_DELAY
-                };
-                self.pending_target = Some((key, now + delay));
-                return Ok(());
-            }
-        }
-        self.pending_target = None;
-        self.retarget().await
+        let delay = if self.pane == NavMenuItem::Logs {
+            FOLLOW_DELAY_LOGS
+        } else {
+            FOLLOW_DELAY
+        };
+        let (pending, due) = follow_step(self.pending_target.take(), key, Instant::now(), delay);
+        self.pending_target = pending;
+        if due { self.retarget().await } else { Ok(()) }
     }
 
     /// Show the current menu view for the selection: from the cache when it
@@ -2010,6 +1993,32 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// One tick of following the selection to `key`: a new selection starts
+/// waiting `delay`, the same one is due once that passed. The pending
+/// selection to keep, and whether to show it now.
+fn follow_step(
+    pending: Option<(String, Instant)>,
+    key: String,
+    now: Instant,
+    delay: Duration,
+) -> (Option<(String, Instant)>, bool) {
+    match pending {
+        Some((pending, due)) if pending == key && now < due => (Some((pending, due)), false),
+        Some((pending, _)) if pending == key => (None, true),
+        _ => (Some((key, now + delay)), false),
+    }
+}
+
+/// Put a view aside under `key`, replacing an older copy, the oldest
+/// dropped past `VIEW_CACHE_SIZE`
+fn cache_insert<T>(cache: &mut Vec<(String, T)>, key: String, view: T) {
+    cache.retain(|(k, _)| *k != key);
+    cache.push((key, view));
+    if cache.len() > VIEW_CACHE_SIZE {
+        cache.remove(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2244,5 +2253,51 @@ mod tests {
                 .spawn_refresh()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn following_waits_for_the_selection_to_rest() {
+        let t0 = Instant::now();
+        let delay = Duration::from_millis(300);
+        let ms = |n| t0 + Duration::from_millis(n);
+        // A new selection waits
+        let (pending, due) = follow_step(None, "bc/bc1".into(), t0, delay);
+        assert!(!due);
+        assert_eq!(pending, Some(("bc/bc1".to_string(), ms(300))));
+        // Still the same, not long enough
+        let (pending, due) = follow_step(pending, "bc/bc1".into(), ms(299), delay);
+        assert!(!due && pending.is_some());
+        // Moving on restarts the wait for the new one
+        let (pending, due) = follow_step(pending, "bc/bc2".into(), ms(299), delay);
+        assert!(!due);
+        assert_eq!(pending, Some(("bc/bc2".to_string(), ms(599))));
+        // Rested: shown, nothing pending
+        let (pending, due) = follow_step(pending, "bc/bc2".into(), ms(599), delay);
+        assert!(due && pending.is_none());
+    }
+
+    #[test]
+    fn view_cache_replaces_and_evicts_the_oldest() {
+        let mut cache = Vec::new();
+        for (i, key) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            cache_insert(&mut cache, key.to_string(), i);
+        }
+        // Shown again: the newer copy replaces the old one and is newest
+        cache_insert(&mut cache, "a".to_string(), 10);
+        let keys =
+            |c: &Vec<(String, usize)>| c.iter().map(|(k, v)| (k.clone(), *v)).collect::<Vec<_>>();
+        assert_eq!(
+            keys(&cache),
+            [
+                ("b".into(), 1),
+                ("c".into(), 2),
+                ("d".into(), 3),
+                ("a".into(), 10)
+            ]
+        );
+        cache_insert(&mut cache, "e".to_string(), 4);
+        assert_eq!(cache.len(), VIEW_CACHE_SIZE);
+        assert_eq!(cache[0].0, "c");
+        assert_eq!(cache.last().unwrap().0, "e");
     }
 }
