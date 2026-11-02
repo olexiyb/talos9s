@@ -92,6 +92,23 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     options.open(path)?.write_all(text.as_bytes())
 }
 
+/// The warp hint at the right of a summary line, only where it fits after
+/// the summary's `summary_width` columns (the title names the warp anyway)
+pub(crate) fn draw_warp_hint(
+    frame: &mut Frame,
+    area: Rect,
+    summary_width: usize,
+    hint: Line<'static>,
+) {
+    let room = usize::from(area.width);
+    if summary_width + 2 + hint.width() <= room {
+        frame.render_widget(
+            Paragraph::new(hint).alignment(ratatui::layout::Alignment::Right),
+            Rect { height: 1, ..area },
+        );
+    }
+}
+
 /// `<W> ns: …` for the summary line of a view that warps
 pub(crate) fn warp_hint(warp: &[String]) -> Line<'static> {
     let label = talos9s_core::namespaces::label(warp, 40);
@@ -1147,8 +1164,7 @@ impl WorkloadHealthComponent {
             sorted("AGE", PodSort::Age),
             Cell::from("OWNER"),
         ])
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .bottom_margin(1);
+        .style(Style::default().add_modifier(Modifier::DIM));
         let row_count = table_rows.len();
         self.table_state
             .select(selectable.get(self.selected).copied());
@@ -1161,7 +1177,7 @@ impl WorkloadHealthComponent {
             );
         frame.render_stateful_widget(table, area, &mut self.table_state);
         self.rows =
-            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
+            crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), row_count);
     }
 
     fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
@@ -1203,8 +1219,7 @@ impl WorkloadHealthComponent {
             Cell::from("NODES"),
             Cell::from("ISSUE"),
         ])
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .bottom_margin(1);
+        .style(Style::default().add_modifier(Modifier::DIM));
 
         let row_count = table_rows.len();
         self.table_state
@@ -1218,7 +1233,7 @@ impl WorkloadHealthComponent {
             );
         frame.render_stateful_widget(table, area, &mut self.table_state);
         self.rows =
-            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
+            crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), row_count);
     }
 
     /// The selected row's details and the commands `y` copies
@@ -1900,6 +1915,7 @@ impl Component for WorkloadHealthComponent {
         }
 
         let summary = self.summary_lines();
+        let summary_width = summary.first().map_or(0, Line::width);
         let show_filter = self.filtering || self.options.filter.is_some();
         let [summary_area, filter_area, content] = Layout::vertical([
             // The summary and a border below it
@@ -1912,13 +1928,7 @@ impl Component for WorkloadHealthComponent {
             Paragraph::new(summary).block(Block::default().borders(Borders::BOTTOM)),
             summary_area,
         );
-        frame.render_widget(
-            Paragraph::new(self.warp_hint()).alignment(ratatui::layout::Alignment::Right),
-            Rect {
-                height: 1,
-                ..summary_area
-            },
-        );
+        draw_warp_hint(frame, summary_area, summary_width, self.warp_hint());
         if show_filter {
             self.draw_filter_bar(frame, filter_area);
         }

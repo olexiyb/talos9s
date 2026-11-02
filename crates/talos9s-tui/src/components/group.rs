@@ -1033,7 +1033,7 @@ impl Component for GroupComponent {
         let table_widget = Table::new(rows, widths)
             // Columns keep their widths; spare room stays on the right
             .flex(ratatui::layout::Flex::Start)
-            .header(header.bottom_margin(1))
+            .header(header)
             .block(Block::default().borders(Borders::TOP))
             .row_highlight_style(
                 Style::default()
@@ -1047,7 +1047,7 @@ impl Component for GroupComponent {
         frame.render_stateful_widget(table_widget, table, &mut self.table_state);
         // Border, header and its margin come before the first row
         self.rows =
-            crate::ui_ext::RowHits::new(table, true, 2, self.table_state.offset(), row_count);
+            crate::ui_ext::RowHits::new(table, true, 1, self.table_state.offset(), row_count);
         if !problems.is_empty() {
             frame.render_widget(
                 Paragraph::new(problems).block(

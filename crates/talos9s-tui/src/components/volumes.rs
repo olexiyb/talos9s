@@ -638,7 +638,8 @@ impl VolumesComponent {
         self.table_state.select(Some(self.selected));
     }
 
-    fn draw_summary(&self, frame: &mut Frame, area: Rect, data: &VolumesData) {
+    /// The summary line; its width, to fit the warp hint beside it
+    fn draw_summary(&self, frame: &mut Frame, area: Rect, data: &VolumesData) -> usize {
         let count = |kind: TypeFilter| data.rows.iter().filter(|r| r.kind() == kind).count();
         let (linstor, zfs) = (count(TypeFilter::Linstor), count(TypeFilter::Zfs));
         let errors = data
@@ -697,10 +698,13 @@ impl VolumesComponent {
                 Style::default().fg(Color::Yellow),
             ));
         }
+        let line = Line::from(spans);
+        let width = line.width();
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::BOTTOM)),
+            Paragraph::new(line).block(Block::default().borders(Borders::BOTTOM)),
             area,
         );
+        width
     }
 
     fn draw_table(&mut self, frame: &mut Frame, area: Rect) {
@@ -1260,13 +1264,12 @@ impl Component for VolumesComponent {
         ])
         .areas(inner);
 
-        self.draw_summary(frame, summary_area, &data);
-        frame.render_widget(
-            Paragraph::new(self.warp_hint()).alignment(ratatui::layout::Alignment::Right),
-            Rect {
-                height: 1,
-                ..summary_area
-            },
+        let summary_width = self.draw_summary(frame, summary_area, &data);
+        crate::components::workloads::draw_warp_hint(
+            frame,
+            summary_area,
+            summary_width,
+            self.warp_hint(),
         );
         self.draw_table(frame, table_area);
         frame.render_widget(

@@ -419,9 +419,7 @@ impl NetworkStatsComponent {
             Cell::from("RX DROP"),
             Cell::from("TX DROP"),
         ];
-        let header = Row::new(header_cells)
-            .style(Style::default().add_modifier(Modifier::DIM))
-            .bottom_margin(1);
+        let header = Row::new(header_cells).style(Style::default().add_modifier(Modifier::DIM));
 
         // Get data for building rows
         self.hits.devices = area;
@@ -516,7 +514,7 @@ impl NetworkStatsComponent {
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
         self.hits.device_rows =
-            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
+            crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), row_count);
     }
 
     /// Draw the detail section for selected device

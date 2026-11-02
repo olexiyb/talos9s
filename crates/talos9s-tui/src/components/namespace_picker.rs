@@ -1,6 +1,6 @@
 //! The namespace picker (`W`): warp a view into namespaces, or all
 //!
-//! Lists all namespaces, the recent warps (`1`-`4` pick them), then the
+//! Lists all namespaces (`0`), the recent warps (`1`-`4` pick them), then the
 //! namespaces the view has, with how many of its items each holds. Typing
 //! filters; a filter ending in `*` is a prefix and offered as a warp
 //! (`kolmena-staging*`). `Space` marks several namespaces, Enter warps into
@@ -103,7 +103,8 @@ impl NamespacePicker {
                 }
                 None => {}
             },
-            // Before typing, a digit picks a recent warp
+            // Before typing, `0` is all namespaces and `1`-`4` a recent warp
+            KeyCode::Char('0') if self.filter.is_empty() => return PickerEvent::Pick(Vec::new()),
             KeyCode::Char(c @ '1'..='4') if self.filter.is_empty() => {
                 let n = usize::from(u8::try_from(c).unwrap_or(b'1') - b'0');
                 if let Some(e) = entries.iter().find(|e| e.recent == Some(n)) {
@@ -131,8 +132,8 @@ impl NamespacePicker {
             Span::raw(" mark  "),
             key("<Enter>"),
             Span::raw(" warp  "),
-            key("<1-4>"),
-            Span::raw(" recent  "),
+            key("<0-4>"),
+            Span::raw(" all/recent  "),
             key("<Esc>"),
             Span::raw(" cancel"),
         ])
@@ -177,6 +178,7 @@ impl NamespacePicker {
             .map(|e| {
                 let digit = match e.recent {
                     Some(n) => Span::styled(format!("{n} "), crate::ui_ext::KEY),
+                    None if e.warp.is_empty() => Span::styled("0 ", crate::ui_ext::KEY),
                     None => Span::raw("  "),
                 };
                 let marked = e
@@ -246,6 +248,11 @@ mod tests {
         assert_eq!(
             press(&mut p, KeyCode::Char('1')),
             PickerEvent::Pick(vec!["web".into()])
+        );
+        assert_eq!(
+            press(&mut p, KeyCode::Char('0')),
+            PickerEvent::Pick(Vec::new()),
+            "all"
         );
         for c in "web2".chars() {
             press(&mut p, KeyCode::Char(c));

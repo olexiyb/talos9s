@@ -1011,8 +1011,7 @@ impl EtcdComponent {
             Cell::from("LAG"),
             Cell::from("ERRORS"),
         ])
-        .style(Style::default().add_modifier(Modifier::DIM))
-        .bottom_margin(1);
+        .style(Style::default().add_modifier(Modifier::DIM));
 
         // Use proportional column widths to fill available space
         // Addresses share what the fixed columns leave, listen lists
@@ -1044,7 +1043,7 @@ impl EtcdComponent {
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
         self.rows =
-            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
+            crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), row_count);
     }
 
     /// Draw the selected member's live etcd log, newest at the bottom

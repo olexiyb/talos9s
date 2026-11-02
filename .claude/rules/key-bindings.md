@@ -92,7 +92,8 @@ filter of the same kind (`L` listening only next to `A` all in connections).
   letters type and layout keys wait. Move with `↑`/`↓` there (`j`/`k`
   are letters), `Esc` closes, `Enter` picks.
 - In the namespace picker `Space` marks several, a filter ending in `*` is
-  a prefix, and `1`-`4` pick a recent warp until something is typed.
+  a prefix, and `0` (all namespaces) and `1`-`4` (a recent warp) pick
+  until something is typed.
 
 ## When a key changes
 

@@ -420,9 +420,7 @@ impl NetworkStatsComponent {
             Cell::from(state_header),
             Cell::from("PROCESS"),
         ];
-        let header = Row::new(header_cells)
-            .style(Style::default().add_modifier(Modifier::DIM))
-            .bottom_margin(1);
+        let header = Row::new(header_cells).style(Style::default().add_modifier(Modifier::DIM));
 
         let conns = self.get_filtered_connections();
         let in_visual = self.conn_visual.active();
@@ -552,7 +550,7 @@ impl NetworkStatsComponent {
 
         frame.render_stateful_widget(table, area, &mut self.conn_table_state);
         self.hits.connection_rows =
-            crate::ui_ext::RowHits::new(area, false, 2, self.conn_table_state.offset(), row_count);
+            crate::ui_ext::RowHits::new(area, false, 1, self.conn_table_state.offset(), row_count);
     }
 
     /// Draw footer for connection view

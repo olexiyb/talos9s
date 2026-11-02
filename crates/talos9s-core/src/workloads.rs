@@ -751,6 +751,7 @@ pub enum PodSort {
     /// Worst first: failing, degraded or not ready, pending, then healthy
     #[default]
     Health,
+    /// The pod name, across namespaces
     Name,
     Node,
     /// Most restarts first
@@ -851,7 +852,8 @@ pub fn pod_rows<'a>(
         };
         let key = match sort {
             PodSort::Health => ha.cmp(hb),
-            PodSort::Name => std::cmp::Ordering::Equal,
+            // The pod's own name across namespaces (ties: namespace, below)
+            PodSort::Name => a.name.cmp(&b.name),
             PodSort::Node => a.node.cmp(&b.node),
             PodSort::Restarts => b.restarts().cmp(&a.restarts()),
             // Undated last
@@ -1414,6 +1416,30 @@ mod tests {
         );
         assert_eq!(pod_owner(&pods[0], None), "sts/db");
         assert_eq!(pod_owner(&pods[1], None), "Job/backup");
+    }
+
+    /// `2` sorts by the pod's name; `1` with every pod healthy falls back
+    /// to namespace, then name, so the two differ
+    #[test]
+    fn pod_list_by_name_ignores_the_namespace() {
+        let pod = |ns: &str, name: &str| PodFacts {
+            namespace: ns.into(),
+            name: name.into(),
+            ..running()
+        };
+        let pods = vec![pod("apps", "zeta"), pod("web", "alpha")];
+        let all = ListOptions {
+            show_healthy: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            names(&pod_rows(&pods, None, &all, PodSort::Name, NOW)),
+            ["  alpha", "  zeta"]
+        );
+        assert_eq!(
+            names(&pod_rows(&pods, None, &all, PodSort::Health, NOW)),
+            ["  zeta", "  alpha"]
+        );
     }
 
     #[test]
