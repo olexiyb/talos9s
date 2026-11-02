@@ -326,6 +326,13 @@ Done (2026-11-02):
 - Extract for testability: `ClusterData::refresh` fallback chain →
   `nodes_to_query(...)`, `node_ips_from(...)`.
 
+Done (2026-11-02), except `parse_duration_to_ms` (removed since) and the
+wizard's form keys (its apply/bootstrap dialogs were already covered).
+Found and fixed on the way: `mask_config` leaked all four cases above; the
+process tree dropped processes in a ppid cycle; connections on any 10.x
+address counted as pod traffic on cni0/flannel/veth (now 10.244.0.0/16,
+Talos' default pod subnet, until the real pod CIDR is read).
+
 ## Order and verification
 
 Phases 1-3 as small commits, one finding (or one shared root cause) each,
