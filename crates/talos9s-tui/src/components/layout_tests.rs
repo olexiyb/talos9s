@@ -57,7 +57,7 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
             "node info",
             Box::new(NodeInfoComponent::new(
                 h,
-                a.clone(),
+                &a,
                 None,
                 None,
                 NodeInfoTab::Config,
@@ -76,7 +76,7 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
                         services: Some(vec!["apid".into()]),
                     })
                     .to_vec(),
-                vec!["apid".into()],
+                &["apid".into()],
                 vec!["apid".into()],
             )),
         ),
