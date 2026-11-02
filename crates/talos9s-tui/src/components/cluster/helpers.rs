@@ -340,12 +340,7 @@ pub(super) fn pools_line(pools: Option<&[StoragePool]>) -> Line<'static> {
 
 pub(super) use talos9s_core::stats::{gib, used_of_total};
 
-/// Color for a 1-minute load average
-/// Color of a load average for the node's core count (dim while unknown),
-/// with the thresholds the diagnostics use
-pub(super) fn load_color(load1: f64, cpu_count: Option<usize>) -> Color {
-    talos9s_core::load_health(load1, cpu_count).color()
-}
+pub(super) use crate::ui_ext::load_color;
 
 /// Render `label` followed by `items` joined with ", ", breaking only between
 /// items so an address is never split. Continuation lines are indented to

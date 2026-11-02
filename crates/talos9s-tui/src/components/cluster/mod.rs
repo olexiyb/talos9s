@@ -111,24 +111,94 @@ pub enum NavMenuItem {
 }
 
 impl NavMenuItem {
+    /// The menu's sections, in order: related views together. `ALL` is
+    /// the same entries flattened.
+    pub const GROUPS: [(&'static str, &'static [NavMenuItem]); 5] = [
+        (
+            "Overview",
+            &[
+                NavMenuItem::Dashboard,
+                NavMenuItem::Diagnostics,
+                NavMenuItem::Logs,
+                NavMenuItem::Processes,
+            ],
+        ),
+        (
+            "Node",
+            &[
+                NavMenuItem::Containers,
+                NavMenuItem::Config,
+                NavMenuItem::Extensions,
+            ],
+        ),
+        ("Network", &[NavMenuItem::Network, NavMenuItem::KubeSpan]),
+        (
+            "Storage",
+            &[
+                NavMenuItem::Disks,
+                NavMenuItem::Partitions,
+                NavMenuItem::Volumes,
+            ],
+        ),
+        (
+            "Cluster",
+            &[
+                NavMenuItem::Etcd,
+                NavMenuItem::Workloads,
+                NavMenuItem::Lifecycle,
+                NavMenuItem::Certs,
+            ],
+        ),
+    ];
+
     pub const ALL: [NavMenuItem; 16] = [
         NavMenuItem::Dashboard,
+        NavMenuItem::Diagnostics,
         NavMenuItem::Logs,
-        NavMenuItem::Etcd,
+        NavMenuItem::Processes,
+        NavMenuItem::Containers,
+        NavMenuItem::Config,
+        NavMenuItem::Extensions,
         NavMenuItem::Network,
         NavMenuItem::KubeSpan,
         NavMenuItem::Disks,
         NavMenuItem::Partitions,
-        NavMenuItem::Processes,
-        NavMenuItem::Diagnostics,
-        NavMenuItem::Certs,
-        NavMenuItem::Lifecycle,
-        NavMenuItem::Workloads,
         NavMenuItem::Volumes,
-        NavMenuItem::Containers,
-        NavMenuItem::Config,
-        NavMenuItem::Extensions,
+        NavMenuItem::Etcd,
+        NavMenuItem::Workloads,
+        NavMenuItem::Lifecycle,
+        NavMenuItem::Certs,
     ];
+
+    /// Rows the menu takes: the separator, a heading per section, the entries
+    pub const ROWS: usize = 1 + Self::GROUPS.len() + Self::ALL.len();
+
+    /// The 1-based entry (as `selected_menu_item`) on menu row `row`
+    /// (0 is the separator); `None` on the separator or a heading
+    pub fn entry_at_row(row: usize) -> Option<usize> {
+        // `next_row`: the section's heading
+        let mut next_row = 1;
+        let mut entry = 1;
+        for (_, items) in Self::GROUPS {
+            if row <= next_row {
+                return None; // the separator or the heading
+            }
+            if row <= next_row + items.len() {
+                return Some(entry + row - next_row - 1);
+            }
+            next_row += 1 + items.len();
+            entry += items.len();
+        }
+        None
+    }
+
+    /// Opens only for a node: a cluster or group header shows a hint instead
+    pub fn needs_node(&self) -> bool {
+        matches!(
+            self,
+            NavMenuItem::Containers | NavMenuItem::Config | NavMenuItem::Extensions
+        )
+    }
 
     pub fn label(&self) -> &'static str {
         match self {

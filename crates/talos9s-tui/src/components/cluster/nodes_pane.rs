@@ -1,6 +1,7 @@
 //! The nodes pane: the node list and the navigation menu
 
 use super::*;
+use ratatui::widgets::{List, ListItem, ListState};
 use talos9s_core::convert::to_u16;
 
 impl ClusterComponent {
@@ -309,7 +310,7 @@ impl ClusterComponent {
         frame.render_widget(block, area);
 
         // Split inner area: nodes list at top, nav menu at bottom
-        let menu_height = to_u16(NavMenuItem::ALL.len()).saturating_add(1); // +1 for separator
+        let menu_height = to_u16(NavMenuItem::ROWS);
         let [list, menu] = Layout::vertical([
             Constraint::Min(3),              // Nodes list
             Constraint::Length(menu_height), // Navigation menu (vertical)
@@ -334,11 +335,7 @@ impl ClusterComponent {
                 .iter()
                 .position(|item| item.as_ref() == Some(&self.selected_item))
             {
-                if selected < scroll {
-                    scroll = selected;
-                } else if selected >= scroll + height {
-                    scroll = selected + 1 - height;
-                }
+                scroll = crate::ui_ext::scroll_into_view(scroll, selected, height);
             }
             scroll = scroll.min(total.saturating_sub(height));
             let lines: Vec<Line> = lines
@@ -368,7 +365,8 @@ impl ClusterComponent {
         // Dim while a view has the keyboard, even though this side is the one
         // Left returns to
         let menu_focused = self.focused_pane == FocusedPane::Menu && !self.view_focused;
-        let mut lines = Vec::new();
+        let [separator, list] =
+            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
 
         // Separator line with focus color
         let sep_color = if menu_focused {
@@ -381,52 +379,77 @@ impl ClusterComponent {
         } else {
             "─".repeat(area.width as usize)
         };
-        lines.push(Line::from(Span::styled(
-            sep_text,
-            Style::default().fg(sep_color),
-        )));
+        frame.render_widget(
+            Paragraph::new(Span::styled(sep_text, Style::default().fg(sep_color))),
+            separator,
+        );
 
-        // Menu items (1-indexed, 0 means not in menu)
-        for (i, item) in NavMenuItem::ALL.iter().enumerate() {
-            let menu_index = i + 1; // 1-based for selection
-            let is_selected = menu_index == self.selected_menu_item;
-            // The highlighted row is the selection: no marker column, so
-            // the compact pane keeps room for the names
-            let highlighted = is_selected && menu_focused;
-            let bar = Style::default().fg(Color::Black).bg(Color::Cyan);
-            let hotkey_style = if highlighted {
-                bar.add_modifier(Modifier::BOLD)
+        // Entries that need a node stay in place but dim while a header is
+        // selected (hiding them would shift the menu with every tree move)
+        let node_selected = matches!(
+            self.selected_item,
+            NodeListItem::ControlPlaneNode(..) | NodeListItem::WorkerNode(..)
+        );
+        let heading_style = Style::default().fg(Color::Gray).add_modifier(Modifier::DIM);
+        let dim = Style::default().fg(Color::DarkGray);
+        // `selected_menu_item` is 1-based, 0 means not in the menu
+        let mut items: Vec<ListItem> = Vec::with_capacity(NavMenuItem::ROWS - 1);
+        let mut selected_row = None;
+        let mut entry = 0;
+        for (heading, group) in NavMenuItem::GROUPS {
+            let heading = if group.iter().all(NavMenuItem::needs_node) && !node_selected {
+                format!("{heading} · select one")
             } else {
-                crate::ui_ext::KEY.add_modifier(Modifier::BOLD)
+                heading.to_string()
             };
-            let label_style = if highlighted {
-                bar.add_modifier(Modifier::BOLD)
-            } else if is_selected {
-                // The view shown on the right
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            let text = format!(" {} {}", item.hotkey(), item.label());
-            // A highlight spans the row
-            let pad = (area.width as usize).saturating_sub(text.chars().count());
-            lines.push(Line::from(vec![
-                Span::styled(" ", if highlighted { bar } else { Style::default() }),
-                Span::styled(item.hotkey(), hotkey_style),
-                Span::styled(format!(" {}", item.label()), label_style),
-                Span::styled(
-                    " ".repeat(if highlighted { pad } else { 0 }),
-                    if highlighted { bar } else { Style::default() },
-                ),
-            ]));
+            items.push(ListItem::new(crate::ui_ext::ellipsize(
+                Line::from(Span::styled(heading, heading_style)),
+                usize::from(area.width),
+            )));
+            for item in group {
+                entry += 1;
+                if entry == self.selected_menu_item {
+                    selected_row = Some(items.len());
+                }
+                let (hotkey_style, label_style) = if item.needs_node() && !node_selected {
+                    (dim, dim)
+                } else if entry == self.selected_menu_item {
+                    // The view shown on the right
+                    (
+                        crate::ui_ext::KEY.add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    (
+                        crate::ui_ext::KEY.add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Gray),
+                    )
+                };
+                let line = Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(item.hotkey(), hotkey_style),
+                    Span::styled(format!(" {}", item.label()), label_style),
+                ]);
+                items.push(ListItem::new(crate::ui_ext::ellipsize(
+                    line,
+                    usize::from(area.width),
+                )));
+            }
         }
-
-        let lines: Vec<Line> = lines
-            .into_iter()
-            .map(|l| crate::ui_ext::ellipsize(l, usize::from(area.width)))
-            .collect();
-        frame.render_widget(Paragraph::new(lines), area);
+        // The highlighted row is the selection: no marker column, so the
+        // compact pane keeps room for the names
+        let mut state = ListState::default().with_selected(selected_row.filter(|_| menu_focused));
+        frame.render_stateful_widget(
+            List::new(items).highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            list,
+            &mut state,
+        );
     }
 }

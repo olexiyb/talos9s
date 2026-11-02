@@ -84,6 +84,11 @@ right side for whatever is selected. Move the selection and the view follows
 (a node's network, then the next node's, or the whole group's on a group
 row). Recently shown views come back instantly.
 
+The menu groups the views: Overview (dashboard, diagnostics, logs,
+processes), Node, Network, Storage and Cluster. The Node entries (containers,
+machine config, extensions) need a node and are dimmed on a cluster or group
+row.
+
 The Dashboard shows:
 
 - All contexts at once, each with its control plane and workers, node health

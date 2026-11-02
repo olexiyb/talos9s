@@ -271,7 +271,9 @@ fn click_targets_in_the_nodes_pane() {
     assert_eq!(comp.click_target(list.x + 2, list.y), ClickTarget::Row);
     // Menu row 0 is the separator, row 1 the first entry
     assert_eq!(comp.click_target(menu.x + 2, menu.y), ClickTarget::None);
-    assert_eq!(comp.click_target(menu.x + 2, menu.y + 1), ClickTarget::Menu);
+    // Row 1 is the first section's heading
+    assert_eq!(comp.click_target(menu.x + 2, menu.y + 1), ClickTarget::None);
+    assert_eq!(comp.click_target(menu.x + 2, menu.y + 2), ClickTarget::Menu);
     // Empty space under the tree, and the pane's border
     assert_eq!(
         comp.click_target(list.x + 2, list.y + list.height - 1),
@@ -1067,4 +1069,37 @@ fn a_toggles_auto_refresh() {
     assert!(!c.auto_refresh);
     c.handle_key_event(a).unwrap();
     assert!(c.auto_refresh);
+}
+
+/// The sections hold every entry once, in `ALL`'s order, so the 1-based
+/// `selected_menu_item` walks the menu top to bottom
+#[test]
+fn menu_groups_flatten_to_all() {
+    let flat: Vec<NavMenuItem> = NavMenuItem::GROUPS
+        .iter()
+        .flat_map(|(_, items)| items.iter().copied())
+        .collect();
+    assert_eq!(flat, NavMenuItem::ALL);
+}
+
+/// Rows map to entries past the separator and each section's heading
+#[test]
+fn menu_rows_skip_headings() {
+    assert_eq!(NavMenuItem::entry_at_row(0), None); // separator
+    assert_eq!(NavMenuItem::entry_at_row(1), None); // Overview
+    assert_eq!(NavMenuItem::entry_at_row(2), Some(1)); // Dashboard
+    assert_eq!(NavMenuItem::entry_at_row(5), Some(4)); // Processes
+    assert_eq!(NavMenuItem::entry_at_row(6), None); // Node
+    assert_eq!(NavMenuItem::entry_at_row(7), Some(5)); // Containers
+    let last = NavMenuItem::ROWS - 1;
+    assert_eq!(
+        NavMenuItem::entry_at_row(last),
+        Some(NavMenuItem::ALL.len())
+    );
+    assert_eq!(NavMenuItem::entry_at_row(last + 1), None);
+    // Every entry has exactly one row
+    let rows: Vec<usize> = (0..NavMenuItem::ROWS)
+        .filter_map(NavMenuItem::entry_at_row)
+        .collect();
+    assert_eq!(rows, (1..=NavMenuItem::ALL.len()).collect::<Vec<_>>());
 }

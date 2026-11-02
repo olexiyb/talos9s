@@ -76,13 +76,13 @@ impl Component for ClusterComponent {
                     }
                     Ok(None)
                 } else if in_menu {
-                    let idx = (row - self.hits.borrow().menu.y) as usize;
-                    if (1..=NavMenuItem::ALL.len()).contains(&idx) {
+                    let row = (row - self.hits.borrow().menu.y) as usize;
+                    if let Some(idx) = NavMenuItem::entry_at_row(row) {
                         self.focused_pane = FocusedPane::Menu;
                         self.selected_menu_item = idx;
                         return Ok(self.navigate_to_selected_menu());
                     }
-                    // The separator line
+                    // The separator line or a heading
                     self.focused_pane = FocusedPane::Nodes;
                     Ok(None)
                 } else if in_details {

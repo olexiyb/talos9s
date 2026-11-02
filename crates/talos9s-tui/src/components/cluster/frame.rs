@@ -16,11 +16,10 @@ impl ClusterComponent {
             {
                 return ClickTarget::Row;
             }
-        } else if contains(hits.menu, column, row) {
-            let idx = (row - hits.menu.y) as usize;
-            if (1..=NavMenuItem::ALL.len()).contains(&idx) {
-                return ClickTarget::Menu;
-            }
+        } else if contains(hits.menu, column, row)
+            && NavMenuItem::entry_at_row((row - hits.menu.y) as usize).is_some()
+        {
+            return ClickTarget::Menu;
         }
         ClickTarget::None
     }

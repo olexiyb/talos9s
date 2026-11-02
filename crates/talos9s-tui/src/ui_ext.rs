@@ -9,9 +9,9 @@ use talos9s_core::{
     CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus,
 };
 
-/// Draw `content` at its full height into an off-screen buffer and show the
-/// part of it that fits `area`, `scroll` lines down: a scrollable area for
-/// any widgets. Returns how far it can scroll (0 when everything fits).
+/// Draw `content` at its full height into a scroll view and show the part
+/// of it that fits `area`, `scroll` lines down: a scrollable area for any
+/// widgets. Returns how far it can scroll (0 when everything fits).
 pub fn render_scrolled(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
@@ -19,27 +19,27 @@ pub fn render_scrolled(
     scroll: u16,
     content: impl FnOnce(&mut ratatui::buffer::Buffer, ratatui::layout::Rect),
 ) -> u16 {
-    use ratatui::layout::{Position, Rect};
-    let full = Rect::new(area.x, area.y, area.width, content_height.max(area.height));
-    let mut buf = ratatui::buffer::Buffer::empty(full);
-    content(&mut buf, full);
-    let max_scroll = full.height - area.height;
-    let scroll = scroll.min(max_scroll);
-    let target = frame.buffer_mut();
-    for y in 0..area.height {
-        for x in 0..area.width {
-            let src = buf.cell(Position::new(area.x + x, area.y + y + scroll));
-            let dst = target.cell_mut(Position::new(area.x + x, area.y + y));
-            if let (Some(src), Some(dst)) = (src, dst) {
-                *dst = src.clone();
-            }
-        }
+    use ratatui::layout::{Position, Size};
+    use tui_scrollview::{ScrollView, ScrollViewState, ScrollbarVisibility};
+    let height = content_height.max(area.height);
+    let max_scroll = height - area.height;
+    if area.is_empty() {
+        return max_scroll;
     }
+    // Its own scrollbar has arrows and can't be restyled: drawn here instead,
+    // like every other scrollbar
+    let mut view = ScrollView::new(Size::new(area.width, height))
+        .scrollbars_visibility(ScrollbarVisibility::Never);
+    let full = view.area();
+    content(view.buf_mut(), full);
+    let scroll = scroll.min(max_scroll);
+    let mut state = ScrollViewState::with_offset(Position::new(0, scroll));
+    frame.render_stateful_widget(view, area, &mut state);
     // Over the border column right of the area, so no content width is lost
     draw_scrollbar(
         frame,
-        Rect::new(area.x + area.width, area.y, 1, area.height),
-        full.height,
+        ratatui::layout::Rect::new(area.x + area.width, area.y, 1, area.height),
+        height,
         scroll,
     );
     max_scroll
@@ -67,6 +67,36 @@ pub fn draw_scrollbar(
         column,
         &mut state,
     );
+}
+
+/// A `width`-cell bar filled to `pct` percent (clamped to 0..=100), for
+/// usage shown inline in a line of text, where a `LineGauge` (which needs
+/// its own area) doesn't fit
+pub fn usage_bar(pct: f32, width: usize) -> String {
+    let filled = talos9s_core::convert::to_usize(talos9s_core::convert::float_to_u64(
+        f64::from((pct.clamp(0.0, 100.0) / 100.0) * width as f32).round(),
+    ))
+    .min(width);
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// The scroll offset that keeps line `selected` in a `height`-line view:
+/// `scroll` unchanged when it's already visible, otherwise just far enough
+/// to bring it to the top or bottom edge
+pub fn scroll_into_view(scroll: usize, selected: usize, height: usize) -> usize {
+    if selected < scroll {
+        selected
+    } else if selected >= scroll + height {
+        (selected + 1).saturating_sub(height)
+    } else {
+        scroll
+    }
+}
+
+/// Color of a load average for the node's core count (dim while unknown),
+/// with the thresholds the dashboard, Processes and diagnostics share
+pub fn load_color(load1: f64, cpu_count: Option<usize>) -> Color {
+    HealthIndicatorExt::color(&talos9s_core::load_health(load1, cpu_count))
 }
 
 /// Seconds since the Unix epoch (0 if the clock is before it)
@@ -509,6 +539,63 @@ pub fn ellipsize(line: Line<'_>, width: usize) -> Line<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scroll_into_view_moves_only_when_needed() {
+        use super::scroll_into_view;
+        assert_eq!(scroll_into_view(5, 7, 4), 5); // visible
+        assert_eq!(scroll_into_view(5, 2, 4), 2); // above: to the top edge
+        assert_eq!(scroll_into_view(5, 9, 4), 6); // below: to the bottom edge
+        assert_eq!(scroll_into_view(5, 9, 0), 10); // no room: still in range
+    }
+
+    #[test]
+    fn render_scrolled_shows_the_scrolled_part_and_a_bar_in_the_border() {
+        use ratatui::widgets::Widget;
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect, widgets::Paragraph};
+        let mut terminal = Terminal::new(TestBackend::new(6, 4)).unwrap();
+        let mut max = 0;
+        terminal
+            .draw(|frame| {
+                // 5 wide, plus the border column at x = 5
+                max = super::render_scrolled(frame, Rect::new(0, 0, 5, 4), 10, 3, |buf, full| {
+                    let lines: Vec<_> = (0..10)
+                        .map(|i| format!("row{i}").into())
+                        .collect::<Vec<ratatui::text::Line>>();
+                    Paragraph::new(lines).render(full, buf);
+                });
+            })
+            .unwrap();
+        assert_eq!(max, 6);
+        let buf = terminal.backend().buffer();
+        let row = |y: u16| (0..5).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        assert_eq!(row(0), "row3 ");
+        assert_eq!(row(3), "row6 ");
+        assert_ne!(buf[(5, 0)].symbol(), " ", "scrollbar in the border column");
+        assert_ne!(buf[(5, 0)].symbol(), "▲", "no arrows, like draw_scrollbar");
+
+        // Content that fits: no scrolling, the border column untouched
+        let mut terminal = Terminal::new(TestBackend::new(6, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                max = super::render_scrolled(frame, Rect::new(0, 0, 5, 4), 2, 3, |buf, full| {
+                    Paragraph::new("a\nb").render(full, buf);
+                });
+            })
+            .unwrap();
+        assert_eq!(max, 0);
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "a");
+        assert_eq!(terminal.backend().buffer()[(5, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn usage_bar_fills_by_percent() {
+        assert_eq!(super::usage_bar(0.0, 10), "░░░░░░░░░░");
+        assert_eq!(super::usage_bar(54.0, 10), "█████░░░░░");
+        assert_eq!(super::usage_bar(100.0, 4), "████");
+        assert_eq!(super::usage_bar(250.0, 4), "████");
+        assert_eq!(super::usage_bar(-5.0, 4), "░░░░");
+    }
+
     use super::*;
 
     #[test]

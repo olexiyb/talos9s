@@ -866,13 +866,6 @@ impl ProcessesComponent {
         }
     }
 
-    /// Load average color relative to the node's core count, with the
-    /// thresholds the dashboard and diagnostics use
-    fn load_color(load: f64, cpu_count: usize) -> Color {
-        use crate::ui_ext::HealthIndicatorExt;
-        talos9s_core::load_health(load, Some(cpu_count)).color()
-    }
-
     /// Draw the header
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
         let data = match self.data() {
@@ -991,11 +984,7 @@ impl ProcessesComponent {
 
     /// Generate a usage bar (10 chars) based on percentage
     fn usage_bar(percent: f32) -> (String, Color) {
-        let filled = usize::from(
-            talos9s_core::convert::float_to_u16(f64::from(percent / 10.0).round()).min(10),
-        );
-        let empty = 10 - filled;
-        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+        let bar = crate::ui_ext::usage_bar(percent, 10);
         // The dashboard's thresholds, so a node looks the same in both
         use crate::ui_ext::HealthIndicatorExt;
         let color = talos9s_core::memory_health(f64::from(percent)).color();
@@ -1040,7 +1029,7 @@ impl ProcessesComponent {
             for load in loads {
                 spans.push(Span::styled(
                     format!("{load:.2}"),
-                    Style::default().fg(Self::load_color(load, stats.cpu_count)),
+                    Style::default().fg(crate::ui_ext::load_color(load, Some(stats.cpu_count))),
                 ));
                 spans.push(Span::raw(" "));
             }
@@ -1052,7 +1041,10 @@ impl ProcessesComponent {
                 ));
                 spans.push(Span::styled(
                     format!("{:.2}", stats.load_avg.0),
-                    Style::default().fg(Self::load_color(stats.load_avg.0, stats.cpu_count)),
+                    Style::default().fg(crate::ui_ext::load_color(
+                        stats.load_avg.0,
+                        Some(stats.cpu_count),
+                    )),
                 ));
                 spans.push(Span::raw(" "));
             }

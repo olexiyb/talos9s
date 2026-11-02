@@ -4,16 +4,11 @@ use super::*;
 use talos9s_core::convert::to_u16;
 
 impl ClusterComponent {
-    /// Render a compact ASCII bar for percentage values
-    pub(super) fn render_compact_bar(pct: f32, width: usize) -> String {
-        let filled = talos9s_core::convert::to_usize(talos9s_core::convert::float_to_u64(
-            f64::from(((pct / 100.0) * width as f32).round()),
-        ));
-        let empty = width.saturating_sub(filled);
+    /// A 10-cell usage bar and the percentage, e.g. `█████░░░░░ 54%`
+    pub(super) fn render_compact_bar(pct: f32) -> String {
         format!(
-            "{}{}{:>3}%",
-            "█".repeat(filled),
-            "░".repeat(empty),
+            "{}{:>3}%",
+            crate::ui_ext::usage_bar(pct, 10),
             u8::try_from(talos9s_core::convert::float_to_u64(f64::from(pct).round()))
                 .unwrap_or(u8::MAX)
         )
@@ -190,11 +185,8 @@ impl ClusterComponent {
         // Keyboard selection in the services stays in view
         if self.focused_pane == FocusedPane::Services && service_count > 0 {
             let selected_line = services_heading + 1 + self.selected_service;
-            if selected_line < self.details_scroll {
-                self.details_scroll = selected_line;
-            } else if selected_line >= self.details_scroll + height {
-                self.details_scroll = selected_line + 1 - height;
-            }
+            self.details_scroll =
+                crate::ui_ext::scroll_into_view(self.details_scroll, selected_line, height);
         }
         frame.render_widget(
             Paragraph::new(lines).scroll((to_u16(self.details_scroll), 0)),
@@ -260,7 +252,7 @@ impl ClusterComponent {
             let pct = mem.usage_percent();
             let used_gb = (mem.mem_total - mem.mem_available) as f64 / 1024.0 / 1024.0 / 1024.0;
             let total_gb = mem.mem_total as f64 / 1024.0 / 1024.0 / 1024.0;
-            let bar = Self::render_compact_bar(pct, 10);
+            let bar = Self::render_compact_bar(pct);
             let color = memory_color(pct);
             resource_lines.push(Line::from(vec![
                 Span::styled(" Memory: ", Style::default().dim()),
@@ -319,7 +311,7 @@ impl ClusterComponent {
                 resource_lines.push(Line::from(vec![
                     Span::styled(label, Style::default().dim()),
                     Span::styled(
-                        Self::render_compact_bar(pct, 10),
+                        Self::render_compact_bar(pct),
                         Style::default().fg(memory_color(pct)),
                     ),
                     Span::styled(
@@ -352,7 +344,7 @@ impl ClusterComponent {
             resource_lines.push(Line::from(vec![
                 Span::styled(label, Style::default().dim()),
                 Span::styled(
-                    Self::render_compact_bar(pct, 10),
+                    Self::render_compact_bar(pct),
                     Style::default().fg(memory_color(pct)),
                 ),
                 Span::styled(

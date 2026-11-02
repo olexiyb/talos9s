@@ -13,6 +13,7 @@ talos-rs.workspace = true
 
 # TUI
 ratatui.workspace = true
+tui-scrollview.workspace = true
 crossterm.workspace = true
 
 # TLS (for crypto provider)
