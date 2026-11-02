@@ -1123,6 +1123,8 @@ impl WorkloadHealthComponent {
             vec![
                 Span::styled("<j/k>", crate::ui_ext::KEY),
                 Span::raw(" select  "),
+                Span::styled("<g/G>", crate::ui_ext::KEY),
+                Span::raw(" top/bottom  "),
                 Span::styled("<Esc/q>", crate::ui_ext::KEY),
                 Span::raw(" back  "),
             ]
@@ -1130,6 +1132,8 @@ impl WorkloadHealthComponent {
             vec![
                 Span::styled("<j/k>", crate::ui_ext::KEY),
                 Span::raw(" select  "),
+                Span::styled("<g/G>", crate::ui_ext::KEY),
+                Span::raw(" top/bottom  "),
                 Span::styled("<Enter>", crate::ui_ext::KEY),
                 Span::raw(" expand  "),
             ]

@@ -213,6 +213,8 @@ Moving around:
   or node. In Network, clicking a sortable column header sorts by it and
   "Interfaces" in the connections breadcrumb goes back.
 - `Space` folds a cluster or group, `r` refreshes, `a` toggles auto-refresh.
+- In a view's lists, `g`/`G` or `Home`/`End` jump to the top or bottom and
+  `PageUp`/`PageDown` move a page; the selection stops at the ends.
 - `q` in the tree returns to the Dashboard; on the Dashboard it asks before
   quitting (`y`). `Ctrl+C` quits from anywhere at once.
 - The same letter means the same thing in every view: `a` auto-refresh (where a view has it),

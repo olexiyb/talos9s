@@ -1157,6 +1157,8 @@ impl EtcdComponent {
         Line::from(vec![
             Span::styled("<j/k>", crate::ui_ext::KEY),
             Span::raw(" select  "),
+            Span::styled("<g/G>", crate::ui_ext::KEY),
+            Span::raw(" top/bottom  "),
             Span::styled("<r>", crate::ui_ext::KEY),
             Span::raw(" refresh  "),
             Span::styled("<y>", crate::ui_ext::KEY),

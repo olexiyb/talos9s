@@ -596,8 +596,10 @@ impl Component for StorageComponent {
     fn key_hints(&self) -> Option<Line<'static>> {
         let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let mut spans = vec![
-            key("<↑/↓>"),
+            key("<j/k>"),
             Span::raw(" navigate  "),
+            key("<g/G>"),
+            Span::raw(" top/bottom  "),
             key("<r>"),
             Span::raw(" refresh"),
         ];

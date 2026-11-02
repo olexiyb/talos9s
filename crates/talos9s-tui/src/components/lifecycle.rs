@@ -1096,6 +1096,8 @@ impl LifecycleComponent {
         let spans = vec![
             Span::styled("<j/k>", crate::ui_ext::KEY),
             Span::raw(" navigate  "),
+            Span::styled("<g/G>", crate::ui_ext::KEY),
+            Span::raw(" top/bottom  "),
             Span::styled("<r>", crate::ui_ext::KEY),
             Span::raw(" refresh"),
         ];
