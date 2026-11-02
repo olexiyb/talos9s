@@ -1,0 +1,14 @@
+# Git hooks (https://lefthook.dev). Enable once per clone: lefthook install
+# Fast checks before each commit; clippy and tests before a push. CI runs
+# all of them anyway.
+pre-commit:
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+pre-push:
+  commands:
+    clippy:
+      run: cargo clippy --all --all-targets -- -D warnings
+    test:
+      run: cargo test --all

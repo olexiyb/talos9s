@@ -33,6 +33,7 @@ cargo fmt --all -- --check                           # must be clean
 cargo build -p talos-rs --features regenerate        # only after changing crates/talos-rs/proto/ (needs protoc); commit src/generated
 cargo install --path . --locked                      # installs the `talos9s` binary
 TALOS9S_CONTEXT=bc cargo dev                         # run, rebuild and restart on every source change (cargo-watch)
+lefthook install                                     # git hooks: fmt on commit, clippy + tests on push (lefthook.yml)
 ```
 
 Live tests against real clusters are `#[ignore]`d and read

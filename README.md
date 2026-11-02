@@ -277,6 +277,7 @@ cargo clippy --all --all-targets -- -D warnings
 cargo fmt --all -- --check
 RUST_LOG=debug cargo run
 TALOS9S_CONTEXT=my-cluster cargo dev   # rebuild and restart on every change (needs cargo-watch)
+lefthook install                       # once per clone: rustfmt before commits, clippy and tests before pushes
 ```
 
 The workspace has three crates: `talos-rs` (Talos client), `talos9s-core`
