@@ -1,6 +1,6 @@
 # Plan: code health — correctness fixes, dead code, simplification, tests
 
-Status: phases 1-6 done (phase 5 partly, see its notes) · Author: Olexiy Buyanskyy · 2026-11-01
+Status: phases 1-6 done · Author: Olexiy Buyanskyy · 2026-11-01
 
 ## Summary
 
@@ -191,12 +191,14 @@ serde structs, BPF programs as tables (pinned byte-for-byte by a test);
 strum for state file names; tonic codes, clap `requires`, x509
 organizations, `Ipv4Addr`, `kube::config::Kubeconfig`.
 
-Left, low value or better done with phase 6: visual selection + yank
-shared by network and logs; a deployment readiness helper (cilium,
-cert-manager); moving `update::is_newer` / `UpdateCheck::due` /
-`most_common` / `used_of_total` and the DNS and route parsers to core
-(tested where they are); the group table column spec (with the
-cluster.rs split).
+Leftovers done (2026-11-02): `VisualSelection` (core) and
+`clipboard::copy_lines` shared by logs and connections; one
+`DeploymentReplicas` reader for the Cilium checks and workloads
+(cert-manager checks pods, not Deployments, so it doesn't use it);
+`version::is_newer` / `check_due`, `stats::most_common` / `used_of_total`
+and the resolv.conf and route table formatters in core, with tests; the
+group table built from one `GroupCol` list, which fixed offline rows
+shifting under KSpan/Tailscale (the "down …" note now sits in GW).
 
 ### Move to talos9s-core (pure, testable)
 - Log parsing from `multi_logs.rs:817-1190`: `parse_line`,
