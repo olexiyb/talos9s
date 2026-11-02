@@ -17,8 +17,8 @@ paths:
   the component was given (`set_client`). No client argument.
 - Slow refreshes run on a clone: implement `BackgroundRefresh`
   (`adopt_refresh` takes only the loaded state, keeping UI state the user
-  changed meanwhile). `app.rs` starts them with `spawn_refresh!` into a
-  `RefreshJob` and adopts the result when it finishes.
+  changed meanwhile). `app/view.rs` starts them (`ViewComponent::spawn_refresh`)
+  and the app adopts the result when it finishes.
 - Auto-refresh: `update(Action::Tick)` returns `Action::Refresh` when
   `state.should_auto_refresh(..)`.
 - Show a loading message for each part until its data arrives (an empty table
@@ -43,27 +43,26 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
   `ClusterComponent::action_for(item)`.
 - **Leaving a view:** every `Show…` handler calls `leave_view()` first (stops
   log streams, keeps settings that carry over, caches the component by
-  (pane, target)) and ends with `show_in_pane(item, View::…)`.
+  (pane, target)) and ends with `show_component(item, …)`.
 
 ## Wiring a new view (all of these, or it silently does nothing)
 
 1. `action.rs`: a `Show…` variant with what the view needs (hostname, address, tab).
 2. `components/mod.rs`: `pub mod` and `pub use`.
-3. `app.rs`:
-   - import; `View::…`; `Option<…Component>` field, `None` in `new`
-   - `RefreshJob::…` + its arms in `is_finished`, `abort`, `finish!`
-   - `draw_workspace` arm, `dispatch_view_key` arm, `update(action)` arm
-   - `Action::Tick` arm (component `update(Tick)`), `Action::Refresh` arm
-     (start `spawn_refresh!` only when `refresh_job.is_none()`)
-   - the `Show…` handler: `leave_view()`, build the component, set the node
-     client (`client.with_node(&address)`), start the first refresh,
-     `show_in_pane(item, View::…)`
-   - `leave_view` / `CachedView` / `restore_view` arms to cache it
-   - `dispatch_mouse` if the view handles clicks (otherwise the wheel arrives
-     as Up/Down keys)
-4. `cluster.rs`: a `NavMenuItem` (`ALL`, `label` with the full name,
+3. `app/view.rs`: a `View::…` and a `ViewComponent::…(Box<…>)` variant,
+   with its arms in `each!`, `view()`, and `spawn_refresh` / `adopt_refresh`
+   (for a background refresh) or `spawn_refresh`'s `None` arm; settings that
+   carry over to the next visit go in `ViewSettings` and `carry_over`.
+   Keys, mouse, key hints, drawing, ticks and actions then reach the
+   component through `Component` with no more wiring.
+4. `app.rs`: the `Show…` handler: `leave_view()`, build the component, set
+   the node client (`client.with_node(&address)`), and end with
+   `show_component(item, ViewComponent::…(Box::new(c)), load)` (`load`
+   starts the first refresh). Anything the refresh needs from the cluster
+   each time (a redialled client) goes in the `Action::Refresh` arm.
+5. `cluster.rs`: a `NavMenuItem` (`ALL`, `label` with the full name,
    `hotkey`) and its arm in `action_for` (hotkeys come from `hotkey`).
-5. README: the feature row and the key binding.
+6. README: the feature row and the key binding.
 
 ## Conventions
 

@@ -2,7 +2,6 @@
 
 use crate::action::Action;
 use crate::audit::{audit_failure, audit_start, audit_success};
-use crate::components::BackgroundRefresh;
 use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth, TreeSelection};
 use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
@@ -28,98 +27,15 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
+use view::{View, ViewComponent, ViewSettings};
 
-/// A view refresh running on a clone of the view's component
-enum RefreshJob {
-    Diagnostics(JoinHandle<DiagnosticsComponent>),
-    Security(JoinHandle<SecurityComponent>),
-    Lifecycle(JoinHandle<LifecycleComponent>),
-    Workloads(JoinHandle<WorkloadHealthComponent>),
-    Storage(JoinHandle<StorageComponent>),
-    NodeInfo(JoinHandle<NodeInfoComponent>),
-    Processes(JoinHandle<ProcessesComponent>),
-    Etcd(JoinHandle<EtcdComponent>),
-    Volumes(JoinHandle<VolumesComponent>),
-    Group(JoinHandle<GroupComponent>),
-}
-
-impl RefreshJob {
-    fn is_finished(&self) -> bool {
-        match self {
-            RefreshJob::Diagnostics(h) => h.is_finished(),
-            RefreshJob::Security(h) => h.is_finished(),
-            RefreshJob::Lifecycle(h) => h.is_finished(),
-            RefreshJob::Workloads(h) => h.is_finished(),
-            RefreshJob::Storage(h) => h.is_finished(),
-            RefreshJob::NodeInfo(h) => h.is_finished(),
-            RefreshJob::Processes(h) => h.is_finished(),
-            RefreshJob::Etcd(h) => h.is_finished(),
-            RefreshJob::Volumes(h) => h.is_finished(),
-            RefreshJob::Group(h) => h.is_finished(),
-        }
-    }
-
-    fn abort(&self) {
-        match self {
-            RefreshJob::Diagnostics(h) => h.abort(),
-            RefreshJob::Security(h) => h.abort(),
-            RefreshJob::Lifecycle(h) => h.abort(),
-            RefreshJob::Workloads(h) => h.abort(),
-            RefreshJob::Storage(h) => h.abort(),
-            RefreshJob::NodeInfo(h) => h.abort(),
-            RefreshJob::Processes(h) => h.abort(),
-            RefreshJob::Etcd(h) => h.abort(),
-            RefreshJob::Volumes(h) => h.abort(),
-            RefreshJob::Group(h) => h.abort(),
-        }
-    }
-}
-
-/// Run `refresh()` on a clone of a component in a spawned task, recording a
-/// failure as the clone's error, and evaluate to the task's handle. (A macro
-/// because each component's `refresh` is an inherent async method.)
-macro_rules! spawn_refresh {
-    ($component:expr) => {{
-        let mut component = $component.clone();
-        tokio::spawn(async move {
-            if let Err(e) = component.refresh().await {
-                component.set_error(e.to_string());
-            }
-            component
-        })
-    }};
-}
+mod view;
 
 /// Whether a key event is Ctrl+C
 fn is_ctrl_c(key: &KeyEvent) -> bool {
     key.kind == KeyEventKind::Press
         && key.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
-}
-
-/// Current view in the application
-#[derive(Debug, Clone, PartialEq)]
-enum View {
-    Cluster,
-    MultiLogs,
-    Etcd,
-    Processes,
-    Network,
-    Diagnostics,
-    Security,
-    Lifecycle,
-    Workloads,
-    Volumes,
-    Storage,
-    NodeInfo,
-    NodeOperations,
-    RollingOperations,
-    Group,
-    /// A menu view with nothing to show for the selection (`App::hint`)
-    Hint,
-    /// The KubeSpan peer matrix of `App::kubespan_nodes`, drawn by the
-    /// cluster component from its own data
-    KubeSpanMatrix,
 }
 
 /// Two clicks on the same cell within this long open the row, like Enter
@@ -135,21 +51,6 @@ const VIEW_CACHE_SIZE: usize = 4;
 /// How long the wizard waits for `talosctl apply-config` / `bootstrap`
 const APPLY_TIMEOUT: Duration = Duration::from_secs(60);
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// A view put aside when another replaced it, by (view, selection)
-enum CachedView {
-    Network(Box<NetworkStatsComponent>),
-    Storage(Box<StorageComponent>),
-    NodeInfo(Box<NodeInfoComponent>),
-    Processes(Box<ProcessesComponent>),
-    Diagnostics(Box<DiagnosticsComponent>),
-    Group(Box<GroupComponent>),
-    Volumes(Box<VolumesComponent>),
-    Workloads(Box<WorkloadHealthComponent>),
-    Etcd(Box<EtcdComponent>),
-    Security(Box<SecurityComponent>),
-    Lifecycle(Box<LifecycleComponent>),
-}
 
 /// Main application state
 pub struct App {
@@ -185,23 +86,17 @@ pub struct App {
     /// Nodes pane and view areas of the last frame, for the mouse
     tree_area: Rect,
     view_area: Rect,
-    /// Recently replaced views, oldest first
-    view_cache: Vec<(String, CachedView)>,
+    /// Recently replaced views by (menu entry, selection), oldest first
+    view_cache: Vec<(String, ViewComponent)>,
     /// The key being handled opens a view from the menu or services list,
     /// which then takes the keyboard
     focus_after_show: bool,
-    /// Cluster component
+    /// Cluster component: the tree, the dashboard and the frame
     cluster: ClusterComponent,
-    /// Multi-service logs component (created when viewing logs)
-    multi_logs: Option<MultiLogsComponent>,
-    /// Log levels last shown in the logs view, restored when it is reopened
-    log_level_filter: crate::components::multi_logs::LevelFilter,
-    /// Volumes view toggle, filter and selection, kept across visits
-    volumes_view_state: Option<crate::components::volumes::VolumesViewState>,
-    /// Processes sort, kept across visits
-    processes_sort: crate::components::processes::SortBy,
-    /// Network sorts and listening-only filter, kept across visits
-    network_settings: crate::components::network::NetworkSettings,
+    /// Component of the view on the right (`None` for the dashboard and hints)
+    component: Option<ViewComponent>,
+    /// View settings that carry over to the next visit (and the next run)
+    settings: ViewSettings,
     /// Where the state between runs lives, and what was last written there
     state_path: Option<std::path::PathBuf>,
     saved_state: crate::state::UiState,
@@ -210,40 +105,19 @@ pub struct App {
     update_check_enabled: bool,
     update: crate::state::UpdateCheck,
     update_job: Option<tokio::task::JoinHandle<Result<String, String>>>,
-    /// Etcd status component (created when viewing etcd)
-    etcd: Option<EtcdComponent>,
-    /// Processes component (created when viewing processes)
-    processes: Option<ProcessesComponent>,
-    /// Network stats component (created when viewing network)
-    network: Option<NetworkStatsComponent>,
-    /// Diagnostics component (created when viewing diagnostics)
-    diagnostics: Option<DiagnosticsComponent>,
-    /// Security component (created when viewing certificates)
-    security: Option<SecurityComponent>,
-    /// Lifecycle component (created when viewing versions)
-    lifecycle: Option<LifecycleComponent>,
-    /// Workload health component (created when viewing workloads)
-    workloads: Option<WorkloadHealthComponent>,
-    /// Volumes component (created when viewing volumes)
-    volumes: Option<VolumesComponent>,
-    /// Storage component (created when viewing disks/volumes)
-    storage: Option<StorageComponent>,
-    /// Containers, machine config and extensions of a node
-    node_info: Option<NodeInfoComponent>,
     /// Node operations component (overlay for node operations)
     node_operations: Option<NodeOperationsComponent>,
     /// Rolling operations component (overlay for multi-node operations)
     rolling_operations: Option<RollingOperationsComponent>,
-    /// Diagnostics / storage / network of a node group
-    group: Option<GroupComponent>,
     /// Number of log lines to fetch per service
     tail_lines: i32,
     /// Tick rate for animations (ms)
     tick_rate: Duration,
     /// Custom config file path (from --config flag)
     config_path: Option<String>,
-    /// In-flight background refresh of the current view (see `start_refresh_job`)
-    refresh_job: Option<RefreshJob>,
+    /// In-flight background refresh of the view's component, on a clone
+    /// (`ViewComponent::spawn_refresh`)
+    refresh_job: Option<JoinHandle<ViewComponent>>,
     /// In-flight Kubernetes client creation for rolling operations
     rolling_k8s_fetch: Option<JoinHandle<Option<kube::Client>>>,
     /// Whether running in insecure mode (no TLS)
@@ -295,29 +169,15 @@ impl App {
             view_cache: Vec::new(),
             focus_after_show: false,
             cluster: ClusterComponent::new(config_path.clone(), context),
-            multi_logs: None,
-            log_level_filter: crate::components::multi_logs::ALL_LEVELS,
-            volumes_view_state: None,
-            processes_sort: Default::default(),
-            network_settings: Default::default(),
+            component: None,
+            settings: ViewSettings::default(),
             state_path: None,
             saved_state: Default::default(),
             update_check_enabled: true,
             update: Default::default(),
             update_job: None,
-            etcd: None,
-            processes: None,
-            network: None,
-            diagnostics: None,
-            security: None,
-            lifecycle: None,
-            workloads: None,
-            volumes: None,
-            storage: None,
-            node_info: None,
             node_operations: None,
             rolling_operations: None,
-            group: None,
             tail_lines,
             tick_rate: Duration::from_millis(100),
             config_path,
@@ -771,17 +631,17 @@ impl App {
         self.cluster.apply_saved(&state);
         self.pane_width = by_name(state.pane_width.as_deref());
         if let Some(levels) = state.log_levels.as_ref().filter(|l| !l.is_empty()) {
-            self.log_level_filter = LOG_LEVELS.map(|l| levels.iter().any(|x| x == l));
+            self.settings.log_levels = LOG_LEVELS.map(|l| levels.iter().any(|x| x == l));
         }
         if state.volumes.show_all.is_some() || state.volumes.type_filter.is_some() {
-            self.volumes_view_state = Some(volumes::VolumesViewState {
+            self.settings.volumes = Some(volumes::VolumesViewState {
                 show_all: state.volumes.show_all.unwrap_or(true),
                 type_filter: by_name(state.volumes.type_filter.as_deref()).unwrap_or_default(),
                 ..Default::default()
             });
         }
-        self.processes_sort = by_name(state.processes_sort.as_deref()).unwrap_or_default();
-        self.network_settings = network::NetworkSettings {
+        self.settings.processes_sort = by_name(state.processes_sort.as_deref()).unwrap_or_default();
+        self.settings.network = network::NetworkSettings {
             sort_by: by_name(state.network.sort.as_deref()).unwrap_or_default(),
             conn_sort_by: by_name(state.network.connections_sort.as_deref()).unwrap_or_default(),
             listening_only: state.network.listening_only.unwrap_or(false),
@@ -804,23 +664,16 @@ impl App {
             tree.push(folds);
         }
         tree.sort_by(|a, b| a.cluster.cmp(&b.cluster));
-        let levels = self
-            .multi_logs
-            .as_ref()
-            .map_or(self.log_level_filter, |l| l.level_filter());
-        let volumes = self
-            .volumes
-            .as_ref()
-            .map(|v| v.view_state())
-            .or_else(|| self.volumes_view_state.clone());
-        let processes_sort = self
-            .processes
-            .as_ref()
-            .map_or(self.processes_sort, |p| p.sort_by());
-        let network = self
-            .network
-            .as_ref()
-            .map_or(self.network_settings, |n| n.settings());
+        let mut settings = self.settings.clone();
+        if let Some(c) = &self.component {
+            c.carry_over(&mut settings);
+        }
+        let ViewSettings {
+            log_levels: levels,
+            volumes,
+            processes_sort,
+            network,
+        } = settings;
         crate::state::UiState {
             // Nothing listed yet (no talosconfig): keep the remembered one
             selection: self
@@ -963,8 +816,7 @@ impl App {
         Ok(())
     }
 
-    /// Handle an action
-    /// Hand a finished background refresh back to its component
+    /// Hand a finished background refresh back to the view's component
     fn poll_refresh_job(&mut self) {
         if !self.refresh_job.as_ref().is_some_and(|j| j.is_finished()) {
             return;
@@ -972,50 +824,37 @@ impl App {
         let Some(job) = self.refresh_job.take() else {
             return;
         };
-        let diagnostics = matches!(job, RefreshJob::Diagnostics(_) | RefreshJob::Group(_));
+        let Some(component) = &mut self.component else {
+            return;
+        };
         // A panicked task is shown as the view's error: that ends its loading
         // state, so auto-refresh retries instead of "Loading..." forever.
         // (Aborted jobs never get here: cancelling takes them out first.)
-        macro_rules! finish {
-            ($slot:expr, $handle:expr) => {
-                if let Some(c) = &mut $slot {
-                    match crate::task::poll_finished($handle) {
-                        Some(Ok(refreshed)) => c.adopt_refresh(refreshed),
-                        Some(Err(e)) => {
-                            tracing::error!("View refresh task failed: {}", e);
-                            c.set_error(format!("Refresh failed: {e}"));
-                        }
-                        None => {}
-                    }
-                }
-            };
+        match crate::task::poll_finished(job) {
+            Some(Ok(refreshed)) => component.adopt_refresh(refreshed),
+            Some(Err(e)) => {
+                tracing::error!("View refresh task failed: {}", e);
+                component.set_error(format!("Refresh failed: {e}"));
+            }
+            None => {}
         }
-        match job {
-            RefreshJob::Diagnostics(h) => finish!(self.diagnostics, h),
-            RefreshJob::Security(h) => finish!(self.security, h),
-            RefreshJob::Lifecycle(h) => finish!(self.lifecycle, h),
-            RefreshJob::Workloads(h) => finish!(self.workloads, h),
-            RefreshJob::Storage(h) => finish!(self.storage, h),
-            RefreshJob::NodeInfo(h) => finish!(self.node_info, h),
-            RefreshJob::Processes(h) => finish!(self.processes, h),
-            RefreshJob::Etcd(h) => finish!(self.etcd, h),
-            RefreshJob::Volumes(h) => finish!(self.volumes, h),
-            RefreshJob::Group(h) => finish!(self.group, h),
-        }
-        if diagnostics {
-            self.publish_diagnostics();
-        }
+        self.publish_diagnostics();
     }
 
     /// Give the dashboard what the last diagnostics run found per node
     fn publish_diagnostics(&mut self) {
-        if let Some((node, summary)) = self.diagnostics.as_ref().and_then(|d| d.summary()) {
-            self.cluster.set_diagnostics_summary(node, summary);
-        }
-        if let Some(group) = &self.group {
-            for (node, summary) in group.diagnostics_summaries() {
-                self.cluster.set_diagnostics_summary(node, summary);
+        match &self.component {
+            Some(ViewComponent::Diagnostics(d)) => {
+                if let Some((node, summary)) = d.summary() {
+                    self.cluster.set_diagnostics_summary(node, summary);
+                }
             }
+            Some(ViewComponent::Group(group)) => {
+                for (node, summary) in group.diagnostics_summaries() {
+                    self.cluster.set_diagnostics_summary(node, summary);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1062,7 +901,7 @@ impl App {
             self.cluster.focused_pane(),
             self.view_captures_text()
         );
-        if matches!(self.view, View::NodeOperations | View::RollingOperations) {
+        if self.view.is_overlay() {
             return self.dispatch_view_key(key);
         }
         if !self.view_captures_text() && self.layout_key(key) {
@@ -1093,28 +932,39 @@ impl App {
         self.dispatch_view_key(key)
     }
 
-    fn view_uses_tab_key(&self) -> bool {
+    /// The view's component, unless an overlay or the dashboard is shown
+    fn shown(&self) -> Option<&dyn Component> {
         match self.view {
-            View::NodeInfo => self.node_info.as_ref().is_some_and(|c| c.uses_tab_key()),
-            View::Storage => self.storage.as_ref().is_some_and(|c| c.uses_tab_key()),
-            View::Network => self.network.as_ref().is_some_and(|c| c.uses_tab_key()),
-            View::Diagnostics => self.diagnostics.as_ref().is_some_and(|c| c.uses_tab_key()),
-            _ => false,
+            View::Cluster | View::Hint | View::KubeSpanMatrix => None,
+            _ if self.view.is_overlay() => None,
+            _ => self.component.as_ref().map(ViewComponent::component),
         }
     }
 
-    fn view_uses_horizontal_keys(&self) -> bool {
+    /// The component that gets the view's keys and actions: the overlay,
+    /// the dashboard, or the view's component
+    fn active_mut(&mut self) -> Option<&mut dyn Component> {
         match self.view {
-            View::NodeInfo => self
-                .node_info
-                .as_ref()
-                .is_some_and(|c| c.uses_horizontal_keys()),
-            View::Diagnostics => self
-                .diagnostics
-                .as_ref()
-                .is_some_and(|c| c.uses_horizontal_keys()),
-            _ => false,
+            View::Cluster => Some(&mut self.cluster),
+            View::Hint | View::KubeSpanMatrix => None,
+            View::NodeOperations => self
+                .node_operations
+                .as_mut()
+                .map(|c| c as &mut dyn Component),
+            View::RollingOperations => self
+                .rolling_operations
+                .as_mut()
+                .map(|c| c as &mut dyn Component),
+            _ => self.component.as_mut().map(ViewComponent::component_mut),
         }
+    }
+
+    fn view_uses_tab_key(&self) -> bool {
+        self.shown().is_some_and(|c| c.uses_tab_key())
+    }
+
+    fn view_uses_horizontal_keys(&self) -> bool {
+        self.shown().is_some_and(|c| c.uses_horizontal_keys())
     }
 
     /// `Z` zoom, `[` narrower and `]` wider nodes pane; true when handled
@@ -1144,13 +994,7 @@ impl App {
 
     /// A view is taking typed text (a filter or search), so letters are its
     fn view_captures_text(&self) -> bool {
-        match self.view {
-            View::MultiLogs => self.multi_logs.as_ref().is_some_and(|c| c.captures_text()),
-            View::Processes => self.processes.as_ref().is_some_and(|c| c.captures_text()),
-            View::Volumes => self.volumes.as_ref().is_some_and(|c| c.captures_text()),
-            View::NodeInfo => self.node_info.as_ref().is_some_and(|c| c.captures_text()),
-            _ => false,
-        }
+        self.shown().is_some_and(|c| c.captures_text())
     }
 
     /// Keys for the tree and menu. Where the dashboard has its services list,
@@ -1205,118 +1049,23 @@ impl App {
 
     /// Route a key press to the component on the right (or the overlay)
     fn dispatch_view_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        Ok(match self.view {
-            View::Cluster => self.cluster.handle_key_event(key)?,
-            View::Hint | View::KubeSpanMatrix => match key.code {
+        if matches!(self.view, View::Hint | View::KubeSpanMatrix) {
+            return Ok(match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::Back),
                 _ => None,
-            },
-            View::MultiLogs => {
-                if let Some(multi_logs) = &mut self.multi_logs {
-                    multi_logs.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Etcd => {
-                if let Some(etcd) = &mut self.etcd {
-                    etcd.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Processes => {
-                if let Some(processes) = &mut self.processes {
-                    processes.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Network => {
-                if let Some(network) = &mut self.network {
-                    network.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Diagnostics => {
-                if let Some(diagnostics) = &mut self.diagnostics {
-                    diagnostics.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Security => {
-                if let Some(security) = &mut self.security {
-                    security.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Lifecycle => {
-                if let Some(lifecycle) = &mut self.lifecycle {
-                    lifecycle.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Volumes => {
-                if let Some(volumes) = &mut self.volumes {
-                    volumes.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Workloads => {
-                if let Some(workloads) = &mut self.workloads {
-                    workloads.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Storage => {
-                if let Some(storage) = &mut self.storage {
-                    storage.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::NodeInfo => {
-                if let Some(node_info) = &mut self.node_info {
-                    node_info.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::NodeOperations => {
-                if let Some(node_ops) = &mut self.node_operations {
-                    node_ops.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::RollingOperations => {
-                if let Some(rolling_ops) = &mut self.rolling_operations {
-                    rolling_ops.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-            View::Group => {
-                if let Some(group) = &mut self.group {
-                    group.handle_key_event(key)?
-                } else {
-                    None
-                }
-            }
-        })
+            });
+        }
+        match self.active_mut() {
+            Some(c) => c.handle_key_event(key),
+            None => Ok(None),
+        }
     }
 
     /// Route a mouse event to the pane under the pointer; a click also gives
     /// that pane the keyboard. The tree, the dashboard and the node info view
     /// handle the mouse themselves; other views get the wheel as Up/Down.
     fn dispatch_mouse(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        let overlay = matches!(self.view, View::NodeOperations | View::RollingOperations);
+        let overlay = self.view.is_overlay();
         let at = |r: Rect| {
             mouse.column >= r.x
                 && mouse.column < r.x + r.width
@@ -1352,7 +1101,7 @@ impl App {
             self.focus_view();
         }
         if self.view == View::NodeInfo
-            && let Some(node_info) = &mut self.node_info
+            && let Some(ViewComponent::NodeInfo(node_info)) = &mut self.component
         {
             return node_info.handle_mouse_event(mouse);
         }
@@ -1376,51 +1125,18 @@ impl App {
     /// Hand a click to the open view (rows, column headers); views without
     /// a handler ignore it
     fn view_mouse(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        macro_rules! to {
-            ($c:expr) => {
-                match &mut $c {
-                    Some(c) => c.handle_mouse_event(mouse),
-                    None => Ok(None),
-                }
-            };
+        if self.shown().is_none() {
+            return Ok(None);
         }
-        match self.view {
-            View::Group => to!(self.group),
-            View::Network => to!(self.network),
-            View::Storage => to!(self.storage),
-            View::MultiLogs => to!(self.multi_logs),
-            View::Etcd => to!(self.etcd),
-            View::Processes => to!(self.processes),
-            View::Diagnostics => to!(self.diagnostics),
-            View::Security => to!(self.security),
-            View::Lifecycle => to!(self.lifecycle),
-            View::Workloads => to!(self.workloads),
-            View::Volumes => to!(self.volumes),
-            _ => Ok(None),
+        match self.active_mut() {
+            Some(c) => c.handle_mouse_event(mouse),
+            None => Ok(None),
         }
     }
 
     /// The keys the view on the right acts on right now, for the bottom line
     fn view_key_hints(&self) -> Option<Line<'static>> {
-        match self.view {
-            View::MultiLogs => self.multi_logs.as_ref().and_then(|c| c.key_hints()),
-            View::Etcd => self.etcd.as_ref().and_then(|c| c.key_hints()),
-            View::Processes => self.processes.as_ref().and_then(|c| c.key_hints()),
-            View::Network => self.network.as_ref().and_then(|c| c.key_hints()),
-            View::Diagnostics => self.diagnostics.as_ref().and_then(|c| c.key_hints()),
-            View::Security => self.security.as_ref().and_then(|c| c.key_hints()),
-            View::Lifecycle => self.lifecycle.as_ref().and_then(|c| c.key_hints()),
-            View::Workloads => self.workloads.as_ref().and_then(|c| c.key_hints()),
-            View::Volumes => self.volumes.as_ref().and_then(|c| c.key_hints()),
-            View::Storage => self.storage.as_ref().and_then(|c| c.key_hints()),
-            View::NodeInfo => self.node_info.as_ref().and_then(|c| c.key_hints()),
-            View::Group => self.group.as_ref().and_then(|c| c.key_hints()),
-            View::Cluster
-            | View::Hint
-            | View::KubeSpanMatrix
-            | View::NodeOperations
-            | View::RollingOperations => None,
-        }
+        self.shown().and_then(|c| c.key_hints())
     }
 
     /// Whether a left click at (column, row) is the second of a double-click
@@ -1440,7 +1156,7 @@ impl App {
     /// Header, nodes pane and key line from the cluster component, the
     /// current view on the right, and an operations overlay on top
     fn draw_workspace(&mut self, frame: &mut Frame, area: Rect) {
-        let overlay = matches!(self.view, View::NodeOperations | View::RollingOperations);
+        let overlay = self.view.is_overlay();
         let base = if overlay {
             self.overlay_return.clone()
         } else {
@@ -1470,7 +1186,7 @@ impl App {
             };
             // The title says when a refresh is in flight (streams aside)
             let refreshing = self.refresh_job.is_some()
-                || (base == View::Network && self.network.as_ref().is_some_and(|n| n.refreshing()));
+                || matches!(&self.component, Some(ViewComponent::Network(n)) if n.refreshing());
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(accent))
@@ -1487,13 +1203,6 @@ impl App {
             frame.render_widget(block, view_area);
             inner
         };
-        macro_rules! draw {
-            ($slot:expr) => {
-                if let Some(c) = &mut $slot {
-                    let _ = c.draw(frame, right);
-                }
-            };
-        }
         match base {
             View::Cluster => self.cluster.draw_details_pane(frame, right),
             View::Hint => {
@@ -1501,36 +1210,18 @@ impl App {
                     .style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(text, right);
             }
-            View::MultiLogs => draw!(self.multi_logs),
-            View::Etcd => draw!(self.etcd),
-            View::Processes => draw!(self.processes),
-            View::Network => draw!(self.network),
-            View::Diagnostics => draw!(self.diagnostics),
-            View::Security => draw!(self.security),
-            View::Lifecycle => draw!(self.lifecycle),
-            View::Workloads => draw!(self.workloads),
-            View::Volumes => draw!(self.volumes),
-            View::Storage => draw!(self.storage),
-            View::NodeInfo => draw!(self.node_info),
-            View::Group => draw!(self.group),
             View::KubeSpanMatrix => {
                 self.cluster
                     .draw_kubespan_matrix_pane(frame, right, &self.kubespan_nodes)
             }
-            View::NodeOperations | View::RollingOperations => {}
+            _ => {
+                if let Some(c) = &mut self.component {
+                    let _ = c.component_mut().draw(frame, right);
+                }
+            }
         }
-        match self.view {
-            View::NodeOperations => {
-                if let Some(c) = &mut self.node_operations {
-                    let _ = c.draw(frame, area);
-                }
-            }
-            View::RollingOperations => {
-                if let Some(c) = &mut self.rolling_operations {
-                    let _ = c.draw(frame, area);
-                }
-            }
-            _ => {}
+        if overlay && let Some(c) = self.active_mut() {
+            let _ = c.draw(frame, area);
         }
     }
 
@@ -1586,59 +1277,19 @@ impl App {
         self.cancel_refresh_job();
         self.hint = None;
         let key = format!("{:?}|{}", self.pane, self.applied_target);
-        let cached = match self.view {
-            View::MultiLogs => {
-                if let Some(mut logs) = self.multi_logs.take() {
-                    logs.stop_streaming();
-                    self.log_level_filter = logs.level_filter();
-                }
-                None
-            }
-            View::Volumes => self.volumes.take().map(|v| {
-                self.volumes_view_state = Some(v.view_state());
-                CachedView::Volumes(Box::new(v))
-            }),
-            View::Network => self.network.take().map(|c| {
-                self.network_settings = c.settings();
-                CachedView::Network(Box::new(c))
-            }),
-            View::Storage => self
-                .storage
-                .take()
-                .map(|c| CachedView::Storage(Box::new(c))),
-            View::NodeInfo => self
-                .node_info
-                .take()
-                .map(|c| CachedView::NodeInfo(Box::new(c))),
-            View::Processes => self.processes.take().map(|c| {
-                self.processes_sort = c.sort_by();
-                CachedView::Processes(Box::new(c))
-            }),
-            View::Diagnostics => self
-                .diagnostics
-                .take()
-                .map(|c| CachedView::Diagnostics(Box::new(c))),
-            View::Group => self.group.take().map(|c| CachedView::Group(Box::new(c))),
-            View::Workloads => self
-                .workloads
-                .take()
-                .map(|c| CachedView::Workloads(Box::new(c))),
-            View::Etcd => self.etcd.take().map(|c| CachedView::Etcd(Box::new(c))),
-            View::Security => self
-                .security
-                .take()
-                .map(|c| CachedView::Security(Box::new(c))),
-            View::Lifecycle => self
-                .lifecycle
-                .take()
-                .map(|c| CachedView::Lifecycle(Box::new(c))),
-            _ => None,
+        let Some(component) = self.component.take() else {
+            return;
         };
-        if let Some(cached) = cached {
-            self.view_cache.retain(|(k, _)| *k != key);
-            self.view_cache.push((key, cached));
-            if self.view_cache.len() > VIEW_CACHE_SIZE {
-                self.view_cache.remove(0);
+        component.carry_over(&mut self.settings);
+        match component {
+            // Streams don't survive being put aside: logs start over
+            ViewComponent::MultiLogs(mut logs) => logs.stop_streaming(),
+            cached => {
+                self.view_cache.retain(|(k, _)| *k != key);
+                self.view_cache.push((key, cached));
+                if self.view_cache.len() > VIEW_CACHE_SIZE {
+                    self.view_cache.remove(0);
+                }
             }
         }
     }
@@ -1693,16 +1344,18 @@ impl App {
     /// was shown recently (then refreshed), otherwise built anew
     async fn retarget(&mut self) -> Result<()> {
         // The node view keeps the tab the user switched to
-        let item = match (&self.view, &self.node_info) {
-            (View::NodeInfo, Some(n)) => match n.tab() {
+        let item = match &self.component {
+            Some(ViewComponent::NodeInfo(n)) if self.view == View::NodeInfo => match n.tab() {
                 NodeInfoTab::Containers => NavMenuItem::Containers,
                 NodeInfoTab::Config => NavMenuItem::Config,
                 NodeInfoTab::Extensions => NavMenuItem::Extensions,
             },
-            _ if self.view == View::Storage => match self.storage.as_ref().map(|s| s.view_mode()) {
-                Some(StorageViewMode::Partitions) => NavMenuItem::Partitions,
-                _ => NavMenuItem::Disks,
-            },
+            Some(ViewComponent::Storage(st)) if self.view == View::Storage => {
+                match st.view_mode() {
+                    StorageViewMode::Partitions => NavMenuItem::Partitions,
+                    StorageViewMode::Disks => NavMenuItem::Disks,
+                }
+            }
             _ => self.pane,
         };
         let key = format!("{:?}|{}", item, self.scope_key(item));
@@ -1726,53 +1379,20 @@ impl App {
     }
 
     /// Put a cached view back on the right
-    fn restore_view(&mut self, item: NavMenuItem, cached: CachedView) {
-        let view = match cached {
-            CachedView::Network(c) => {
-                self.network = Some(*c);
-                View::Network
-            }
-            CachedView::Storage(c) => {
-                self.storage = Some(*c);
-                View::Storage
-            }
-            CachedView::NodeInfo(c) => {
-                self.node_info = Some(*c);
-                View::NodeInfo
-            }
-            CachedView::Processes(c) => {
-                self.processes = Some(*c);
-                View::Processes
-            }
-            CachedView::Diagnostics(c) => {
-                self.diagnostics = Some(*c);
-                View::Diagnostics
-            }
-            CachedView::Group(c) => {
-                self.group = Some(*c);
-                View::Group
-            }
-            CachedView::Volumes(c) => {
-                self.volumes = Some(*c);
-                View::Volumes
-            }
-            CachedView::Workloads(c) => {
-                self.workloads = Some(*c);
-                View::Workloads
-            }
-            CachedView::Etcd(c) => {
-                self.etcd = Some(*c);
-                View::Etcd
-            }
-            CachedView::Security(c) => {
-                self.security = Some(*c);
-                View::Security
-            }
-            CachedView::Lifecycle(c) => {
-                self.lifecycle = Some(*c);
-                View::Lifecycle
-            }
-        };
+    fn restore_view(&mut self, item: NavMenuItem, cached: ViewComponent) {
+        let view = cached.view();
+        self.component = Some(cached);
+        self.show_in_pane(item, view);
+    }
+
+    /// Show `component` as menu entry `item`, starting its first refresh in
+    /// the background when `load`
+    fn show_component(&mut self, item: NavMenuItem, component: ViewComponent, load: bool) {
+        if load {
+            self.refresh_job = component.spawn_refresh();
+        }
+        let view = component.view();
+        self.component = Some(component);
         self.show_in_pane(item, view);
     }
 
@@ -1805,7 +1425,7 @@ impl App {
             Action::ShowKubeSpan(hostname, address) => {
                 self.leave_view();
                 let mut network = NetworkStatsComponent::new_kubespan(hostname, address.clone());
-                network.set_settings(self.network_settings);
+                network.set_settings(self.settings.network);
                 if let Some(client) = self.cluster.client() {
                     network.set_client(client.with_node(&address));
                     network.set_talos_context(
@@ -1814,8 +1434,11 @@ impl App {
                     );
                     network.refresh();
                 }
-                self.network = Some(network);
-                self.show_in_pane(NavMenuItem::KubeSpan, View::Network);
+                self.show_component(
+                    NavMenuItem::KubeSpan,
+                    ViewComponent::Network(Box::new(network)),
+                    false,
+                );
             }
             Action::ShowKubeSpanMatrix(nodes) => {
                 self.leave_view();
@@ -1852,106 +1475,12 @@ impl App {
                 if self.cluster.should_auto_refresh() {
                     self.cluster.refresh_selected_node();
                 }
-                match self.view {
-                    View::Cluster | View::Hint | View::KubeSpanMatrix => {}
-                    View::MultiLogs => {
-                        if let Some(multi_logs) = &mut self.multi_logs
-                            && let Some(next_action) = multi_logs.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Etcd => {
-                        if let Some(etcd) = &mut self.etcd
-                            && let Some(next_action) = etcd.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Processes => {
-                        if let Some(processes) = &mut self.processes
-                            && let Some(next_action) = processes.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Network => {
-                        if let Some(network) = &mut self.network
-                            && let Some(next_action) = network.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Diagnostics => {
-                        if let Some(diagnostics) = &mut self.diagnostics
-                            && let Some(next_action) = diagnostics.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Security => {
-                        if let Some(security) = &mut self.security
-                            && let Some(next_action) = security.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Lifecycle => {
-                        if let Some(lifecycle) = &mut self.lifecycle
-                            && let Some(next_action) = lifecycle.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Workloads => {
-                        if let Some(workloads) = &mut self.workloads
-                            && let Some(next_action) = workloads.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Volumes => {
-                        if let Some(volumes) = &mut self.volumes
-                            && let Some(next_action) = volumes.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Storage => {
-                        if let Some(storage) = &mut self.storage
-                            && let Some(next_action) = storage.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::NodeInfo => {
-                        if let Some(node_info) = &mut self.node_info
-                            && let Some(next_action) = node_info.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::NodeOperations => {
-                        if let Some(node_ops) = &mut self.node_operations
-                            && let Some(next_action) = node_ops.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::RollingOperations => {
-                        if let Some(rolling_ops) = &mut self.rolling_operations
-                            && let Some(next_action) = rolling_ops.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Group => {
-                        if let Some(group) = &mut self.group
-                            && let Some(next_action) = group.update(Action::Tick)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
+                // The cluster ticked above
+                if self.view != View::Cluster
+                    && let Some(c) = self.active_mut()
+                    && let Some(next_action) = c.update(Action::Tick)?
+                {
+                    Box::pin(self.handle_action(next_action)).await?;
                 }
             }
             Action::Resize(_w, _h) => {
@@ -1963,125 +1492,44 @@ impl App {
                 // Refreshes run on the event loop, so their duration is how
                 // long the UI is frozen. Log slow ones to find the culprit.
                 let started = std::time::Instant::now();
-                match self.view {
-                    View::Cluster => {
-                        self.cluster.refresh().await?;
-                    }
-                    View::Etcd => {
-                        if self.refresh_job.is_none()
-                            && let Some(etcd) = &mut self.etcd
-                        {
-                            // The cluster's current connection: one it
-                            // redialled replaces a dead one, and one opened
-                            // while it was reconnecting gets one at all
-                            if let Some(client) = self.cluster.client() {
-                                etcd.set_client(client.clone());
-                            }
-                            self.refresh_job = Some(RefreshJob::Etcd(spawn_refresh!(etcd)));
-                        }
-                    }
-                    View::Processes => {
-                        // Several nodes, each call bounded at 10s: refresh off
-                        // the event loop so a slow node can't freeze the UI
-                        if self.refresh_job.is_none()
-                            && let Some(processes) = &mut self.processes
-                        {
-                            let cluster = &self.cluster;
-                            processes.set_node_basics(|n| cluster.node_basics(n));
-                            self.refresh_job =
-                                Some(RefreshJob::Processes(spawn_refresh!(processes)));
-                        }
-                    }
-                    View::Network => {
-                        // Starts a pending restart / file view / capture and a
-                        // stats fetch in the background
-                        if let Some(network) = &mut self.network {
-                            network.refresh();
-                        }
-                    }
-                    View::MultiLogs => {
-                        // Multi-logs handles its own streaming refresh
-                    }
-                    View::Diagnostics => {
-                        // Slow (Kubernetes API heavy): refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(diagnostics) = &self.diagnostics
-                        {
-                            self.refresh_job =
-                                Some(RefreshJob::Diagnostics(spawn_refresh!(diagnostics)));
-                        }
-                    }
-                    View::Security => {
-                        // Slow (Kubernetes API heavy): refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(security) = &self.security
-                        {
-                            self.refresh_job = Some(RefreshJob::Security(spawn_refresh!(security)));
-                        }
-                    }
-                    View::Lifecycle => {
-                        // Slow (Kubernetes API heavy): refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(lifecycle) = &self.lifecycle
-                        {
-                            self.refresh_job =
-                                Some(RefreshJob::Lifecycle(spawn_refresh!(lifecycle)));
-                        }
-                    }
-                    View::Workloads => {
-                        // Slow (Kubernetes API heavy): refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(workloads) = &self.workloads
-                        {
-                            self.refresh_job =
-                                Some(RefreshJob::Workloads(spawn_refresh!(workloads)));
-                        }
-                    }
-                    View::Volumes => {
-                        // Hundreds of kernel reads: refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(volumes) = &self.volumes
-                        {
-                            self.refresh_job = Some(RefreshJob::Volumes(spawn_refresh!(volumes)));
-                        }
-                    }
-                    View::Storage => {
-                        // Slow (Kubernetes API heavy): refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(storage) = &self.storage
-                        {
-                            self.refresh_job = Some(RefreshJob::Storage(spawn_refresh!(storage)));
-                        }
-                    }
-                    View::NodeInfo => {
-                        // talosctl subprocesses: refresh off the event loop
-                        if self.refresh_job.is_none()
-                            && let Some(node_info) = &self.node_info
-                        {
-                            self.refresh_job =
-                                Some(RefreshJob::NodeInfo(spawn_refresh!(node_info)));
-                        }
-                    }
-                    View::NodeOperations => {
+                match (&self.view, &mut self.component) {
+                    (View::Cluster, _) => self.cluster.refresh().await?,
+                    (View::NodeOperations, _) => {
                         if let Some(node_ops) = &mut self.node_operations {
                             node_ops.refresh();
                         }
                     }
-                    View::RollingOperations | View::Hint | View::KubeSpanMatrix => {
-                        // Nothing of their own to refresh
-                    }
-                    View::Group => {
-                        if self.refresh_job.is_none()
-                            && let Some(group) = &mut self.group
-                        {
-                            // The cluster's current connection (it may have
-                            // redialled since the view opened)
-                            if let Some(client) = self.cluster.client() {
-                                group.set_client(client.clone());
+                    // Nothing of their own to refresh
+                    (View::RollingOperations | View::Hint | View::KubeSpanMatrix, _) => {}
+                    // Starts a pending restart / file view / capture and a
+                    // stats fetch in the background
+                    (_, Some(ViewComponent::Network(network))) => network.refresh(),
+                    // Slow refreshes (Kubernetes API, talosctl, several
+                    // nodes) run on a clone off the event loop, one at a time
+                    (_, Some(component)) if self.refresh_job.is_none() => {
+                        match component {
+                            // The cluster's current connection: one it
+                            // redialled replaces a dead one, and one opened
+                            // while it was reconnecting gets one at all
+                            ViewComponent::Etcd(etcd) => {
+                                if let Some(client) = self.cluster.client() {
+                                    etcd.set_client(client.clone());
+                                }
                             }
-                            self.refresh_job = Some(RefreshJob::Group(spawn_refresh!(group)));
+                            ViewComponent::Group(group) => {
+                                if let Some(client) = self.cluster.client() {
+                                    group.set_client(client.clone());
+                                }
+                            }
+                            ViewComponent::Processes(processes) => {
+                                let cluster = &self.cluster;
+                                processes.set_node_basics(|n| cluster.node_basics(n));
+                            }
+                            _ => {}
                         }
+                        self.refresh_job = component.spawn_refresh();
                     }
+                    _ => {}
                 }
                 let elapsed = started.elapsed();
                 if elapsed >= Duration::from_millis(500) {
@@ -2095,7 +1543,7 @@ impl App {
                 // Create multi-logs component with all services, marking active ones
                 let mut multi_logs =
                     MultiLogsComponent::new(title, subtitle, nodes, active_services, all_services);
-                multi_logs.set_level_filter(self.log_level_filter);
+                multi_logs.set_level_filter(self.settings.log_levels);
 
                 // Each stream targets its node through the cluster's client and
                 // starts with the last `tail_lines` lines, so there is no
@@ -2107,8 +1555,11 @@ impl App {
                     multi_logs.set_error("Not connected to the cluster".to_string());
                 }
 
-                self.multi_logs = Some(multi_logs);
-                self.show_in_pane(NavMenuItem::Logs, View::MultiLogs);
+                self.show_component(
+                    NavMenuItem::Logs,
+                    ViewComponent::MultiLogs(Box::new(multi_logs)),
+                    false,
+                );
             }
             Action::ShowDiagnostics(hostname, address, role, cp_endpoint) => {
                 // A node opened from a group view: the tree follows
@@ -2118,6 +1569,7 @@ impl App {
                     group
                 });
                 self.leave_view();
+                let mut load = false;
                 // Switch to diagnostics view for a node
                 tracing::info!(
                     "ShowDiagnostics: hostname='{}', address='{}', role='{}', cp_endpoint={:?}",
@@ -2145,11 +1597,14 @@ impl App {
                     // Create a client configured for this specific node
                     let node_client = client.with_node(&address);
                     diagnostics.set_client(node_client);
-                    self.refresh_job = Some(RefreshJob::Diagnostics(spawn_refresh!(diagnostics)));
+                    load = true;
                 }
 
-                self.diagnostics = Some(diagnostics);
-                self.show_in_pane(NavMenuItem::Diagnostics, View::Diagnostics);
+                self.show_component(
+                    NavMenuItem::Diagnostics,
+                    ViewComponent::Diagnostics(Box::new(diagnostics)),
+                    load,
+                );
                 if let Some((selection, title)) = from_group {
                     self.cluster.set_back_hint(Some(title.clone()));
                     self.drill_return = Some((selection, title));
@@ -2171,30 +1626,32 @@ impl App {
                 if let Some(client) = self.cluster.client() {
                     etcd.set_client(client.clone());
                 }
-                self.refresh_job = Some(RefreshJob::Etcd(spawn_refresh!(etcd)));
 
-                self.etcd = Some(etcd);
-                self.show_in_pane(NavMenuItem::Etcd, View::Etcd);
+                self.show_component(NavMenuItem::Etcd, ViewComponent::Etcd(Box::new(etcd)), true);
             }
             Action::ShowProcesses(title, nodes) => {
                 self.leave_view();
+                let mut load = false;
                 tracing::info!("ShowProcesses: '{}' ({} node(s))", title, nodes.len());
 
                 let mut processes = ProcessesComponent::new(title, nodes);
-                processes.set_sort_by(self.processes_sort);
+                processes.set_sort_by(self.settings.processes_sort);
                 processes.set_node_basics(|n| self.cluster.node_basics(n));
                 match self.cluster.client() {
                     Some(client) => {
                         processes.set_client(client.clone());
                         // First load in the background; the view shows
                         // "Loading processes..." until it lands
-                        self.refresh_job = Some(RefreshJob::Processes(spawn_refresh!(processes)));
+                        load = true;
                     }
                     None => processes.set_error("Not connected".to_string()),
                 }
 
-                self.processes = Some(processes);
-                self.show_in_pane(NavMenuItem::Processes, View::Processes);
+                self.show_component(
+                    NavMenuItem::Processes,
+                    ViewComponent::Processes(Box::new(processes)),
+                    load,
+                );
             }
             Action::ShowNetwork(hostname, address) => {
                 let from_group = (self.view == View::Group).then(|| {
@@ -2212,7 +1669,7 @@ impl App {
 
                 // Create network component
                 let mut network = NetworkStatsComponent::new(hostname.clone(), address.clone());
-                network.set_settings(self.network_settings);
+                network.set_settings(self.settings.network);
                 network.set_controlplane(self.cluster.is_controlplane(&hostname));
 
                 // Set the client and refresh data
@@ -2228,8 +1685,11 @@ impl App {
                     network.refresh();
                 }
 
-                self.network = Some(network);
-                self.show_in_pane(NavMenuItem::Network, View::Network);
+                self.show_component(
+                    NavMenuItem::Network,
+                    ViewComponent::Network(Box::new(network)),
+                    false,
+                );
                 if let Some((selection, title)) = from_group {
                     self.cluster.set_back_hint(Some(title.clone()));
                     self.drill_return = Some((selection, title));
@@ -2254,10 +1714,12 @@ impl App {
                     security.set_client(client.clone());
                 }
                 security.set_query_node(self.cluster.control_plane_ip());
-                self.refresh_job = Some(RefreshJob::Security(spawn_refresh!(security)));
 
-                self.security = Some(security);
-                self.show_in_pane(NavMenuItem::Certs, View::Security);
+                self.show_component(
+                    NavMenuItem::Certs,
+                    ViewComponent::Security(Box::new(security)),
+                    true,
+                );
             }
             Action::ShowLifecycle => {
                 self.leave_view();
@@ -2278,13 +1740,15 @@ impl App {
                     lifecycle.set_client(client.clone());
                 }
 
-                self.refresh_job = Some(RefreshJob::Lifecycle(spawn_refresh!(lifecycle)));
-
-                self.lifecycle = Some(lifecycle);
-                self.show_in_pane(NavMenuItem::Lifecycle, View::Lifecycle);
+                self.show_component(
+                    NavMenuItem::Lifecycle,
+                    ViewComponent::Lifecycle(Box::new(lifecycle)),
+                    true,
+                );
             }
             Action::ShowWorkloads(title, nodes) => {
                 self.leave_view();
+                let mut load = false;
                 tracing::info!(
                     "ShowWorkloads: '{}' ({})",
                     title,
@@ -2303,21 +1767,25 @@ impl App {
                 if let Some(talos_client) = self.cluster.client() {
                     workloads.set_k8s_source(talos_client.clone(), cp_ip);
                     workloads.start_loading();
-                    self.refresh_job = Some(RefreshJob::Workloads(spawn_refresh!(workloads)));
+                    load = true;
                 } else {
                     workloads.set_error("Not connected".to_string());
                 }
 
-                self.workloads = Some(workloads);
-                self.show_in_pane(NavMenuItem::Workloads, View::Workloads);
+                self.show_component(
+                    NavMenuItem::Workloads,
+                    ViewComponent::Workloads(Box::new(workloads)),
+                    load,
+                );
             }
             Action::ShowVolumes(title, nodes) => {
                 self.leave_view();
+                let mut load = false;
                 tracing::info!("ShowVolumes: '{}'", title);
 
                 let mut volumes = VolumesComponent::new(nodes);
                 volumes.set_context(self.cluster.current_context_name().map(str::to_string));
-                if let Some(state) = self.volumes_view_state.clone() {
+                if let Some(state) = self.settings.volumes.clone() {
                     volumes.set_view_state(state);
                 }
                 let cp_ip = self.cluster.control_plane_ip();
@@ -2329,13 +1797,16 @@ impl App {
                     );
                     // First scan in the background; the view shows a
                     // scanning message until it lands
-                    self.refresh_job = Some(RefreshJob::Volumes(spawn_refresh!(volumes)));
+                    load = true;
                 } else {
                     volumes.set_error("Not connected".to_string());
                 }
 
-                self.volumes = Some(volumes);
-                self.show_in_pane(NavMenuItem::Volumes, View::Volumes);
+                self.show_component(
+                    NavMenuItem::Volumes,
+                    ViewComponent::Volumes(Box::new(volumes)),
+                    load,
+                );
             }
             Action::ShowGroup(kind, title, nodes, cp_endpoint) => {
                 self.leave_view();
@@ -2363,9 +1834,7 @@ impl App {
                 if let Some(client) = self.cluster.client() {
                     group.set_client(client.clone());
                 }
-                self.refresh_job = Some(RefreshJob::Group(spawn_refresh!(group)));
-                self.group = Some(group);
-                self.show_in_pane(item, View::Group);
+                self.show_component(item, ViewComponent::Group(Box::new(group)), true);
             }
             Action::ShowStorage(hostname, address, mode) => {
                 let from_group = (self.view == View::Group).then(|| {
@@ -2390,17 +1859,13 @@ impl App {
                     StorageComponent::new(hostname, address.clone(), context, config_path);
                 storage.set_view_mode(mode);
 
-                // Storage reads through talosctl, with the context
-                if self.cluster.client().is_some() {
-                    self.refresh_job = Some(RefreshJob::Storage(spawn_refresh!(storage)));
-                }
-
-                self.storage = Some(storage);
                 let item = match mode {
                     StorageViewMode::Disks => NavMenuItem::Disks,
                     StorageViewMode::Partitions => NavMenuItem::Partitions,
                 };
-                self.show_in_pane(item, View::Storage);
+                // Storage reads through talosctl, with the context
+                let load = self.cluster.client().is_some();
+                self.show_component(item, ViewComponent::Storage(Box::new(storage)), load);
                 if let Some((selection, title)) = from_group {
                     self.cluster.set_back_hint(Some(title.clone()));
                     self.drill_return = Some((selection, title));
@@ -2408,6 +1873,7 @@ impl App {
             }
             Action::ShowNodeInfo(hostname, address, tab) => {
                 self.leave_view();
+                let mut load = false;
                 let item = match tab {
                     NodeInfoTab::Containers => NavMenuItem::Containers,
                     NodeInfoTab::Config => NavMenuItem::Config,
@@ -2419,12 +1885,11 @@ impl App {
                     NodeInfoComponent::new(hostname, address.clone(), context, config_path, tab);
                 if let Some(client) = self.cluster.client() {
                     node_info.set_client(client.with_node(&address));
-                    self.refresh_job = Some(RefreshJob::NodeInfo(spawn_refresh!(node_info)));
+                    load = true;
                 } else {
                     node_info.set_error("No Talos client configured".to_string());
                 }
-                self.node_info = Some(node_info);
-                self.show_in_pane(item, View::NodeInfo);
+                self.show_component(item, ViewComponent::NodeInfo(Box::new(node_info)), load);
             }
             Action::ShowNodeOperations(hostname, address, is_controlplane) => {
                 // Show node operations overlay
@@ -2442,7 +1907,7 @@ impl App {
                 node_ops.refresh();
 
                 self.node_operations = Some(node_ops);
-                if !matches!(self.view, View::NodeOperations | View::RollingOperations) {
+                if !self.view.is_overlay() {
                     self.overlay_return = self.view.clone();
                 }
                 self.view = View::NodeOperations;
@@ -2494,118 +1959,17 @@ impl App {
                 }
 
                 self.rolling_operations = Some(rolling_ops);
-                if !matches!(self.view, View::NodeOperations | View::RollingOperations) {
+                if !self.view.is_overlay() {
                     self.overlay_return = self.view.clone();
                 }
                 self.view = View::RollingOperations;
             }
             _ => {
                 // Forward to current component
-                match self.view {
-                    View::Hint | View::KubeSpanMatrix => {}
-                    View::Cluster => {
-                        if let Some(next_action) = self.cluster.update(action)? {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::MultiLogs => {
-                        if let Some(multi_logs) = &mut self.multi_logs
-                            && let Some(next_action) = multi_logs.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Etcd => {
-                        if let Some(etcd) = &mut self.etcd
-                            && let Some(next_action) = etcd.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Processes => {
-                        if let Some(processes) = &mut self.processes
-                            && let Some(next_action) = processes.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Network => {
-                        if let Some(network) = &mut self.network
-                            && let Some(next_action) = network.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Diagnostics => {
-                        if let Some(diagnostics) = &mut self.diagnostics
-                            && let Some(next_action) = diagnostics.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Security => {
-                        if let Some(security) = &mut self.security
-                            && let Some(next_action) = security.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Lifecycle => {
-                        if let Some(lifecycle) = &mut self.lifecycle
-                            && let Some(next_action) = lifecycle.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Volumes => {
-                        if let Some(volumes) = &mut self.volumes
-                            && let Some(next_action) = volumes.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Workloads => {
-                        if let Some(workloads) = &mut self.workloads
-                            && let Some(next_action) = workloads.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Storage => {
-                        if let Some(storage) = &mut self.storage
-                            && let Some(next_action) = storage.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::NodeInfo => {
-                        if let Some(node_info) = &mut self.node_info
-                            && let Some(next_action) = node_info.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::NodeOperations => {
-                        if let Some(node_ops) = &mut self.node_operations
-                            && let Some(next_action) = node_ops.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::RollingOperations => {
-                        if let Some(rolling_ops) = &mut self.rolling_operations
-                            && let Some(next_action) = rolling_ops.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
-                    View::Group => {
-                        if let Some(group) = &mut self.group
-                            && let Some(next_action) = group.update(action)?
-                        {
-                            Box::pin(self.handle_action(next_action)).await?;
-                        }
-                    }
+                if let Some(c) = self.active_mut()
+                    && let Some(next_action) = c.update(action)?
+                {
+                    Box::pin(self.handle_action(next_action)).await?;
                 }
             }
         }
@@ -2801,5 +2165,58 @@ mod tests {
         assert_eq!(app.view, View::Cluster);
         assert_eq!(app.pane, NavMenuItem::Dashboard);
         assert_eq!(app.hint, None);
+    }
+
+    fn processes(sort: crate::components::processes::SortBy) -> ViewComponent {
+        let mut p = ProcessesComponent::new("bc1".to_string(), Vec::new());
+        p.set_sort_by(sort);
+        ViewComponent::Processes(Box::new(p))
+    }
+
+    #[tokio::test]
+    async fn leaving_a_view_keeps_its_settings_and_caches_it() {
+        use crate::components::processes::SortBy;
+        let mut app = app_with_view(View::Cluster);
+        app.show_component(NavMenuItem::Processes, processes(SortBy::Mem), false);
+        assert_eq!(app.view, View::Processes);
+        assert!(app.shown().is_some());
+
+        app.leave_view();
+        assert!(app.component.is_none());
+        assert_eq!(app.settings.processes_sort, SortBy::Mem);
+        assert_eq!(app.view_cache.len(), 1);
+        // The saved state has the setting whether or not the view is open
+        assert_eq!(app.current_state().processes_sort.as_deref(), Some("Mem"));
+
+        let (_, cached) = app.view_cache.pop().unwrap();
+        app.restore_view(NavMenuItem::Processes, cached);
+        assert_eq!(app.view, View::Processes);
+        assert!(matches!(app.component, Some(ViewComponent::Processes(_))));
+    }
+
+    #[tokio::test]
+    async fn a_refresh_lands_only_in_the_view_it_ran_for() {
+        use crate::components::processes::SortBy;
+        let mut app = app_with_view(View::Cluster);
+        app.show_component(
+            NavMenuItem::Etcd,
+            ViewComponent::Etcd(Box::default()),
+            false,
+        );
+        app.refresh_job = Some(tokio::spawn(async { processes(SortBy::Mem) }));
+        while !app.refresh_job.as_ref().unwrap().is_finished() {
+            tokio::task::yield_now().await;
+        }
+        app.poll_refresh_job();
+        assert!(app.refresh_job.is_none());
+        assert!(matches!(app.component, Some(ViewComponent::Etcd(_))));
+
+        // Streams and the network view refresh on their own
+        let network = NetworkStatsComponent::new("bc1".to_string(), "10.0.0.1".to_string());
+        assert!(
+            ViewComponent::Network(Box::new(network))
+                .spawn_refresh()
+                .is_none()
+        );
     }
 }
