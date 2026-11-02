@@ -15,7 +15,7 @@
 use crate::action::Action;
 use crate::components::Component;
 use crate::components::diagnostics::{
-    CheckStatus, DiagnosticCheck, DiagnosticsComponent, DiagnosticsSummary,
+    CheckStatus, ClusterShared, DiagnosticCheck, DiagnosticsComponent, DiagnosticsSummary,
 };
 use crate::components::storage::StorageViewMode;
 use crate::ui_ext::CheckStatusExt;
@@ -353,8 +353,16 @@ impl GroupComponent {
             .collect()
     }
 
-    /// Run the single-node diagnostics on every node at once
+    /// Run the single-node diagnostics on every node at once, sharing one
+    /// Kubernetes client and the cluster's addon checks
     async fn load_diagnostics(&self, client: &TalosClient, data: &mut GroupData) {
+        let pin = self.cp_endpoint.clone().or_else(|| {
+            self.nodes
+                .iter()
+                .find(|n| n.role == "controlplane")
+                .map(|n| n.address.clone())
+        });
+        let shared = ClusterShared::load(client, pin.as_deref()).await;
         let runs = self.nodes.iter().map(|node| {
             let mut diagnostics = DiagnosticsComponent::new(
                 node.hostname.clone(),
@@ -367,6 +375,7 @@ impl GroupComponent {
             }
             diagnostics.set_talos_context(self.context.clone());
             diagnostics.set_client(client.with_node(&node.address));
+            diagnostics.set_shared(shared.clone());
             async move {
                 match tokio::time::timeout(DIAGNOSTICS_TIMEOUT, diagnostics.refresh()).await {
                     Ok(Ok(())) => diagnostics.checks_by_category(),

@@ -103,6 +103,54 @@ pub struct DiagnosticsComponent {
     config_path: Option<String>,
     /// Talosconfig context of the active cluster (for talosctl commands)
     talos_context: Option<String>,
+    /// What a group view loaded once for all its nodes
+    shared: Option<ClusterShared>,
+}
+
+/// How long the checks of one refresh may take
+const CHECKS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// What the diagnostics of a group's nodes share: one Kubernetes client and
+/// the cluster's addon checks, loaded once for the group instead of once per
+/// node (every kubeconfig fetch has Talos sign a new admin certificate)
+#[derive(Clone)]
+pub struct ClusterShared {
+    k8s: std::result::Result<kube::Client, String>,
+    addons: addons::DetectedAddons,
+    addon_checks: Vec<DiagnosticCheck>,
+}
+
+impl ClusterShared {
+    /// Connect through control plane `pin` (see [`k8s::connect`]) and run
+    /// the addon checks
+    pub async fn load(client: &TalosClient, pin: Option<&str>) -> Self {
+        let k8s = k8s::connect(client, pin).await.map(|(k8s, _source)| k8s);
+        let (addons, addon_checks) = match &k8s {
+            Ok(kc) => {
+                let run = async {
+                    let found = addons::detect_addons(kc).await;
+                    let checks =
+                        addons::run_addon_checks(Some(kc), &found, &DiagnosticContext::new()).await;
+                    (found, checks)
+                };
+                tokio::time::timeout(CHECKS_TIMEOUT, run)
+                    .await
+                    .unwrap_or_else(|_| {
+                        let check = DiagnosticCheck::unknown("addons", "Addons").with_details(
+                            &format!("no answer within {}s", CHECKS_TIMEOUT.as_secs()),
+                        );
+                        (Default::default(), vec![check])
+                    })
+            }
+            // Each node shows the connection error with its other checks
+            Err(_) => Default::default(),
+        };
+        Self {
+            k8s,
+            addons,
+            addon_checks,
+        }
+    }
 }
 
 impl Default for DiagnosticsComponent {
@@ -157,6 +205,7 @@ impl DiagnosticsComponent {
             controlplane_endpoint: None,
             config_path,
             talos_context: None,
+            shared: None,
         }
     }
 
@@ -178,6 +227,12 @@ impl DiagnosticsComponent {
     /// Set the control plane endpoint for fetching kubeconfig (used for worker nodes)
     pub fn set_controlplane_endpoint(&mut self, endpoint: Option<String>) {
         self.controlplane_endpoint = endpoint;
+    }
+
+    /// Use what a group loaded for all its nodes instead of connecting to
+    /// Kubernetes and checking addons again
+    pub fn set_shared(&mut self, shared: ClusterShared) {
+        self.shared = Some(shared);
     }
 
     /// Set the talosconfig context used for talosctl commands
@@ -349,7 +404,6 @@ impl DiagnosticsComponent {
 
         self.state.start_loading();
 
-        let timeout = std::time::Duration::from_secs(15);
         // Where a refresh spends its time, for the debug log
         let addr = self.data().map(|d| d.address.clone()).unwrap_or_default();
         let started = std::time::Instant::now();
@@ -388,13 +442,18 @@ impl DiagnosticsComponent {
                 .filter(|d| d.context.node_role == "controlplane")
                 .and_then(|d| d.context.node_endpoint.clone())
         });
-        if let Some(cp) = &pin {
-            tracing::info!("Kubernetes client pinned to control plane {}", cp);
-        }
-        let k8s_client = match k8s::connect(&client, pin.as_deref())
-            .await
-            .map(|(client, _source)| client)
-        {
+        let connected = match &self.shared {
+            Some(shared) => shared.k8s.clone(),
+            None => {
+                if let Some(cp) = &pin {
+                    tracing::info!("Kubernetes client pinned to control plane {}", cp);
+                }
+                k8s::connect(&client, pin.as_deref())
+                    .await
+                    .map(|(client, _source)| client)
+            }
+        };
+        let k8s_client = match connected {
             Ok(client) => {
                 tracing::info!("K8s client created successfully");
                 if let Some(data) = self.data_mut() {
@@ -432,9 +491,10 @@ impl DiagnosticsComponent {
                 }
             },
             async {
-                match &k8s_client {
-                    Some(kc) => Some(addons::detect_addons(kc).await),
-                    None => None,
+                match (&self.shared, &k8s_client) {
+                    (Some(shared), _) => Some(shared.addons.clone()),
+                    (None, Some(kc)) => Some(addons::detect_addons(kc).await),
+                    (None, None) => None,
                 }
             },
         );
@@ -492,7 +552,7 @@ impl DiagnosticsComponent {
             .map(|d| d.detected_addons.clone())
             .unwrap_or_default();
 
-        let result = tokio::time::timeout(timeout, async {
+        let result = tokio::time::timeout(CHECKS_TIMEOUT, async {
             // Independent checks: run at once
             let mut lap = std::time::Instant::now();
             let (
@@ -508,7 +568,19 @@ impl DiagnosticsComponent {
                 core::run_service_checks(&client, &context),
                 core::run_certificate_checks(&client, &context, self.config_path.as_deref()),
                 cni::run_cni_checks(&client, &context, k8s_client.as_ref()),
-                addons::run_addon_checks(k8s_client.as_ref(), &detected_addons, &context),
+                async {
+                    match &self.shared {
+                        Some(shared) => shared.addon_checks.clone(),
+                        None => {
+                            addons::run_addon_checks(
+                                k8s_client.as_ref(),
+                                &detected_addons,
+                                &context,
+                            )
+                            .await
+                        }
+                    }
+                },
             );
             system_checks.extend(cert_checks);
             log_stage(&addr, "checks", &mut lap);

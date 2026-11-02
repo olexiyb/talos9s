@@ -60,8 +60,8 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
    `show_component(item, ViewComponent::…(Box::new(c)), load)` (`load`
    starts the first refresh). Anything the refresh needs from the cluster
    each time (a redialled client) goes in the `Action::Refresh` arm.
-5. `cluster.rs`: a `NavMenuItem` (`ALL`, `label` with the full name,
-   `hotkey`) and its arm in `action_for` (hotkeys come from `hotkey`).
+5. `cluster/mod.rs`: a `NavMenuItem` (`ALL`, `label` with the full name,
+   `hotkey`) and its arm in `action_for` (`cluster/actions.rs`).
 6. README: the feature row and the key binding.
 
 ## Conventions
