@@ -556,6 +556,51 @@ mod tests {
     }
 
     #[test]
+    fn json_ts_in_seconds_or_milliseconds_sorts_the_same() {
+        // 2026-11-01T10:00:00Z: zap writes seconds, some loggers milliseconds
+        let t = 1_793_527_200;
+        for line in [
+            r#"{"ts":1793527200,"msg":"s"}"#,
+            r#"{"ts":1793527200.75,"msg":"fractional s"}"#,
+            r#"{"ts":1793527200000,"msg":"ms"}"#,
+            r#"{"ts":1793527200750.5803,"msg":"fractional ms"}"#,
+            r#"{"ts":"2026-11-01T12:00:00+02:00","msg":"offset"}"#,
+            r#"{"time":"2026-11-01T10:00:00.5Z","msg":"time field"}"#,
+        ] {
+            let (short, key, rest) = extract_timestamp(line);
+            assert_eq!(key, t, "{line}");
+            assert_eq!(rest, line);
+            if !line.contains("+02:00") {
+                assert_eq!(short, "10:00:00", "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn go_zero_time_sorts_first_without_panicking() {
+        // An unset time.Time in Go marshals as year 1
+        let zero = time_to_sort_key("0001-01-01T00:00:00Z");
+        assert!(zero < time_to_sort_key("1970-01-01T00:00:01Z"));
+        let (_, key, _) = extract_timestamp(r#"{"ts":"0001-01-01T00:00:00Z","msg":"x"}"#);
+        assert_eq!(key, zero);
+    }
+
+    #[test]
+    fn invalid_month_does_not_take_a_real_dates_place() {
+        let real = time_to_sort_key("2026-11-01T10:00:00Z");
+        for ts in [
+            "2026-13-01T10:00:00Z",
+            "2026-00-01 10:00:00",
+            "2026/13/01 10:00:00",
+        ] {
+            // Falls back to the HHMMSS-ish digits, far below any real date
+            assert!(time_to_sort_key(ts) < real, "{ts}");
+        }
+        let (_, key, _) = extract_timestamp(r#"{"ts":"2026-13-01T10:00:00Z","msg":"x"}"#);
+        assert!(key < real);
+    }
+
+    #[test]
     fn klog_dates_take_the_year_they_were_written() {
         use chrono::TimeZone;
         let jan_2 = chrono::Utc.with_ymd_and_hms(2027, 1, 2, 0, 0, 0).unwrap();

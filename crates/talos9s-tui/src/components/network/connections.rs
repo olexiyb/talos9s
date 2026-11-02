@@ -122,15 +122,12 @@ impl NetworkStatsComponent {
                     || conn.remote_ip.starts_with("127.")
                     || conn.remote_ip == "::1"
             }
-            // CNI bridge - pod network connections (typically 10.x.x.x)
-            "cni0" => conn.local_ip.starts_with("10.") || conn.remote_ip.starts_with("10."),
-            // Flannel overlay - also pod network
-            name if name.starts_with("flannel") => {
-                conn.local_ip.starts_with("10.") || conn.remote_ip.starts_with("10.")
-            }
-            // Veth pairs - pod connections
-            name if name.starts_with("veth") => {
-                conn.local_ip.starts_with("10.") || conn.remote_ip.starts_with("10.")
+            // CNI bridge, flannel overlay and veth pairs carry pod traffic.
+            // Only Talos' default pod subnet counts: nodes often sit on 10.x
+            // too, and their traffic doesn't cross the pod interfaces.
+            name if name == "cni0" || name.starts_with("flannel") || name.starts_with("veth") => {
+                let is_pod = |ip: &str| ip.starts_with("10.244.");
+                is_pod(&conn.local_ip) || is_pod(&conn.remote_ip)
             }
             // Main interface (eth0, enp0s*, etc.) - non-loopback, non-pod connections
             _ => {
@@ -879,5 +876,56 @@ impl NetworkStatsComponent {
 
             _ => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn(local: &str, remote: &str) -> ConnectionInfo {
+        ConnectionInfo {
+            protocol: "tcp".into(),
+            local_ip: local.into(),
+            local_port: 1,
+            remote_ip: remote.into(),
+            remote_port: 2,
+            state: ConnectionState::Established,
+            rx_queue: 0,
+            tx_queue: 0,
+            process_pid: None,
+            process_name: None,
+            netns: None,
+        }
+    }
+
+    fn matches(c: &ConnectionInfo, iface: &str) -> bool {
+        NetworkStatsComponent::connection_matches_interface(c, iface)
+    }
+
+    #[test]
+    fn node_network_on_10_x_is_not_pod_traffic() {
+        // Node-to-node etcd on a 10.x private network
+        let etcd = conn("10.0.0.11", "10.0.0.12");
+        assert!(!matches(&etcd, "cni0"));
+        assert!(!matches(&etcd, "flannel.1"));
+        assert!(!matches(&etcd, "veth1234"));
+        assert!(matches(&etcd, "eth0"));
+
+        let pod = conn("10.244.1.5", "10.0.0.11");
+        assert!(matches(&pod, "cni0"));
+        assert!(matches(&pod, "flannel.1"));
+        assert!(matches(&pod, "veth1234"));
+    }
+
+    #[test]
+    fn loopback_stays_on_lo() {
+        let local = conn("127.0.0.1", "127.0.0.1");
+        assert!(matches(&local, "lo"));
+        assert!(!matches(&local, "eth0"));
+        assert!(matches(&conn("::1", "::1"), "lo"));
+        assert!(!matches(&conn("65.21.130.10", "1.1.1.1"), "lo"));
+        // Listeners on every address show on the main interface
+        assert!(matches(&conn("0.0.0.0", ""), "eth0"));
     }
 }

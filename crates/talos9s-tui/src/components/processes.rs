@@ -511,18 +511,15 @@ impl ProcessesComponent {
             match fetch.processes {
                 Ok(procs) => {
                     stats.error = None;
-                    // Per-process CPU % from the CPU time delta. Not divided by
-                    // the core count, so (like htop) a process can exceed 100%.
                     let elapsed = stats
                         .last_cpu_sample
                         .map(|t| now.duration_since(t).as_secs_f64())
                         .unwrap_or(0.0);
-                    if elapsed > 0.1 && stats.cpu_count > 0 {
-                        for p in &procs {
-                            if let Some(&prev_time) = stats.prev_cpu_times.get(&p.pid) {
-                                let pct = ((p.cpu_time - prev_time) / elapsed * 100.0) as f32;
-                                cpu_percentages.insert((idx, p.pid), pct.max(0.0));
-                            }
+                    if stats.cpu_count > 0 {
+                        for (pid, pct) in
+                            process_cpu_percents(&stats.prev_cpu_times, &procs, elapsed)
+                        {
+                            cpu_percentages.insert((idx, pid), pct);
                         }
                     }
                     stats.prev_cpu_times = procs.iter().map(|p| (p.pid, p.cpu_time)).collect();
@@ -738,6 +735,38 @@ impl ProcessesComponent {
                 children_map.entry(parent).or_default().push(idx);
             } else {
                 root_indices.push(idx);
+            }
+        }
+
+        // A ppid cycle has no root, so nothing in it would be shown: cut the
+        // edge into its first unreached member and make that a root.
+        fn reach(
+            stack: &mut Vec<usize>,
+            reached: &mut HashSet<usize>,
+            processes: &[NodeProcess],
+            children_map: &HashMap<ProcKey, Vec<usize>>,
+        ) {
+            while let Some(i) = stack.pop() {
+                if reached.insert(i)
+                    && let Some(children) = children_map.get(&processes[i].key())
+                {
+                    stack.extend(children);
+                }
+            }
+        }
+        let mut reached = HashSet::new();
+        let mut stack = root_indices.clone();
+        reach(&mut stack, &mut reached, &data.processes, &children_map);
+        for &idx in &data.filtered_indices {
+            let parent = data.processes[idx].parent_key();
+            let is_child = children_map.get(&parent).is_some_and(|c| c.contains(&idx));
+            if is_child && !reached.contains(&idx) {
+                if let Some(c) = children_map.get_mut(&parent) {
+                    c.retain(|&i| i != idx);
+                }
+                root_indices.push(idx);
+                stack.push(idx);
+                reach(&mut stack, &mut reached, &data.processes, &children_map);
             }
         }
 
@@ -1719,6 +1748,27 @@ impl crate::components::BackgroundRefresh for ProcessesComponent {
     }
 }
 
+/// Per-process CPU % from the CPU time delta since the previous sample.
+/// Not divided by the core count, so (like htop) a process can exceed
+/// 100%. A reused PID has less CPU time than its predecessor: clamp to 0.
+fn process_cpu_percents(
+    prev_cpu_times: &HashMap<i32, f64>,
+    procs: &[ProcessInfo],
+    elapsed: f64,
+) -> Vec<(i32, f32)> {
+    if elapsed <= 0.1 {
+        return Vec::new();
+    }
+    procs
+        .iter()
+        .filter_map(|p| {
+            let prev = prev_cpu_times.get(&p.pid)?;
+            let pct = ((p.cpu_time - prev) / elapsed * 100.0) as f32;
+            Some((p.pid, pct.max(0.0)))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1820,5 +1870,68 @@ mod tests {
         comp.apply_filter();
         assert!(listed(&comp).iter().all(|(node, _, _)| node == "n2"));
         assert_eq!(listed(&comp).len(), 2);
+    }
+
+    #[test]
+    fn cpu_percent_survives_pid_reuse_and_short_intervals() {
+        let with_time = |pid, t| ProcessInfo {
+            cpu_time: t,
+            ..process(pid, 1, "p", 0)
+        };
+        let prev = HashMap::from([(10, 50.0), (11, 1.0)]);
+        // PID 10 was reused by a fresh process: its CPU time went backwards
+        let procs = [with_time(10, 0.2), with_time(11, 2.0), with_time(12, 9.0)];
+        let mut pcts = process_cpu_percents(&prev, &procs, 2.0);
+        pcts.sort_by_key(|(pid, _)| *pid);
+        assert_eq!(pcts, vec![(10, 0.0), (11, 50.0)]);
+        // Too short a window would blow small deltas up to huge numbers
+        assert!(process_cpu_percents(&prev, &procs, 0.05).is_empty());
+    }
+
+    fn one_node(procs: Vec<ProcessInfo>) -> ProcessesComponent {
+        let node = ProcessNode {
+            hostname: "n1".to_string(),
+            address: String::new(),
+        };
+        let mut comp = ProcessesComponent::new("test".into(), vec![node]);
+        comp.state.set_data(ProcessesData {
+            processes: procs
+                .into_iter()
+                .map(|info| NodeProcess { node: 0, info })
+                .collect(),
+            nodes: vec![NodeStats::default()],
+            ..Default::default()
+        });
+        comp.sort_by = SortBy::Mem;
+        comp.tree_view = true;
+        comp.resort();
+        comp
+    }
+
+    #[test]
+    fn tree_shows_orphans_as_roots() {
+        // PID 7's parent is not in the list (it exited between reads)
+        let comp = one_node(vec![
+            process(1, 0, "init", 20),
+            process(7, 99, "orphan", 10),
+            process(8, 7, "child", 5),
+        ]);
+        let rows: Vec<(i32, usize)> = listed(&comp).into_iter().map(|(_, p, d)| (p, d)).collect();
+        assert_eq!(rows, vec![(1, 0), (7, 0), (8, 1)]);
+    }
+
+    #[test]
+    fn tree_with_a_ppid_cycle_shows_every_process_once() {
+        // A snapshot taken across PID reuse can make two processes each
+        // other's parent; neither is then a root
+        let comp = one_node(vec![
+            process(1, 0, "init", 30),
+            process(5, 6, "a", 20),
+            process(6, 5, "b", 10),
+            process(7, 7, "self", 5),
+        ]);
+        let mut pids: Vec<i32> = listed(&comp).into_iter().map(|(_, p, _)| p).collect();
+        pids.sort();
+        assert_eq!(pids, vec![1, 5, 6, 7]);
     }
 }
