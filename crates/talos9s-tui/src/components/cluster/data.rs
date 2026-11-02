@@ -15,21 +15,7 @@ pub(super) struct NodeFetch {
     pub(super) mounts: Option<Vec<NodeMounts>>,
 }
 
-/// The value occurring most often (ties go to the first seen), or `None` if empty
-pub(super) fn most_common<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    let mut counts: Vec<(&str, usize)> = Vec::new();
-    for v in values {
-        match counts.iter_mut().find(|(c, _)| *c == v) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((v, 1)),
-        }
-    }
-    counts
-        .into_iter()
-        .rev()
-        .max_by_key(|(_, n)| *n)
-        .map(|(v, _)| v)
-}
+pub(super) use talos9s_core::stats::most_common;
 
 /// Simple etcd status for header display
 #[derive(Debug, Clone, Default)]

@@ -526,14 +526,6 @@ fn offline_nodes_keep_their_group_and_status() {
 }
 
 #[test]
-fn most_common_prefers_majority_then_first_seen() {
-    let v = ["v1.11.2", "v1.11.3", "v1.11.2"];
-    assert_eq!(most_common(v.into_iter()), Some("v1.11.2"));
-    assert_eq!(most_common(["a", "b"].into_iter()), Some("a"));
-    assert_eq!(most_common(std::iter::empty()), None);
-}
-
-#[test]
 fn falls_back_to_etcd_service_without_discovery() {
     let mut comp = ClusterComponent::default();
     comp.clusters.push(ClusterData {

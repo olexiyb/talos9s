@@ -51,8 +51,7 @@ pub struct UpdateCheck {
 impl UpdateCheck {
     /// No answer yet, or the last one is older than `interval`
     pub fn due(&self, now: u64, interval: std::time::Duration) -> bool {
-        self.checked_at
-            .is_none_or(|at| now.saturating_sub(at) >= interval.as_secs())
+        talos9s_core::version::check_due(self.checked_at, now, interval)
     }
 
     /// The latest release when it is newer than this build

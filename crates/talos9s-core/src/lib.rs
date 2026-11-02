@@ -18,6 +18,8 @@
 //! - [`errors`] - Error formatting utilities for user-friendly messages
 //! - [`network`] - Network analysis utilities (port mapping, connection classification)
 //! - [`diagnostics`] - Diagnostic types for health checks and CNI detection
+//! - [`stats`] - Summaries over node values (common version, capacity)
+//! - [`version`] - Release version comparison and the update-check schedule
 //! - [`constants`] - Shared constants (thresholds, CRD names, refresh intervals)
 
 pub mod async_state;
@@ -30,6 +32,8 @@ pub mod indicators;
 pub mod logparse;
 pub mod network;
 pub mod selection;
+pub mod stats;
+pub mod version;
 
 // Re-export commonly used items at crate root
 pub use async_state::*;

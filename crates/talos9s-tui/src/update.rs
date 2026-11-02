@@ -68,35 +68,4 @@ async fn request() -> Result<String, String> {
         .ok_or_else(|| "no tag_name in the answer".to_string())
 }
 
-/// `latest` is a newer release than `current` (versions as `X.Y.Z`; anything
-/// else counts as not newer, so an odd tag never nags)
-pub fn is_newer(current: &str, latest: &str) -> bool {
-    match (parse(current), parse(latest)) {
-        (Some(c), Some(l)) => l > c,
-        _ => false,
-    }
-}
-
-fn parse(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.trim_start_matches('v').split('.');
-    let mut next = || parts.next()?.parse().ok();
-    let version = (next()?, next()?, next()?);
-    parts.next().is_none().then_some(version)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compares_release_versions() {
-        assert!(is_newer("0.2.0", "0.3.0"));
-        assert!(is_newer("0.2.0", "v0.2.1"));
-        assert!(is_newer("0.9.0", "0.10.0"));
-        assert!(!is_newer("0.3.0", "0.3.0"));
-        assert!(!is_newer("0.3.0", "0.2.9"));
-        // Pre-releases and odd tags never count
-        assert!(!is_newer("0.2.0", "0.3.0-rc1"));
-        assert!(!is_newer("0.2.0", "nightly"));
-    }
-}
+pub use talos9s_core::version::is_newer;

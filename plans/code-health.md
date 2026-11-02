@@ -335,5 +335,6 @@ tests green before and after.
 
 ## Open questions
 
-1. Phase 6 item 1: is a trait object for views acceptable, or keep the
-   enum and generate the matches with a macro?
+None. (Phase 6 item 1, trait object or enum: decided 2026-11-02 to keep
+the enum. The set of views is closed, so exhaustive matches catch missing
+wiring at compile time and no `Any` downcasts are needed.)

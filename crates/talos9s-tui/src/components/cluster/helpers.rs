@@ -343,22 +343,7 @@ pub(super) fn pools_line(pools: Option<&[StoragePool]>) -> Line<'static> {
     Line::from(spans)
 }
 
-/// `used/total` in the total's unit, e.g. `287/840G` or `0.4/6.8T`
-pub(super) fn used_of_total(used: u64, total: u64) -> String {
-    const TIB: f64 = (1u64 << 40) as f64;
-    if total as f64 >= TIB {
-        let precision = |v: f64| if v < 10.0 { 1 } else { 0 };
-        let (u, t) = (used as f64 / TIB, total as f64 / TIB);
-        format!("{u:.p$}/{t:.q$}T", p = precision(u), q = precision(t))
-    } else {
-        format!("{:.0}/{:.0}G", gib(used), gib(total))
-    }
-}
-
-/// Bytes to GiB, for display
-pub(super) fn gib(bytes: u64) -> f64 {
-    bytes as f64 / 1024.0 / 1024.0 / 1024.0
-}
+pub(super) use talos9s_core::stats::{gib, used_of_total};
 
 /// Color for a 1-minute load average
 /// Color of a load average for the node's core count (dim while unknown),

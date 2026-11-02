@@ -147,8 +147,8 @@ impl NetworkStatsComponent {
     ) {
         let lines = match result {
             Ok(content) => match viewer_type {
-                FileViewerType::DnsConfig => Self::parse_dns_config_static(&content),
-                FileViewerType::RoutingTable => Self::parse_routing_table_static(&content),
+                FileViewerType::DnsConfig => talos9s_core::network::resolv_conf_lines(&content),
+                FileViewerType::RoutingTable => talos9s_core::network::route_table_lines(&content),
             },
             Err(e) => vec![format!("Error reading {}: {}", path, e)],
         };
@@ -158,135 +158,6 @@ impl NetworkStatsComponent {
         {
             viewer.lines = lines;
         }
-    }
-
-    /// Parse DNS configuration for display (static version for borrow checker)
-    fn parse_dns_config_static(content: &str) -> Vec<String> {
-        let mut lines = Vec::new();
-        lines.push("─ DNS Configuration ─".to_string());
-        lines.push(String::new());
-
-        let mut nameservers = Vec::new();
-        let mut search_domains = Vec::new();
-        let mut options = Vec::new();
-
-        for line in content.lines() {
-            let line = line.trim();
-            if line.starts_with('#') || line.is_empty() {
-                continue;
-            }
-
-            if let Some(ns) = line.strip_prefix("nameserver ") {
-                nameservers.push(ns.trim().to_string());
-            } else if let Some(search) = line.strip_prefix("search ") {
-                search_domains.extend(search.split_whitespace().map(String::from));
-            } else if let Some(opt) = line.strip_prefix("options ") {
-                options.extend(opt.split_whitespace().map(String::from));
-            }
-        }
-
-        if !nameservers.is_empty() {
-            lines.push("Nameservers:".to_string());
-            for ns in &nameservers {
-                lines.push(format!("  • {}", ns));
-            }
-            lines.push(String::new());
-        }
-
-        if !search_domains.is_empty() {
-            lines.push("Search Domains:".to_string());
-            for domain in &search_domains {
-                lines.push(format!("  • {}", domain));
-            }
-            lines.push(String::new());
-        }
-
-        if !options.is_empty() {
-            lines.push("Options:".to_string());
-            for opt in &options {
-                lines.push(format!("  • {}", opt));
-            }
-            lines.push(String::new());
-        }
-
-        lines.push("─ Raw Content ─".to_string());
-        for line in content.lines() {
-            lines.push(format!("  {}", line));
-        }
-
-        lines
-    }
-
-    /// Parse routing table for display (static version for borrow checker)
-    fn parse_routing_table_static(content: &str) -> Vec<String> {
-        let mut lines = Vec::new();
-        lines.push("─ Routing Table ─".to_string());
-        lines.push(String::new());
-
-        // Header
-        lines.push(format!(
-            "{:<18} {:<18} {:<18} {:>6} {:>6} {:>6} {:<10}",
-            "Destination", "Gateway", "Genmask", "Flags", "Metric", "Ref", "Iface"
-        ));
-        lines.push("─".repeat(90));
-
-        let mut route_lines: Vec<&str> = content.lines().skip(1).collect(); // Skip header
-        route_lines.sort(); // Sort for consistent display
-
-        for line in route_lines {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 8 {
-                let iface = parts[0];
-                let destination = Self::hex_to_ip(parts[1]);
-                let gateway = Self::hex_to_ip(parts[2]);
-                let flags = parts[3];
-                let _refcnt = parts[4];
-                let _use = parts[5];
-                let metric = parts[6];
-                let mask = Self::hex_to_ip(parts[7]);
-
-                // Decode flags
-                let flag_val = u32::from_str_radix(flags, 16).unwrap_or(0);
-                let flag_str = Self::decode_route_flags(flag_val);
-
-                lines.push(format!(
-                    "{:<18} {:<18} {:<18} {:>6} {:>6} {:>6} {:<10}",
-                    destination, gateway, mask, flag_str, metric, "0", iface
-                ));
-            }
-        }
-
-        lines.push(String::new());
-        lines.push("Flags: U=Up, G=Gateway, H=Host".to_string());
-
-        lines
-    }
-
-    /// Convert hex IP to dotted decimal
-    fn hex_to_ip(hex: &str) -> String {
-        // /proc/net/route holds addresses in host (little-endian) order
-        match u32::from_str_radix(hex, 16) {
-            Ok(val) => std::net::Ipv4Addr::from(val.to_le_bytes()).to_string(),
-            Err(_) => hex.to_string(),
-        }
-    }
-
-    /// Decode route flags
-    fn decode_route_flags(flags: u32) -> String {
-        let mut s = String::new();
-        if flags & 0x0001 != 0 {
-            s.push('U');
-        } // RTF_UP
-        if flags & 0x0002 != 0 {
-            s.push('G');
-        } // RTF_GATEWAY
-        if flags & 0x0004 != 0 {
-            s.push('H');
-        } // RTF_HOST
-        if s.is_empty() {
-            s.push('-');
-        }
-        s
     }
 
     /// Draw the file viewer overlay
@@ -377,17 +248,5 @@ impl NetworkStatsComponent {
             Span::raw(" close"),
         ]));
         frame.render_widget(footer, footer_area);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn route_addresses_are_little_endian() {
-        assert_eq!(NetworkStatsComponent::hex_to_ip("0100A8C0"), "192.168.0.1");
-        assert_eq!(NetworkStatsComponent::hex_to_ip("00000000"), "0.0.0.0");
-        assert_eq!(NetworkStatsComponent::hex_to_ip("zz"), "zz");
     }
 }
