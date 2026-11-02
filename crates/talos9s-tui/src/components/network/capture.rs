@@ -9,8 +9,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 use std::time::Instant;
-use talos_rs::NetDevStats;
 use talos9s_core::constants::MAX_CAPTURE_SIZE;
+use talos9s_core::format_bytes;
 
 impl NetworkStatsComponent {
     /// Toggle packet capture on/off
@@ -30,7 +30,7 @@ impl NetworkStatsComponent {
                 self.capture.state = CaptureState::Idle;
                 self.capture.receiver = None;
 
-                let bytes_str = NetDevStats::format_bytes(bytes as u64);
+                let bytes_str = format_bytes(bytes as u64);
                 self.status_message = Some((
                     format!("Capture stopped: {bytes_str} - press 's' to save, open in Wireshark"),
                     Instant::now(),
@@ -60,11 +60,7 @@ impl NetworkStatsComponent {
         let interface = interface.clone();
         let use_bpf_filter = self.capture.use_bpf_filter;
         self.tasks.capture = Some(tokio::spawn(async move {
-            if use_bpf_filter {
-                with_timeout(client.packet_capture_exclude_api(&interface, false, 65535)).await
-            } else {
-                with_timeout(client.packet_capture(&interface, false, 65535)).await
-            }
+            with_timeout(client.packet_capture(&interface, false, 65535, use_bpf_filter)).await
         }));
     }
 
@@ -109,7 +105,7 @@ impl NetworkStatsComponent {
 
                 // Auto-stop if capture exceeds size limit
                 if self.capture.data.len() >= MAX_CAPTURE_SIZE {
-                    let bytes_str = NetDevStats::format_bytes(self.capture.data.len() as u64);
+                    let bytes_str = format_bytes(self.capture.data.len() as u64);
                     self.capture.state = CaptureState::Idle;
                     self.capture.receiver = None;
                     self.status_message = Some((
@@ -219,7 +215,7 @@ impl NetworkStatsComponent {
             let mins = duration / 60;
             let secs = duration % 60;
             let bytes = self.capture.data.len() as u64;
-            let bytes_str = NetDevStats::format_bytes(bytes);
+            let bytes_str = format_bytes(bytes);
 
             let status = Line::from(vec![
                 Span::styled(

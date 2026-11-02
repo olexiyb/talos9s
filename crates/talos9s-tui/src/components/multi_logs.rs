@@ -1118,7 +1118,8 @@ impl MultiLogsComponent {
                 .max(16)
                 .min((area.width as usize).saturating_sub(4)),
         );
-        let panel_height = to_u16((filtered_services.len() + 2).min(area.height as usize - 2));
+        let panel_height =
+            to_u16((filtered_services.len() + 2).min((area.height as usize).saturating_sub(2)));
 
         // Position in top-left with small margin
         let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
@@ -1179,7 +1180,8 @@ impl MultiLogsComponent {
     /// Draw the levels filter panel
     fn draw_levels_panel(&mut self, frame: &mut Frame, area: Rect) {
         let panel_width = 20u16;
-        let panel_height = to_u16((self.levels.len() + 2).min(area.height as usize - 2));
+        let panel_height =
+            to_u16((self.levels.len() + 2).min((area.height as usize).saturating_sub(2)));
 
         // Position in top-left with small margin
         let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
@@ -1248,7 +1250,8 @@ impl MultiLogsComponent {
             .collect();
 
         let panel_width = (area.width.saturating_sub(4)).min(100);
-        let panel_height = to_u16((self.nodes.len() + 2).min(area.height as usize - 2));
+        let panel_height =
+            to_u16((self.nodes.len() + 2).min((area.height as usize).saturating_sub(2)));
         let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
         frame.render_widget(ratatui::widgets::Clear, panel_area);
 

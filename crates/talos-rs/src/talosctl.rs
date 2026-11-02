@@ -224,8 +224,7 @@ pub async fn get_disks_for_node(
 /// This is useful for pre-bootstrap scenarios where you want to see
 /// what disks are available before writing the machine configuration.
 pub async fn get_disks_insecure(endpoint: &str) -> Result<Vec<DiskInfo>, TalosError> {
-    let output =
-        exec_talosctl_async(&["get", "disks", "--insecure", "-n", endpoint, "-o", "yaml"]).await?;
+    let output = get_resource_yaml(None, endpoint, None, &["disks", "--insecure"]).await?;
     Ok(parse_disks_yaml(&output))
 }
 
@@ -233,16 +232,7 @@ pub async fn get_disks_insecure(endpoint: &str) -> Result<Vec<DiskInfo>, TalosEr
 ///
 /// Executes: talosctl get volumestatus --insecure -n <endpoint> -o yaml
 pub async fn get_volume_status_insecure(endpoint: &str) -> Result<Vec<VolumeStatus>, TalosError> {
-    let output = exec_talosctl_async(&[
-        "get",
-        "volumestatus",
-        "--insecure",
-        "-n",
-        endpoint,
-        "-o",
-        "yaml",
-    ])
-    .await?;
+    let output = get_resource_yaml(None, endpoint, None, &["volumestatus", "--insecure"]).await?;
     Ok(parse_volume_status_yaml(&output))
 }
 
@@ -350,18 +340,6 @@ pub async fn apply_config_insecure(
 /// which stalls startup since the first refresh runs behind the connect screen.
 const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Host part of a talosconfig endpoint (`host`, `host:port`, `[v6]` or `[v6]:port`).
-fn endpoint_host(endpoint: &str) -> &str {
-    if let Some(rest) = endpoint.strip_prefix('[') {
-        return rest.split(']').next().unwrap_or(rest);
-    }
-    match endpoint.split_once(':') {
-        // A bare IPv6 address has several colons and no port
-        Some((host, port)) if !port.contains(':') => host,
-        _ => endpoint,
-    }
-}
-
 /// Get discovery members for a context (async, non-blocking)
 ///
 /// Executes, for each configured endpoint until one succeeds:
@@ -391,7 +369,7 @@ pub async fn get_discovery_members_for_context(
 
     let mut last_error = TalosError::NoEndpoints(context.to_string());
     for endpoint in &ctx.endpoints {
-        let host = endpoint_host(endpoint);
+        let host = crate::client::host_of(endpoint);
         if host.is_empty() {
             continue;
         }
@@ -637,20 +615,10 @@ fn parse_etcd_spec_yaml(yaml_str: &str) -> Result<EtcdSpecInfo, TalosError> {
     let spec = yaml_specs(yaml_str)
         .next()
         .ok_or_else(|| TalosError::ConfigInvalid("no EtcdSpec in talosctl output".to_string()))?;
-    let addresses = |key: &str| -> Vec<String> {
-        spec.get(key)
-            .and_then(|v| v.as_array())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
     Ok(EtcdSpecInfo {
-        advertised: addresses("advertisedAddresses"),
-        listen_peer: addresses("listenPeerAddresses"),
-        listen_client: addresses("listenClientAddresses"),
+        advertised: str_array(&spec, "advertisedAddresses"),
+        listen_peer: str_array(&spec, "listenPeerAddresses"),
+        listen_client: str_array(&spec, "listenClientAddresses"),
     })
 }
 
@@ -665,15 +633,15 @@ pub async fn get_kubespan_peers_for_node(
 }
 
 /// Whether KubeSpan is enabled on a node in `context` (async, with timeout).
-/// Any failure reads as "not enabled", like [`is_kubespan_enabled`].
+/// Any failure reads as "not enabled".
 pub async fn is_kubespan_enabled_for_node(
     context: Option<&str>,
     node_ip: &str,
     config_path: Option<&str>,
 ) -> bool {
-    get_resource_yaml(context, node_ip, config_path, &["kubespanconfig"])
+    get_kubespan_settings_for_node(context, node_ip, config_path)
         .await
-        .is_ok_and(|output| parse_kubespan_settings(&output).enabled)
+        .is_ok_and(|s| s.enabled)
 }
 
 /// KubeSpan settings of a node, from its KubeSpanConfig resource
@@ -801,12 +769,18 @@ fn yaml_specs(yaml_str: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
 fn parse_spec_string_list(yaml_str: &str, field: &str) -> Vec<String> {
     yaml_specs(yaml_str)
         .next()
-        .and_then(|spec| {
-            spec.get(field)?.as_array().map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
+        .map(|spec| str_array(&spec, field))
+        .unwrap_or_default()
+}
+
+/// The strings of an array field; missing or non-string entries are skipped
+fn str_array(spec: &serde_json::Value, key: &str) -> Vec<String> {
+    spec.get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -1813,13 +1787,16 @@ spec:
     }
 
     #[test]
-    fn endpoint_host_strips_port_and_brackets() {
-        assert_eq!(endpoint_host("10.0.0.1"), "10.0.0.1");
-        assert_eq!(endpoint_host("10.0.0.1:50000"), "10.0.0.1");
-        assert_eq!(endpoint_host("talos.example.com:443"), "talos.example.com");
-        assert_eq!(endpoint_host("[2a01::1]:50000"), "2a01::1");
-        assert_eq!(endpoint_host("[2a01::1]"), "2a01::1");
-        assert_eq!(endpoint_host("2a01::1"), "2a01::1");
+    fn host_of_handles_talosconfig_endpoints_port_and_brackets() {
+        assert_eq!(crate::client::host_of("10.0.0.1"), "10.0.0.1");
+        assert_eq!(crate::client::host_of("10.0.0.1:50000"), "10.0.0.1");
+        assert_eq!(
+            crate::client::host_of("talos.example.com:443"),
+            "talos.example.com"
+        );
+        assert_eq!(crate::client::host_of("[2a01::1]:50000"), "2a01::1");
+        assert_eq!(crate::client::host_of("[2a01::1]"), "2a01::1");
+        assert_eq!(crate::client::host_of("2a01::1"), "2a01::1");
     }
 
     #[test]

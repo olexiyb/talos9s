@@ -38,6 +38,11 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Format a rate in bytes per second, like [`format_bytes`] with `/s`
+pub fn format_rate(bytes_per_sec: u64) -> String {
+    format!("{}/s", format_bytes(bytes_per_sec))
+}
+
 /// Format signed bytes (for etcd and other APIs that use i64)
 ///
 /// Handles negative values by showing "0 B".

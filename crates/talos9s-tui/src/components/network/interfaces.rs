@@ -13,6 +13,7 @@ use ratatui::{
 use std::time::Instant;
 use talos_rs::{NetDevRate, NetDevStats};
 use talos9s_core::constants::{CLOSE_WAIT_WARN, TIME_WAIT_WARN};
+use talos9s_core::{format_bytes, format_rate};
 
 /// A count that fits an 8-column cell: exact below a million, then
 /// `201.5M` / `3.2G` (cutting digits off would show a wrong number)
@@ -212,8 +213,8 @@ impl NetworkStatsComponent {
             ""
         };
 
-        let rx_rate = NetDevStats::format_rate(total_rx_rate);
-        let tx_rate = NetDevStats::format_rate(total_tx_rate);
+        let rx_rate = format_rate(total_rx_rate);
+        let tx_rate = format_rate(total_tx_rate);
 
         let mut spans = vec![
             Span::styled(
@@ -438,10 +439,10 @@ impl NetworkStatsComponent {
             .map(|(idx, dev)| {
                 let rate = data.rates.get(&dev.name);
                 let rx_rate = rate
-                    .map(|r| NetDevStats::format_rate(r.rx_bytes_per_sec))
+                    .map(|r| format_rate(r.rx_bytes_per_sec))
                     .unwrap_or_else(|| "0 B/s".to_string());
                 let tx_rate = rate
-                    .map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
+                    .map(|r| format_rate(r.tx_bytes_per_sec))
                     .unwrap_or_else(|| "0 B/s".to_string());
 
                 // Colored only while rising: the counts are since the
@@ -530,14 +531,14 @@ impl NetworkStatsComponent {
 
         let rate = data.rates.get(&dev.name);
         let rx_rate = rate
-            .map(|r| NetDevStats::format_rate(r.rx_bytes_per_sec))
+            .map(|r| format_rate(r.rx_bytes_per_sec))
             .unwrap_or_else(|| "0 B/s".to_string());
         let tx_rate = rate
-            .map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
+            .map(|r| format_rate(r.tx_bytes_per_sec))
             .unwrap_or_else(|| "0 B/s".to_string());
 
-        let rx_total = NetDevStats::format_bytes(dev.rx_bytes);
-        let tx_total = NetDevStats::format_bytes(dev.tx_bytes);
+        let rx_total = format_bytes(dev.rx_bytes);
+        let tx_total = format_bytes(dev.tx_bytes);
 
         let errors_rising = rate.is_some_and(|r| r.errors_per_sec > 0.0);
         let drops_rising = rate.is_some_and(|r| r.dropped_per_sec > 0.0);

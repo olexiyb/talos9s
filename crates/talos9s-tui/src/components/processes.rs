@@ -21,7 +21,7 @@ use ratatui::{
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use talos_rs::{CpuStat, MemInfo, ProcessInfo, ProcessState, TalosClient};
-use talos9s_core::{AsyncState, format_bytes_compact};
+use talos9s_core::{AsyncState, format_bytes, format_bytes_compact};
 
 const AUTO_REFRESH_INTERVAL_SECS: u64 = talos9s_core::constants::refresh_intervals::NORMAL;
 
@@ -1244,7 +1244,7 @@ impl ProcessesComponent {
                         } else {
                             format!("{:>5.1}%  {}", cpu_pct, proc.cpu_time_human())
                         },
-                        mem: proc.resident_memory_human(),
+                        mem: format_bytes(proc.resident_memory),
                         state: proc.state.short().to_string(),
                         command,
                         cpu_color,
@@ -1425,10 +1425,10 @@ impl ProcessesComponent {
         ]);
         let stats_line2 = Line::from(vec![
             Span::styled("Virt: ", Style::default().add_modifier(Modifier::DIM)),
-            Span::raw(proc.virtual_memory_human()),
+            Span::raw(format_bytes(proc.virtual_memory)),
             Span::raw("  "),
             Span::styled("Res: ", Style::default().add_modifier(Modifier::DIM)),
-            Span::raw(proc.resident_memory_human()),
+            Span::raw(format_bytes(proc.resident_memory)),
             Span::raw("  "),
             Span::styled("<y>", crate::ui_ext::KEY),
             Span::styled(" yank", Style::default().fg(Color::DarkGray)),

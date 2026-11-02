@@ -34,7 +34,7 @@ use talos_rs::{
     DiskInfo, NetDevStats, TalosClient, VolumeStatus, get_disks_for_node,
     get_volume_status_for_node,
 };
-use talos9s_core::AsyncState;
+use talos9s_core::{AsyncState, format_bytes, format_rate};
 
 /// Upper bound for one node's diagnostics run
 const DIAGNOSTICS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -822,10 +822,7 @@ impl GroupComponent {
                     bold("DROPPED"),
                 ]);
                 let rate_cell = |r: Option<u64>| {
-                    Cell::from(
-                        r.map(NetDevStats::format_rate)
-                            .unwrap_or_else(|| "-".to_string()),
-                    )
+                    Cell::from(r.map(format_rate).unwrap_or_else(|| "-".to_string()))
                 };
                 // Totals since the interface came up stay plain; yellow with
                 // the rate only while they rise
@@ -850,8 +847,8 @@ impl GroupComponent {
                             Cell::from(r.name.clone()),
                             rate_cell(r.rx_rate).style(Style::default().fg(Color::Green)),
                             rate_cell(r.tx_rate).style(Style::default().fg(Color::Blue)),
-                            Cell::from(NetDevStats::format_bytes(r.rx_bytes)),
-                            Cell::from(NetDevStats::format_bytes(r.tx_bytes)),
+                            Cell::from(format_bytes(r.rx_bytes)),
+                            Cell::from(format_bytes(r.tx_bytes)),
                             counter_cell(r.errors, r.errors_rate),
                             counter_cell(r.dropped, r.dropped_rate),
                         ])

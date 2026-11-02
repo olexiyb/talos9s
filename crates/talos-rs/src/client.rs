@@ -701,14 +701,6 @@ impl TalosClient {
         Ok(members)
     }
 
-    /// Get etcd status from control plane nodes
-    /// Returns status for each etcd member that responds
-    ///
-    /// Use `etcd_status_for_nodes()` if you need to target specific control plane nodes.
-    pub async fn etcd_status(&self) -> Result<Vec<EtcdMemberStatus>, TalosError> {
-        self.etcd_status_for_nodes(&[]).await
-    }
-
     /// Get etcd status from specific control plane nodes
     ///
     /// Pass the IPs from `etcd_members()` to get status from all control planes.
@@ -1111,25 +1103,6 @@ impl TalosClient {
         Ok(results)
     }
 
-    /// Stream packet capture from an interface
-    ///
-    /// Returns a receiver that yields raw pcap data chunks.
-    /// The first chunk contains the pcap file header.
-    ///
-    /// # Arguments
-    /// * `interface` - Network interface name (e.g., "eth0")
-    /// * `promiscuous` - Enable promiscuous mode
-    /// * `snap_len` - Maximum bytes to capture per packet (0 = use default 65535)
-    pub async fn packet_capture(
-        &self,
-        interface: &str,
-        promiscuous: bool,
-        snap_len: u32,
-    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>, TalosError> {
-        self.packet_capture_with_filter(interface, promiscuous, snap_len, Vec::new())
-            .await
-    }
-
     /// Determine the appropriate link type for a network interface.
     ///
     /// - Tunnel interfaces (kubespan, wg*, tun*, tap*) use RAW
@@ -1148,22 +1121,26 @@ impl TalosClient {
         }
     }
 
-    /// Start packet capture with BPF filter to exclude the Talos API port.
+    /// Stream packet capture from an interface
     ///
-    /// This prevents feedback loops when capturing on the management interface
-    /// by filtering out traffic on port 50000 (Talos apid).
+    /// Returns a receiver that yields raw pcap data chunks; the first chunk
+    /// holds the pcap file header. `snap_len` 0 means the default 65535.
     ///
-    /// Automatically detects the link type based on interface name:
-    /// - EN10MB for Ethernet interfaces (eth*, ens*, bond*, lo, etc.)
-    /// - RAW for tunnel interfaces (kubespan, wg*, tun*)
-    pub async fn packet_capture_exclude_api(
+    /// `exclude_api` filters out port 50000 (apid) with BPF, so capturing on
+    /// the management interface doesn't capture its own stream. The filter's
+    /// header offsets follow the link type guessed from the interface name.
+    pub async fn packet_capture(
         &self,
         interface: &str,
         promiscuous: bool,
         snap_len: u32,
+        exclude_api: bool,
     ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>, TalosError> {
-        let link_type = Self::detect_link_type(interface);
-        let bpf_filter = Self::build_port_exclusion_filter(50000, link_type);
+        let bpf_filter = if exclude_api {
+            Self::build_port_exclusion_filter(50000, Self::detect_link_type(interface))
+        } else {
+            Vec::new()
+        };
         self.packet_capture_with_filter(interface, promiscuous, snap_len, bpf_filter)
             .await
     }
@@ -1758,23 +1735,6 @@ impl EtcdAlarmType {
     }
 }
 
-/// Format bytes into human-readable string (KB, MB, GB)
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 // ==================== Process Types ====================
 
 /// Processes running on a node
@@ -1812,16 +1772,6 @@ pub struct ProcessInfo {
 }
 
 impl ProcessInfo {
-    /// Get resident memory in human-readable format
-    pub fn resident_memory_human(&self) -> String {
-        format_bytes(self.resident_memory)
-    }
-
-    /// Get virtual memory in human-readable format
-    pub fn virtual_memory_human(&self) -> String {
-        format_bytes(self.virtual_memory)
-    }
-
     /// Get CPU time in human-readable format (e.g., "847.2s" or "2h 14m")
     pub fn cpu_time_human(&self) -> String {
         if self.cpu_time < 60.0 {
@@ -1989,43 +1939,6 @@ impl NetDevStats {
     /// Get total traffic (rx + tx bytes)
     pub fn total_traffic(&self) -> u64 {
         self.rx_bytes + self.tx_bytes
-    }
-
-    /// Format bytes as human-readable (KB, MB, GB, TB)
-    pub fn format_bytes(bytes: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
-        const TB: u64 = GB * 1024;
-
-        if bytes >= TB {
-            format!("{:.1} TB", bytes as f64 / TB as f64)
-        } else if bytes >= GB {
-            format!("{:.1} GB", bytes as f64 / GB as f64)
-        } else if bytes >= MB {
-            format!("{:.1} MB", bytes as f64 / MB as f64)
-        } else if bytes >= KB {
-            format!("{:.1} KB", bytes as f64 / KB as f64)
-        } else {
-            format!("{bytes} B")
-        }
-    }
-
-    /// Format rate as human-readable (KB/s, MB/s, GB/s)
-    pub fn format_rate(bytes_per_sec: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
-
-        if bytes_per_sec >= GB {
-            format!("{:.1} GB/s", bytes_per_sec as f64 / GB as f64)
-        } else if bytes_per_sec >= MB {
-            format!("{:.1} MB/s", bytes_per_sec as f64 / MB as f64)
-        } else if bytes_per_sec >= KB {
-            format!("{:.1} KB/s", bytes_per_sec as f64 / KB as f64)
-        } else {
-            format!("{bytes_per_sec} B/s")
-        }
     }
 }
 

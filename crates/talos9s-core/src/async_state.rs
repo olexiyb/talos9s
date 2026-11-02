@@ -67,18 +67,6 @@ impl<T> AsyncState<T> {
         }
     }
 
-    /// Create a new async state that is not loading
-    pub fn idle() -> Self {
-        Self {
-            data: None,
-            loading: false,
-            error: None,
-            last_refresh: None,
-            retry_count: 0,
-            last_error_at: None,
-        }
-    }
-
     /// Create a new async state with initial data (not loading)
     pub fn with_data(data: T) -> Self {
         Self {
@@ -322,7 +310,8 @@ mod tests {
 
     #[test]
     fn test_auto_refresh() {
-        let mut state: AsyncState<i32> = AsyncState::idle();
+        let mut state: AsyncState<i32> = AsyncState::new();
+        state.clear();
 
         // Never loaded, should refresh if enabled
         assert!(state.should_auto_refresh(true, Duration::from_secs(5)));
