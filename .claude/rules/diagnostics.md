@@ -37,3 +37,23 @@ Checklist for every check:
 - If a log is used: is the line validated against current state or time?
 - What does it show when the source is unavailable?
 - Can it report failure on a healthy system?
+
+False positives found before (don't reintroduce):
+
+- An API error read as empty (`unwrap_or_default()`) then judged: a failed
+  etcd status call showed NO QUORUM, a failed pod list a Fail with a patch.
+  An error is unknown.
+- `unwrap_or(true)` in pre-checks: unknown must not count as passed.
+- Desired replicas from `spec.replicas` (unset = 1), never `status.replicas`
+  (counts surge pods): `k8s::DeploymentReplicas::of`. Scaled to 0 is not a
+  failure.
+- Restarts count only when the last termination is recent; Pending pods
+  only past a threshold; completed pods of finished Jobs aren't failing;
+  check init containers; count a multi-container pod once.
+- Thresholds (memory, connection states, cert expiry 30/7 days) come from
+  `talos9s_core::constants`. Compare cert expiry as durations: `num_days()`
+  truncation called 23 h left "expired".
+- Find addons by label across namespaces, not a hard-coded namespace.
+- Group diagnostics share one `ClusterShared` (Kubernetes client, addons,
+  addon checks) per refresh: each kubeconfig fetch makes Talos sign a new
+  admin certificate, so never connect once per node.

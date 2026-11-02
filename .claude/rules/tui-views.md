@@ -81,4 +81,14 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
   headers) record their `Rect`s.
 - Widths: size to content where possible (see `nodes_pane_width`) instead of
   fixed percentages; never let one long error line set a pane's width.
+- Tables whose columns come and go (the group table): build the header and
+  every row kind from one column list (`GroupCol`), or offline rows shift.
+- Tree and list selection by name, not index: a refresh adds and drops
+  nodes.
+- Visual selection and copying: `talos9s_core::VisualSelection` and
+  `clipboard::copy_lines`.
+- Streams: never drop a backlog wholesale (status events go with it); wrap
+  counts drawn rows, not entries, when following the bottom.
+- Pull decisions out of `async` handlers into pure functions to test them
+  (`follow_step`, `cache_insert`, `nodes_to_query`).
 - Test drawing and clicks with `ratatui::backend::TestBackend`.

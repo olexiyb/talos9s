@@ -34,6 +34,12 @@ paths:
 - StandAlone links never reconnect by themselves (split-brain, manual
   disconnect). One issue per pair, with each end's state.
 - Resyncs in progress are warnings with progress, not errors.
+- A missing `disk_state` is unknown; transitional states (Attaching,
+  Negotiating, DUnknown) are at most a Warning. A ZFSVolume with no status
+  yet is unknown; volume phases `located`, `provisioned`, `prepared`,
+  `closed` are normal.
+- A failed fetch keeps its error in `AsyncState`; clearing the lists shows
+  "no disks", which is a false statement.
 
 ## Remedies
 
