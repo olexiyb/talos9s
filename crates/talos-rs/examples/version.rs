@@ -2,6 +2,9 @@
 //!
 //! Run with: cargo run --example version -p talos-rs
 
+// A command-line example: printing is its output
+#![allow(clippy::print_stdout, clippy::expect_used)]
+
 use talos_rs::TalosClient;
 
 #[tokio::main]
@@ -87,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:-<60}", "");
     let logs = client.logs("apid", 5).await?;
     for line in logs.lines().take(10) {
-        println!("{}", line);
+        println!("{line}");
     }
 
     Ok(())

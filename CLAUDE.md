@@ -75,6 +75,10 @@ Live tests against real clusters are `#[ignore]`d and read
   `talos9s-tui/src/ui_ext.rs`. Don't duplicate indicator logic.
 - Thresholds and refresh intervals live in `talos9s_core::constants`.
 - Comments explain why, not what; match the surrounding code's density.
+- Lints beyond clippy's defaults are in `[workspace.lints.clippy]` (root
+  `Cargo.toml`): no `unwrap`/`expect` outside tests, no byte-slicing strings
+  that may hold non-ASCII. Fix rather than `#[allow]`; when an allow is
+  right, a comment next to it says why.
 - New user-facing features get a row in README.md (features, key bindings).
 
 ## Before merging

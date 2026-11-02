@@ -703,7 +703,7 @@ fn wrap_list_breaks_between_items() {
     };
     let items: Vec<String> = ["100.64.0.8/32", "65.21.17.62/26", "fd7a:115c:a1e0::8/128"]
         .iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     assert_eq!(

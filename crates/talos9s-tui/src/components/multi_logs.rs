@@ -328,8 +328,10 @@ impl MultiLogsComponent {
         nodes_state.select(Some(0));
 
         // Build a set of active service IDs for quick lookup
-        let active_set: std::collections::HashSet<&str> =
-            active_services.iter().map(|s| s.as_str()).collect();
+        let active_set: std::collections::HashSet<&str> = active_services
+            .iter()
+            .map(std::string::String::as_str)
+            .collect();
 
         // Assign colors to services deterministically
         let services: Vec<ServiceState> = all_services
@@ -1039,6 +1041,8 @@ impl MultiLogsComponent {
     }
 
     /// Render message with search highlighting
+    // match_ranges returns ranges on char boundaries of `message`
+    #[allow(clippy::string_slice)]
     fn render_message_with_highlight(&self, message: &str, is_current: bool) -> Vec<Span<'static>> {
         if self.search_query.is_empty() {
             return vec![Span::raw(message.to_string())];
@@ -1526,7 +1530,7 @@ async fn stream_task(
                         return;
                     }
                 }
-                last_history = lines.last().map(|l| l.to_string());
+                last_history = lines.last().map(std::string::ToString::to_string);
             }
             Ok(Err(e)) => {
                 let _ = tx.send(status(StreamStatus::Failed(e.to_string())));
@@ -2124,7 +2128,7 @@ impl Component for MultiLogsComponent {
             let count = range.count();
             header_spans.push(Span::raw("  "));
             header_spans.push(Span::styled(
-                format!("-- VISUAL ({} lines) --", count),
+                format!("-- VISUAL ({count} lines) --"),
                 Style::default().fg(Color::Magenta).bold(),
             ));
         }

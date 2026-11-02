@@ -23,15 +23,15 @@ pub async fn run_system_checks(
                 let usage_pct = info.usage_percent();
                 let used_gb = (info.mem_total - info.mem_available) as f64 / 1_073_741_824.0;
                 let total_gb = info.mem_total as f64 / 1_073_741_824.0;
-                let msg = format!("{:.1} / {:.1} GB ({:.0}%)", used_gb, total_gb, usage_pct);
+                let msg = format!("{used_gb:.1} / {total_gb:.1} GB ({usage_pct:.0}%)");
 
                 // Same thresholds as the dashboard's memory bar
                 match talos9s_core::memory_health(usage_pct as f64) {
                     HealthIndicator::Error => {
-                        checks.push(DiagnosticCheck::fail("memory", "Memory", &msg, None))
+                        checks.push(DiagnosticCheck::fail("memory", "Memory", &msg, None));
                     }
                     HealthIndicator::Warning => {
-                        checks.push(DiagnosticCheck::warn("memory", "Memory", &msg))
+                        checks.push(DiagnosticCheck::warn("memory", "Memory", &msg));
                     }
                     _ => checks.push(DiagnosticCheck::pass("memory", "Memory", &msg)),
                 }
@@ -39,7 +39,7 @@ pub async fn run_system_checks(
         }
         Err(e) => {
             checks.push(
-                DiagnosticCheck::unknown("memory", "Memory").with_details(&format!("Error: {}", e)),
+                DiagnosticCheck::unknown("memory", "Memory").with_details(&format!("Error: {e}")),
             );
         }
     }
@@ -78,7 +78,7 @@ pub async fn run_system_checks(
         Err(e) => {
             checks.push(
                 DiagnosticCheck::unknown("cpu_load", "CPU Load")
-                    .with_details(&format!("Error: {}", e)),
+                    .with_details(&format!("Error: {e}")),
             );
         }
     }
@@ -153,7 +153,7 @@ pub async fn run_service_checks(
         Err(e) => {
             checks.push(
                 DiagnosticCheck::unknown("services", "Services")
-                    .with_details(&format!("Error: {}", e)),
+                    .with_details(&format!("Error: {e}")),
             );
         }
     }
@@ -192,7 +192,7 @@ pub async fn run_kubernetes_checks(
             Err(e) => {
                 checks.push(
                     DiagnosticCheck::fail("etcd", "Etcd", "Unreachable", None)
-                        .with_details(&format!("Error: {}", e)),
+                        .with_details(&format!("Error: {e}")),
                 );
             }
         }
@@ -240,13 +240,12 @@ pub async fn run_kubernetes_checks(
         let details = if let Some(ref error) = ctx.k8s_error {
             format!(
                 "K8s API unavailable - cannot check pod status.\n\n\
-                 Error: {}\n\n\
+                 Error: {error}\n\n\
                  Possible causes:\n\
                  - Cluster is still starting up\n\
                  - API server not ready yet\n\
                  - kubeconfig not available from Talos\n\
-                 - Network/TLS issues connecting to API server",
-                error
+                 - Network/TLS issues connecting to API server"
             )
         } else {
             "K8s API unavailable - cannot check pod status.\n\n\
@@ -319,14 +318,14 @@ pub async fn run_certificate_checks(
                         Err(e) => {
                             checks.push(
                                 DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
-                                    .with_details(&format!("Failed to parse certificate: {}", e)),
+                                    .with_details(&format!("Failed to parse certificate: {e}")),
                             );
                         }
                     },
                     Err(e) => {
                         checks.push(
                             DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
-                                .with_details(&format!("Failed to decode certificate: {}", e)),
+                                .with_details(&format!("Failed to decode certificate: {e}")),
                         );
                     }
                 }
@@ -341,14 +340,14 @@ pub async fn run_certificate_checks(
                         Err(e) => {
                             checks.push(
                                 DiagnosticCheck::unknown("talos_ca", "Talos CA")
-                                    .with_details(&format!("Failed to parse CA: {}", e)),
+                                    .with_details(&format!("Failed to parse CA: {e}")),
                             );
                         }
                     },
                     Err(e) => {
                         checks.push(
                             DiagnosticCheck::unknown("talos_ca", "Talos CA")
-                                .with_details(&format!("Failed to decode CA: {}", e)),
+                                .with_details(&format!("Failed to decode CA: {e}")),
                         );
                     }
                 }
@@ -357,7 +356,7 @@ pub async fn run_certificate_checks(
         Err(e) => {
             checks.push(
                 DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
-                    .with_details(&format!("Failed to load talosconfig: {}", e)),
+                    .with_details(&format!("Failed to load talosconfig: {e}")),
             );
         }
     }
@@ -376,7 +375,7 @@ pub async fn run_certificate_checks(
                         cert_to_diagnostic_check("kubeconfig_cert", "kubeconfig", &cert_info)
                     }
                     Err(e) => DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
-                        .with_details(&format!("Failed to parse kubeconfig cert: {}", e)),
+                        .with_details(&format!("Failed to parse kubeconfig cert: {e}")),
                 });
             }
         }
@@ -384,7 +383,7 @@ pub async fn run_certificate_checks(
             // kubeconfig may not be available yet during cluster bootstrap
             checks.push(
                 DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
-                    .with_details(&format!("kubeconfig not available: {}", e)),
+                    .with_details(&format!("kubeconfig not available: {e}")),
             );
         }
     }
@@ -415,7 +414,7 @@ fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> Dia
     };
 
     let full_details = if let Some(hint) = renewal_hint {
-        format!("{}\n\n{}", details, hint)
+        format!("{details}\n\n{hint}")
     } else {
         details
     };

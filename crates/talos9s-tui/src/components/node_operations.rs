@@ -106,7 +106,9 @@ async fn run_drain_operation(
 
     // Step 1: Cordon the node
     {
-        let mut p = progress.lock().unwrap();
+        let mut p = progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         p.message = "Cordoning node...".to_string();
     }
 
@@ -124,19 +126,21 @@ async fn run_drain_operation(
         Err(e) => {
             return OperationResult {
                 success: false,
-                message: format!("Failed to cordon: {}", e),
+                message: format!("Failed to cordon: {e}"),
             };
         }
     }
 
     // Step 2: Drain the node with progress updates
     {
-        let mut p = progress.lock().unwrap();
+        let mut p = progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         p.message = "Listing pods...".to_string();
     }
 
     // Create progress callback that updates shared state
-    let progress_clone = progress.clone();
+    let progress_clone = Arc::clone(&progress);
     let callback: DrainProgressCallback = Box::new(move |msg: &str| {
         if let Ok(mut p) = progress_clone.lock() {
             p.message = msg.to_string();
@@ -162,7 +166,9 @@ async fn run_drain_operation(
             } else {
                 // Drain failed - uncordon the node to restore scheduling
                 {
-                    let mut p = progress.lock().unwrap();
+                    let mut p = progress
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     p.message = "Drain failed, uncordoning node...".to_string();
                 }
                 let _ = uncordon_node(&k8s, &hostname).await;
@@ -183,12 +189,14 @@ async fn run_drain_operation(
         Err(e) => {
             // Drain error - uncordon the node
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.message = "Drain error, uncordoning node...".to_string();
             }
             let _ = uncordon_node(&k8s, &hostname).await;
 
-            let msg = format!("Failed to drain (node uncordoned): {}", e);
+            let msg = format!("Failed to drain (node uncordoned): {e}");
             audit_failure("DRAIN", &hostname, &msg);
             OperationResult {
                 success: false,
@@ -243,7 +251,9 @@ async fn run_reboot_operation(
 
     // Step 1: Cordon the node
     {
-        let mut p = progress.lock().unwrap();
+        let mut p = progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         p.message = "Cordoning node...".to_string();
     }
 
@@ -261,19 +271,21 @@ async fn run_reboot_operation(
         Err(e) => {
             return OperationResult {
                 success: false,
-                message: format!("Failed to cordon: {}", e),
+                message: format!("Failed to cordon: {e}"),
             };
         }
     }
 
     // Step 2: Drain the node with progress updates
     {
-        let mut p = progress.lock().unwrap();
+        let mut p = progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         p.message = "Listing pods...".to_string();
     }
 
     // Create progress callback that updates shared state
-    let progress_clone = progress.clone();
+    let progress_clone = Arc::clone(&progress);
     let callback: DrainProgressCallback = Box::new(move |msg: &str| {
         if let Ok(mut p) = progress_clone.lock() {
             p.message = msg.to_string();
@@ -285,7 +297,9 @@ async fn run_reboot_operation(
         Ok(result) if !result.success => {
             // Drain had failures - uncordon and abort reboot
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.message = "Drain failed, uncordoning node...".to_string();
             }
             let _ = uncordon_node(&k8s, &hostname).await;
@@ -303,12 +317,14 @@ async fn run_reboot_operation(
         Err(e) => {
             // Drain error - uncordon and abort
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.message = "Drain error, uncordoning node...".to_string();
             }
             let _ = uncordon_node(&k8s, &hostname).await;
 
-            let msg = format!("{name} aborted - drain failed (node uncordoned): {}", e);
+            let msg = format!("{name} aborted - drain failed (node uncordoned): {e}");
             audit_failure(tag, &hostname, &msg);
             return OperationResult {
                 success: false,
@@ -320,7 +336,9 @@ async fn run_reboot_operation(
 
     // Step 3: Reboot or shut down the node via Talos API
     {
-        let mut p = progress.lock().unwrap();
+        let mut p = progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         p.message = format!("Sending {} command...", name.to_lowercase());
     }
 
@@ -342,7 +360,9 @@ async fn run_reboot_operation(
         Ok(result) if !result.success => {
             // Reboot request failed - uncordon
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.message = format!("{name} failed, uncordoning node...");
             }
             let _ = uncordon_node(&k8s, &hostname).await;
@@ -357,7 +377,9 @@ async fn run_reboot_operation(
         Err(e) => {
             // Reboot failed - uncordon the node
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.message = format!("{name} failed, uncordoning node...");
             }
             let _ = uncordon_node(&k8s, &hostname).await;
@@ -390,7 +412,7 @@ async fn run_reboot_operation(
     if options.wait_for_node_ready {
         use crate::components::diagnostics::k8s::{NodeReadyProgressCallback, wait_for_node_ready};
 
-        let progress_clone = progress.clone();
+        let progress_clone = Arc::clone(&progress);
         let ready_callback: NodeReadyProgressCallback = Box::new(move |msg: &str| {
             if let Ok(mut p) = progress_clone.lock() {
                 p.message = msg.to_string();
@@ -411,7 +433,9 @@ async fn run_reboot_operation(
                 // Node is back and Ready
                 if options.uncordon_after_reboot {
                     {
-                        let mut p = progress.lock().unwrap();
+                        let mut p = progress
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         p.message = "Uncordoning node...".to_string();
                     }
 
@@ -461,7 +485,7 @@ async fn run_reboot_operation(
                 };
             }
             Err(e) => {
-                let msg = format!("Reboot initiated but error checking node status: {}", e);
+                let msg = format!("Reboot initiated but error checking node status: {e}");
                 audit_failure("REBOOT", &hostname, &msg);
                 return OperationResult {
                     success: false,
@@ -520,7 +544,10 @@ pub(crate) async fn fetch_etcd_info(client: &TalosClient, address: &str) -> Opti
         }
     };
     // Extract control plane IPs to target status calls (hostnames may not be resolvable)
-    let cp_ips: Vec<String> = members.iter().filter_map(|m| m.ip_address()).collect();
+    let cp_ips: Vec<String> = members
+        .iter()
+        .filter_map(talos_rs::EtcdMemberInfo::ip_address)
+        .collect();
 
     // Per-node failures are left out of the reply; a failed call means unknown
     let statuses =
@@ -573,7 +600,9 @@ async fn fetch_pdb_info(
         None => {
             let cp_node_ip =
                 match tokio::time::timeout(SAFETY_CHECK_TIMEOUT, client.etcd_members()).await {
-                    Ok(Ok(members)) => members.first().and_then(|m| m.ip_address()),
+                    Ok(Ok(members)) => members
+                        .first()
+                        .and_then(talos_rs::EtcdMemberInfo::ip_address),
                     _ => None,
                 };
             match crate::components::diagnostics::k8s::connect(client, cp_node_ip.as_deref()).await
@@ -648,7 +677,7 @@ impl Drop for NodeOperationsComponent {
 
 impl Default for NodeOperationsComponent {
     fn default() -> Self {
-        Self::new("".to_string(), "".to_string(), false)
+        Self::new(String::new(), String::new(), false)
     }
 }
 
@@ -698,7 +727,9 @@ impl NodeOperationsComponent {
             // Check if completed (non-blocking)
             if task.is_finished() {
                 // Take ownership of the task
-                let task = self.operation_task.take().unwrap();
+                let Some(task) = self.operation_task.take() else {
+                    return;
+                };
 
                 // Get result (this won't block since is_finished() was true)
                 match futures::executor::block_on(task) {
@@ -713,7 +744,7 @@ impl NodeOperationsComponent {
                             self.operation_state = OperationState::Completed(
                                 *op_type,
                                 false,
-                                format!("Task error: {}", e),
+                                format!("Task error: {e}"),
                             );
                         }
                     }
@@ -721,7 +752,10 @@ impl NodeOperationsComponent {
             } else {
                 // Task still running - update progress message from shared state
                 if let OperationState::Executing(op_type, _) = &self.operation_state {
-                    let progress = self.operation_progress.lock().unwrap();
+                    let progress = self
+                        .operation_progress
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     self.operation_state =
                         OperationState::Executing(*op_type, progress.message.clone());
                 }
@@ -753,11 +787,14 @@ impl NodeOperationsComponent {
 
         // Reset progress
         {
-            let mut progress = self.operation_progress.lock().unwrap();
+            let mut progress = self
+                .operation_progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             progress.message = "Starting...".to_string();
         }
 
-        let progress = self.operation_progress.clone();
+        let progress = Arc::clone(&self.operation_progress);
         let hostname = self.hostname.clone();
         let address = self.address.clone();
         let k8s_client = self.k8s_client.clone();
@@ -840,7 +877,11 @@ impl NodeOperationsComponent {
 
     /// Apply finished safety checks, if any
     fn poll_safety_checks(&mut self) {
-        if !self.safety_task.as_ref().is_some_and(|t| t.is_finished()) {
+        if !self
+            .safety_task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
             return;
         }
         let Some(Some(Ok(checks))) = self.safety_task.take().map(crate::task::poll_finished) else {
@@ -1012,7 +1053,7 @@ impl NodeOperationsComponent {
             Span::raw(" Cancel"),
         ]));
 
-        let title = format!(" Confirm {} ", op_name);
+        let title = format!(" Confirm {op_name} ");
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -1046,7 +1087,7 @@ impl NodeOperationsComponent {
         )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
-            format!("  {}", msg),
+            format!("  {msg}"),
             Style::default().fg(Color::Cyan),
         )]));
         lines.push(Line::from(""));
@@ -1099,7 +1140,7 @@ impl NodeOperationsComponent {
             format!("  Node: {}", self.hostname),
             Style::default().fg(Color::Cyan),
         )]));
-        lines.push(Line::from(vec![Span::raw(format!("  {}", msg))]));
+        lines.push(Line::from(vec![Span::raw(format!("  {msg}"))]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "  Press any key to continue...",
@@ -1431,13 +1472,13 @@ impl Component for NodeOperationsComponent {
             }
             OperationState::Confirming(op_type) => {
                 match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
                         // User confirmed, start the operation in background
                         let op = *op_type;
                         self.start_operation(op);
                         Ok(None)
                     }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                    KeyCode::Char('n' | 'N' | 'q') | KeyCode::Esc => {
                         self.operation_state = OperationState::Ready;
                         Ok(None)
                     }

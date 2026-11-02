@@ -115,7 +115,7 @@ pub struct StorageComponent {
 
 impl Default for StorageComponent {
     fn default() -> Self {
-        Self::new("".to_string(), "".to_string(), None, None)
+        Self::new(String::new(), String::new(), None, None)
     }
 }
 
@@ -622,7 +622,7 @@ impl Component for StorageComponent {
 
         if let Some(err) = self.state.error() {
             let error =
-                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }

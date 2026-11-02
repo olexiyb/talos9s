@@ -82,6 +82,34 @@ talos-rs = { path = "crates/talos-rs" }
 talos9s-core = { path = "crates/talos9s-core" }
 talos9s-tui = { path = "crates/talos9s-tui" }
 
+# Beyond clippy's defaults: lints that catch real bugs (panics on bad
+# input, held locks, wasted clones), plus cheap style rules clippy fixes
+# itself. CI's `-D warnings` makes them errors. unwrap/expect are allowed in
+# tests (clippy.toml).
+[workspace.lints.clippy]
+# A panic takes the whole TUI down: no unwrap/expect/slicing strings by bytes
+unwrap_used = "warn"
+expect_used = "warn"
+string_slice = "warn"
+# Leftovers and output that would corrupt the terminal
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+# Async and ownership mistakes
+await_holding_lock = "warn"
+redundant_clone = "warn"
+clone_on_ref_ptr = "warn"
+implicit_clone = "warn"
+# Readability, fixed by `cargo clippy --fix`
+uninlined_format_args = "warn"
+semicolon_if_nothing_returned = "warn"
+manual_string_new = "warn"
+redundant_closure_for_method_calls = "warn"
+unnested_or_patterns = "warn"
+cloned_instead_of_copied = "warn"
+
 [package]
 name = "talos9s"
 version.workspace = true
@@ -103,6 +131,9 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true
 
 # The profile that 'dist' will build with
 [profile.dist]

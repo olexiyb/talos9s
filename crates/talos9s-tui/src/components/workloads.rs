@@ -389,7 +389,7 @@ impl WorkloadHealthComponent {
         tracing::debug!(
             "workloads: Kubernetes lists took {:?} (scope {:?})",
             started.elapsed(),
-            self.scope.as_ref().map(|n| n.len())
+            self.scope.as_ref().map(std::collections::HashSet::len)
         );
 
         let (
@@ -408,27 +408,27 @@ impl WorkloadHealthComponent {
 
         // Process results
         let deployments = deployments_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch deployments: {}", e));
+            self.set_error(format!("Failed to fetch deployments: {e}"));
             e
         })?;
 
         let statefulsets = statefulsets_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch statefulsets: {}", e));
+            self.set_error(format!("Failed to fetch statefulsets: {e}"));
             e
         })?;
 
         let daemonsets = daemonsets_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch daemonsets: {}", e));
+            self.set_error(format!("Failed to fetch daemonsets: {e}"));
             e
         })?;
 
         let pods = pods_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch pods: {}", e));
+            self.set_error(format!("Failed to fetch pods: {e}"));
             e
         })?;
 
         let replicasets = replicasets_result.map_err(|e| {
-            self.set_error(format!("Failed to fetch replicasets: {}", e));
+            self.set_error(format!("Failed to fetch replicasets: {e}"));
             e
         })?;
 
@@ -447,10 +447,7 @@ impl WorkloadHealthComponent {
                         .find(|o| o.kind == "Deployment")?
                         .name
                         .clone();
-                    Some((
-                        (rs.metadata.namespace.clone()?, rs.metadata.name.clone()?),
-                        deploy,
-                    ))
+                    Some(((rs.metadata.namespace.clone()?, rs.metadata.name?), deploy))
                 })
                 .collect();
             let mut placement = HashMap::new();
@@ -634,7 +631,7 @@ impl WorkloadHealthComponent {
                 .problem_pods
                 .iter()
                 .filter_map(|p| p.issue.as_ref())
-                .map(|i| i.severity())
+                .map(PodIssue::severity)
                 .min()
                 .unwrap_or(HealthState::Healthy);
 
@@ -700,12 +697,12 @@ impl WorkloadHealthComponent {
         }
 
         if ready == 0 {
-            issues.push(format!("No pods ready (0/{})", desired));
+            issues.push(format!("No pods ready (0/{desired})"));
             return (HealthState::Failing, issues);
         }
 
         if ready < desired {
-            issues.push(format!("Partial: {}/{} ready", ready, desired));
+            issues.push(format!("Partial: {ready}/{desired} ready"));
             return (HealthState::Degraded, issues);
         }
 
@@ -945,12 +942,12 @@ impl WorkloadHealthComponent {
                         .filter(|w| w.health != HealthState::Healthy)
                         .count();
                 let issue_text = if issues_count > 0 {
-                    format!("{} issues", issues_count)
+                    format!("{issues_count} issues")
                 } else {
                     "healthy".to_string()
                 };
                 (
-                    format!("{} ", indicator),
+                    format!("{indicator} "),
                     ns.name.clone(),
                     format!("{} workloads", ns.total_workloads),
                     issue_text,
@@ -1036,7 +1033,7 @@ impl WorkloadHealthComponent {
                 workload.issues.join(", ")
             };
             rows.push((
-                format!("{} ", indicator),
+                format!("{indicator} "),
                 workload.name.clone(),
                 workload.kind.display().to_string(),
                 status,
@@ -1052,9 +1049,12 @@ impl WorkloadHealthComponent {
             let (indicator, color) = issue
                 .map(|i| i.severity().indicator())
                 .unwrap_or(("?", Color::DarkGray));
-            let issue_text = issue.map(|i| i.display()).unwrap_or("Unknown").to_string();
+            let issue_text = issue
+                .map(PodIssue::display)
+                .unwrap_or("Unknown")
+                .to_string();
             rows.push((
-                format!("{} ", indicator),
+                format!("{indicator} "),
                 pod.name.clone(),
                 "Pod".to_string(),
                 format!("{} restarts", pod.restarts),
@@ -1241,7 +1241,7 @@ impl Component for WorkloadHealthComponent {
 
         if let Some(err) = self.state.error() {
             let error =
-                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error, inner);
             return Ok(());
         }

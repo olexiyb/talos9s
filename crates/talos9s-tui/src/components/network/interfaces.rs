@@ -70,8 +70,14 @@ impl NetworkStatsComponent {
         // Calculate totals
         data.total_rx_rate = data.rates.values().map(|r| r.rx_bytes_per_sec).sum();
         data.total_tx_rate = data.rates.values().map(|r| r.tx_bytes_per_sec).sum();
-        data.total_errors = new_devices.iter().map(|d| d.total_errors()).sum();
-        data.total_dropped = new_devices.iter().map(|d| d.total_dropped()).sum();
+        data.total_errors = new_devices
+            .iter()
+            .map(talos_rs::NetDevStats::total_errors)
+            .sum();
+        data.total_dropped = new_devices
+            .iter()
+            .map(talos_rs::NetDevStats::total_dropped)
+            .sum();
         let current = |f: fn(&NetDevRate) -> f64| -> f64 {
             new_devices
                 .iter()
@@ -102,8 +108,16 @@ impl NetworkStatsComponent {
             SortBy::Traffic => {
                 // Sort by rate if available, otherwise by cumulative traffic
                 data.devices.sort_by(|a, b| {
-                    let rate_a = data.rates.get(&a.name).map(|r| r.total_rate()).unwrap_or(0);
-                    let rate_b = data.rates.get(&b.name).map(|r| r.total_rate()).unwrap_or(0);
+                    let rate_a = data
+                        .rates
+                        .get(&a.name)
+                        .map(talos_rs::NetDevRate::total_rate)
+                        .unwrap_or(0);
+                    let rate_b = data
+                        .rates
+                        .get(&b.name)
+                        .map(talos_rs::NetDevRate::total_rate)
+                        .unwrap_or(0);
                     if rate_a != rate_b {
                         rate_b.cmp(&rate_a)
                     } else {
@@ -327,7 +341,7 @@ impl NetworkStatsComponent {
             }
 
             spans.push(Span::styled(
-                format!("{}:{} ", name, port),
+                format!("{name}:{port} "),
                 Style::default().fg(Color::DarkGray),
             ));
             spans.push(Span::styled(indicator, Style::default().fg(color)));
@@ -543,9 +557,9 @@ impl NetworkStatsComponent {
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!("{} total", rx_total)),
+                Span::raw(format!("{rx_total} total")),
                 Span::styled(
-                    format!(" ({})", rx_rate),
+                    format!(" ({rx_rate})"),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw(format!("    Packets: {}M", dev.rx_packets / 1_000_000)),
@@ -575,9 +589,9 @@ impl NetworkStatsComponent {
                         .fg(Color::Blue)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!("{} total", tx_total)),
+                Span::raw(format!("{tx_total} total")),
                 Span::styled(
-                    format!(" ({})", tx_rate),
+                    format!(" ({tx_rate})"),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw(format!("    Packets: {}M", dev.tx_packets / 1_000_000)),
@@ -670,7 +684,7 @@ impl NetworkStatsComponent {
             .borders(Borders::TOP)
             .border_style(border_style)
             .title(Span::styled(
-                format!(" {} ", dev_name),
+                format!(" {dev_name} "),
                 Style::default().add_modifier(Modifier::BOLD),
             ));
 
@@ -703,7 +717,7 @@ impl NetworkStatsComponent {
             Span::styled(bpf_label, Style::default().fg(bpf_color)),
             Span::raw("  "),
             Span::styled("[a]", Style::default().fg(Color::Cyan)),
-            Span::raw(format!(" {}", auto_label)),
+            Span::raw(format!(" {auto_label}")),
         ];
 
         Line::from(spans)

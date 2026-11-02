@@ -63,3 +63,6 @@ dirs-next.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

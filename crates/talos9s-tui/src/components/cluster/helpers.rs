@@ -333,7 +333,7 @@ pub(super) fn pools_line(pools: Option<&[StoragePool]>) -> Line<'static> {
                     dim,
                 ));
                 spans.push(Span::styled(
-                    format!(" {:.0}%", pct),
+                    format!(" {pct:.0}%"),
                     Style::default().fg(memory_color(pct)),
                 ));
             }

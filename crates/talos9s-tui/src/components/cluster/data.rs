@@ -272,7 +272,7 @@ impl ClusterData {
         let fallback_ips: Vec<String> = cluster
             .etcd_members
             .iter()
-            .filter_map(|m| m.ip_address())
+            .filter_map(talos_rs::EtcdMemberInfo::ip_address)
             .collect();
         tracing::debug!("{}: etcd members in {:?}", cluster.name, started.elapsed());
         let started = std::time::Instant::now();
@@ -521,7 +521,7 @@ impl ClusterData {
         let cp_ips: Vec<String> = cluster
             .etcd_members
             .iter()
-            .filter_map(|m| m.ip_address())
+            .filter_map(talos_rs::EtcdMemberInfo::ip_address)
             .collect();
         let etcd_members = cluster.etcd_members.clone();
         let etcd_client = client.clone();
@@ -534,7 +534,7 @@ impl ClusterData {
                 tokio::time::timeout(MEMBERS_TIMEOUT, etcd_client.etcd_status_for_nodes(&cp_ips))
                     .await
                     .ok()
-                    .and_then(|r| r.ok());
+                    .and_then(std::result::Result::ok);
             Some(talos9s_core::EtcdQuorum::assess(
                 &etcd_members,
                 statuses.as_deref(),
@@ -675,7 +675,7 @@ impl ClusterData {
                 match kubelets {
                     Ok(versions) => self.kubelet_versions = versions,
                     Err(e) => {
-                        tracing::debug!("Kubelet versions unavailable for {}: {}", self.name, e)
+                        tracing::debug!("Kubelet versions unavailable for {}: {}", self.name, e);
                     }
                 }
             }
@@ -843,7 +843,7 @@ impl ClusterData {
     pub(super) fn known_good_ips(&self) -> Vec<String> {
         self.etcd_members
             .iter()
-            .filter_map(|m| m.ip_address())
+            .filter_map(talos_rs::EtcdMemberInfo::ip_address)
             .chain(
                 self.discovery_members
                     .iter()
@@ -858,7 +858,7 @@ impl ClusterData {
     pub(super) fn control_plane_ip(&self) -> Option<String> {
         self.etcd_members
             .iter()
-            .find_map(|m| m.ip_address())
+            .find_map(talos_rs::EtcdMemberInfo::ip_address)
             .or_else(|| {
                 self.discovery_members
                     .iter()

@@ -131,14 +131,11 @@ impl CniInfo {
         let total_restarts: i32 = self.pods.iter().map(|p| p.restart_count).sum();
 
         if healthy == total && total_restarts == 0 {
-            format!("{}/{} pods healthy", healthy, total)
+            format!("{healthy}/{total} pods healthy")
         } else if healthy == total {
-            format!(
-                "{}/{} pods healthy ({} restarts)",
-                healthy, total, total_restarts
-            )
+            format!("{healthy}/{total} pods healthy ({total_restarts} restarts)")
         } else {
-            format!("{}/{} pods healthy", healthy, total)
+            format!("{healthy}/{total} pods healthy")
         }
     }
 }

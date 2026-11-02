@@ -81,13 +81,13 @@ async fn main() -> Result<()> {
 
     // Build filter: set base level, but quiet down noisy HTTP/gRPC libraries
     let filter = if cli.debug {
-        EnvFilter::from_default_env()
-            .add_directive(Level::DEBUG.into())
-            .add_directive("h2=info".parse().unwrap())
-            .add_directive("hyper=info".parse().unwrap())
-            .add_directive("tower=info".parse().unwrap())
-            .add_directive("tonic=info".parse().unwrap())
-            .add_directive("rustls=info".parse().unwrap())
+        ["h2", "hyper", "tower", "tonic", "rustls"]
+            .iter()
+            .filter_map(|target| format!("{target}=info").parse().ok())
+            .fold(
+                EnvFilter::from_default_env().add_directive(Level::DEBUG.into()),
+                EnvFilter::add_directive,
+            )
     } else {
         EnvFilter::from_default_env().add_directive(Level::INFO.into())
     };
@@ -136,6 +136,7 @@ async fn main() -> Result<()> {
 }
 
 /// `talos9s 0.2.0`, and the newer release the last daily check found
+#[allow(clippy::print_stdout)] // runs before the TUI starts: printing is the point
 fn print_version() {
     use talos9s_tui::update::{RELEASES_URL, VERSION};
     println!("talos9s {VERSION}");

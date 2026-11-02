@@ -34,7 +34,7 @@ pub fn format_bytes(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -56,33 +56,33 @@ pub fn format_bytes_compact(bytes: u64) -> String {
     if bytes >= TB {
         let val = bytes as f64 / TB as f64;
         if val >= 10.0 {
-            format!("{:.0}TB", val)
+            format!("{val:.0}TB")
         } else {
-            format!("{:.1}TB", val)
+            format!("{val:.1}TB")
         }
     } else if bytes >= GB {
         let val = bytes as f64 / GB as f64;
         if val >= 10.0 {
-            format!("{:.0}GB", val)
+            format!("{val:.0}GB")
         } else {
-            format!("{:.1}GB", val)
+            format!("{val:.1}GB")
         }
     } else if bytes >= MB {
         let val = bytes as f64 / MB as f64;
         if val >= 10.0 {
-            format!("{:.0}MB", val)
+            format!("{val:.0}MB")
         } else {
-            format!("{:.1}MB", val)
+            format!("{val:.1}MB")
         }
     } else if bytes >= KB {
         let val = bytes as f64 / KB as f64;
         if val >= 10.0 {
-            format!("{:.0}KB", val)
+            format!("{val:.0}KB")
         } else {
-            format!("{:.1}KB", val)
+            format!("{val:.1}KB")
         }
     } else {
-        format!("{}B", bytes)
+        format!("{bytes}B")
     }
 }
 
@@ -112,7 +112,7 @@ pub fn format_duration_human(duration: Duration) -> String {
 /// ```
 pub fn format_secs_human(secs: u64) -> String {
     if secs < 60 {
-        format!("{}s", secs)
+        format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m", secs / 60)
     } else if secs < 86400 {
@@ -129,30 +129,30 @@ pub fn format_duration_detailed(duration: Duration) -> String {
     let total_secs = duration.num_seconds().abs();
 
     if total_secs < 60 {
-        format!("{}s", total_secs)
+        format!("{total_secs}s")
     } else if total_secs < 3600 {
         let mins = total_secs / 60;
         let secs = total_secs % 60;
         if secs > 0 {
-            format!("{}m {}s", mins, secs)
+            format!("{mins}m {secs}s")
         } else {
-            format!("{}m", mins)
+            format!("{mins}m")
         }
     } else if total_secs < 86400 {
         let hours = total_secs / 3600;
         let mins = (total_secs % 3600) / 60;
         if mins > 0 {
-            format!("{}h {}m", hours, mins)
+            format!("{hours}h {mins}m")
         } else {
-            format!("{}h", hours)
+            format!("{hours}h")
         }
     } else {
         let days = total_secs / 86400;
         let hours = (total_secs % 86400) / 3600;
         if hours > 0 {
-            format!("{}d {}h", days, hours)
+            format!("{days}d {hours}h")
         } else {
-            format!("{}d", days)
+            format!("{days}d")
         }
     }
 }
@@ -176,7 +176,7 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
         s.chars().take(max_len).collect()
     } else {
         let truncated: String = s.chars().take(max_len - 3).collect();
-        format!("{}...", truncated)
+        format!("{truncated}...")
     }
 }
 
@@ -219,9 +219,9 @@ pub fn wrap_words<'a>(words: impl IntoIterator<Item = &'a str>, width: usize) ->
 /// ```
 pub fn pluralize(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
-        format!("{} {}", count, singular)
+        format!("{count} {singular}")
     } else {
-        format!("{} {}", count, plural)
+        format!("{count} {plural}")
     }
 }
 

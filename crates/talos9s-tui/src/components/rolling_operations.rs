@@ -214,12 +214,15 @@ impl RollingOperationsComponent {
 
         // Reset progress
         {
-            let mut progress = self.operation_progress.lock().unwrap();
+            let mut progress = self
+                .operation_progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             progress.current_node_idx = 0;
             progress.message = "Starting...".to_string();
         }
 
-        let progress = self.operation_progress.clone();
+        let progress = Arc::clone(&self.operation_progress);
         let options = self.drain_options.clone();
         let delay = self.delay_between_nodes_secs;
         let k8s_client = self.k8s_client.clone();
@@ -250,7 +253,9 @@ impl RollingOperationsComponent {
     fn poll_operation(&mut self) {
         if let Some(task) = &mut self.operation_task {
             if task.is_finished() {
-                let task = self.operation_task.take().unwrap();
+                let Some(task) = self.operation_task.take() else {
+                    return;
+                };
                 match futures::executor::block_on(task) {
                     Ok(result) => {
                         if let RollingState::InProgress { operation, .. } = &self.state {
@@ -270,7 +275,7 @@ impl RollingOperationsComponent {
                                 success: false,
                                 completed_nodes: 0,
                                 failed_node: None,
-                                message: format!("Task error: {}", e),
+                                message: format!("Task error: {e}"),
                             };
                         }
                     }
@@ -278,7 +283,10 @@ impl RollingOperationsComponent {
             } else {
                 // Update progress from shared state
                 if let RollingState::InProgress { operation, .. } = &self.state {
-                    let progress = self.operation_progress.lock().unwrap();
+                    let progress = self
+                        .operation_progress
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     self.state = RollingState::InProgress {
                         operation: *operation,
                         current_node_idx: progress.current_node_idx,
@@ -351,7 +359,7 @@ async fn run_rolling_operation(
 
     audit_start(
         op_name,
-        &format!("{} nodes", total),
+        &format!("{total} nodes"),
         "Starting rolling operation",
     );
 
@@ -370,7 +378,9 @@ async fn run_rolling_operation(
     for (idx, node) in nodes.iter().enumerate() {
         // Update progress
         {
-            let mut p = progress.lock().unwrap();
+            let mut p = progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             p.current_node_idx = idx;
             p.message = format!("Processing {}/{}: {}", idx + 1, total, node.hostname);
         }
@@ -393,7 +403,9 @@ async fn run_rolling_operation(
 
         // Step 1: Cordon
         {
-            let mut p = progress.lock().unwrap();
+            let mut p = progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             p.message = format!("Cordoning {} ({}/{})", node.hostname, idx + 1, total);
         }
 
@@ -405,15 +417,17 @@ async fn run_rolling_operation(
 
         // Step 2: Drain
         {
-            let mut p = progress.lock().unwrap();
+            let mut p = progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             p.message = format!("Draining {} ({}/{})", node.hostname, idx + 1, total);
         }
 
-        let progress_clone = progress.clone();
+        let progress_clone = Arc::clone(&progress);
         let hostname_clone = node.hostname.clone();
         let callback: DrainProgressCallback = Box::new(move |msg: &str| {
             if let Ok(mut p) = progress_clone.lock() {
-                p.message = format!("{}: {}", hostname_clone, msg);
+                p.message = format!("{hostname_clone}: {msg}");
             }
         });
 
@@ -441,7 +455,9 @@ async fn run_rolling_operation(
         // Step 3: Reboot (if reboot operation)
         if operation == RollingOperationType::Reboot {
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.message = format!("Rebooting {} ({}/{})", node.hostname, idx + 1, total);
             }
 
@@ -464,7 +480,9 @@ async fn run_rolling_operation(
                 // Wait for node to come back
                 if options.wait_for_node_ready {
                     {
-                        let mut p = progress.lock().unwrap();
+                        let mut p = progress
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         p.message = format!(
                             "Waiting for {} to come back ({}/{})",
                             node.hostname,
@@ -473,11 +491,11 @@ async fn run_rolling_operation(
                         );
                     }
 
-                    let progress_clone = progress.clone();
+                    let progress_clone = Arc::clone(&progress);
                     let hostname_clone = node.hostname.clone();
                     let ready_callback: NodeReadyProgressCallback = Box::new(move |msg: &str| {
                         if let Ok(mut p) = progress_clone.lock() {
-                            p.message = format!("{}: {}", hostname_clone, msg);
+                            p.message = format!("{hostname_clone}: {msg}");
                         }
                     });
 
@@ -524,20 +542,22 @@ async fn run_rolling_operation(
         audit_success(
             op_name,
             &node.hostname,
-            &format!("Node {}/{} completed", completed, total),
+            &format!("Node {completed}/{total} completed"),
         );
 
         // Delay between nodes (if not the last node)
         if idx < total - 1 && delay_secs > 0 {
             {
-                let mut p = progress.lock().unwrap();
-                p.message = format!("Waiting {}s before next node...", delay_secs);
+                let mut p = progress
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                p.message = format!("Waiting {delay_secs}s before next node...");
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
         }
     }
 
-    let msg = format!("Completed {}/{} nodes", completed, total);
+    let msg = format!("Completed {completed}/{total} nodes");
     audit_success(op_name, "cluster", &msg);
 
     RollingOperationResult {
@@ -584,11 +604,11 @@ impl Component for RollingOperationsComponent {
                 _ => Ok(None),
             },
             RollingState::Confirming(op_type) => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
                     self.start_operation(*op_type);
                     Ok(None)
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                     self.state = RollingState::Selecting;
                     Ok(None)
                 }
@@ -666,7 +686,7 @@ impl RollingOperationsComponent {
         for (idx, node) in self.nodes.iter().enumerate() {
             // Show order number if selected, empty brackets if not
             let checkbox = match node.selection_order {
-                Some(order) => format!("[{}]", order),
+                Some(order) => format!("[{order}]"),
                 None => "[ ]".to_string(),
             };
             let is_current = idx == self.cursor;
@@ -697,7 +717,7 @@ impl RollingOperationsComponent {
                 Span::raw(" "),
                 Span::styled(&node.hostname, style),
                 Span::raw(" "),
-                Span::styled(format!("[{}]", role), role_style),
+                Span::styled(format!("[{role}]"), role_style),
             ]));
         }
 
@@ -706,7 +726,7 @@ impl RollingOperationsComponent {
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                format!("{} nodes selected", selected_count),
+                format!("{selected_count} nodes selected"),
                 Style::default().fg(Color::Cyan),
             ),
         ]));
@@ -802,7 +822,7 @@ impl RollingOperationsComponent {
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
-            format!("  {}", message),
+            format!("  {message}"),
             Style::default().fg(Color::White),
         )]));
         lines.push(Line::from(""));
@@ -848,7 +868,7 @@ impl RollingOperationsComponent {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("  Completed: "),
-            Span::styled(format!("{}", completed), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("{completed}"), Style::default().fg(Color::Cyan)),
             Span::raw(" nodes"),
         ]));
 
@@ -860,7 +880,7 @@ impl RollingOperationsComponent {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::raw(format!("  {}", message))]));
+        lines.push(Line::from(vec![Span::raw(format!("  {message}"))]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "  Press any key to continue...",

@@ -134,7 +134,7 @@ fn format_agent_details(pods: &[&CniPodInfo]) -> String {
         } else {
             String::new()
         };
-        lines.push(format!("  {} on {}{}", status, node, restarts));
+        lines.push(format!("  {status} on {node}{restarts}"));
     }
 
     lines.join("\n")
@@ -158,7 +158,7 @@ fn format_agent_details_with_issues(
     // Then healthy
     let healthy_count = all_pods.len() - unhealthy.len();
     if healthy_count > 0 {
-        lines.push(format!("\nHealthy: {} nodes", healthy_count));
+        lines.push(format!("\nHealthy: {healthy_count} nodes"));
     }
 
     lines.push("\nTip: Check agent logs with:".to_string());
@@ -201,7 +201,7 @@ async fn check_cilium_operator(client: &Client) -> DiagnosticCheck {
                     return DiagnosticCheck::pass(
                         "cilium_operator",
                         "Cilium Operator",
-                        &format!("{}/{} ready", ready, replicas),
+                        &format!("{ready}/{replicas} ready"),
                     );
                 } else if available >= 1 && unavailable > 0 {
                     // At least one replica is available and functional.
@@ -210,36 +210,34 @@ async fn check_cilium_operator(client: &Client) -> DiagnosticCheck {
                     return DiagnosticCheck::pass(
                         "cilium_operator",
                         "Cilium Operator",
-                        &format!("{}/{} ready (HA limited)", ready, replicas),
+                        &format!("{ready}/{replicas} ready (HA limited)"),
                     ).with_details(
-                        &format!("{} replica(s) pending - likely due to pod anti-affinity.\n\
+                        &format!("{unavailable} replica(s) pending - likely due to pod anti-affinity.\n\
                                  This is normal on clusters with fewer nodes than operator replicas.\n\
-                                 The operator is functional with {} available replica(s).",
-                                unavailable, available)
+                                 The operator is functional with {available} available replica(s).")
                     );
                 } else if available > 0 {
                     // Available but something else going on
                     return DiagnosticCheck::warn(
                         "cilium_operator",
                         "Cilium Operator",
-                        &format!("{}/{} ready ({} available)", ready, replicas, available),
-                    );
-                } else {
-                    return DiagnosticCheck::fail(
-                        "cilium_operator",
-                        "Cilium Operator",
-                        &format!("{}/{} ready", ready, replicas),
-                        None,
-                    )
-                    .with_details(
-                        "Cilium Operator is not ready. This can affect:\n\
-                                  - IP address allocation\n\
-                                  - CiliumNetworkPolicy enforcement\n\
-                                  - Cluster mesh operations\n\n\
-                                  Check operator logs:\n\
-                                  kubectl logs -n kube-system -l name=cilium-operator",
+                        &format!("{ready}/{replicas} ready ({available} available)"),
                     );
                 }
+                return DiagnosticCheck::fail(
+                    "cilium_operator",
+                    "Cilium Operator",
+                    &format!("{ready}/{replicas} ready"),
+                    None,
+                )
+                .with_details(
+                    "Cilium Operator is not ready. This can affect:\n\
+                              - IP address allocation\n\
+                              - CiliumNetworkPolicy enforcement\n\
+                              - Cluster mesh operations\n\n\
+                              Check operator logs:\n\
+                              kubectl logs -n kube-system -l name=cilium-operator",
+                );
             }
             Err(_) => continue,
         }
@@ -274,14 +272,14 @@ async fn check_hubble_relay(client: &Client) -> Option<DiagnosticCheck> {
                 Some(DiagnosticCheck::pass(
                     "hubble_relay",
                     "Hubble Relay",
-                    &format!("{}/{} ready", ready, replicas),
+                    &format!("{ready}/{replicas} ready"),
                 ))
             } else {
                 Some(
                     DiagnosticCheck::fail(
                         "hubble_relay",
                         "Hubble Relay",
-                        &format!("{}/{} ready", ready, replicas),
+                        &format!("{ready}/{replicas} ready"),
                         None,
                     )
                     .with_details(

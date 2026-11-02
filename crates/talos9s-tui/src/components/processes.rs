@@ -283,24 +283,24 @@ async fn fetch_node(client: TalosClient, basics: Option<NodeBasics>) -> NodeFetc
                 .next()
                 .map(|n| n.processes)
                 .unwrap_or_default()),
-            Ok(Err(e)) => Err(format!("Failed to fetch processes: {}", e)),
+            Ok(Err(e)) => Err(format!("Failed to fetch processes: {e}")),
             Err(_) => Err(format!("Request timed out after {}s", t.as_secs())),
         },
         meminfo: mem
-            .and_then(|r| r.ok())
+            .and_then(std::result::Result::ok)
             .and_then(|m| m.into_iter().next())
             .and_then(|m| m.meminfo),
         cpu_stat: stat
             .ok()
-            .and_then(|r| r.ok())
+            .and_then(std::result::Result::ok)
             .and_then(|s| s.into_iter().next())
             .map(|s| s.cpu_total),
         cpu_count: cpu
-            .and_then(|r| r.ok())
+            .and_then(std::result::Result::ok)
             .and_then(|c| c.into_iter().next())
             .map(|c| c.cpu_count),
         load_avg: load
-            .and_then(|r| r.ok())
+            .and_then(std::result::Result::ok)
             .and_then(|l| l.into_iter().next())
             .map(|l| (l.load1, l.load5, l.load15)),
     }
@@ -445,12 +445,12 @@ impl ProcessesComponent {
 
     /// Re-filter after a filter changed
     fn apply_filter(&mut self) {
-        self.with_data(|this, data| this.apply_filter_to_data(data));
+        self.with_data(ProcessesComponent::apply_filter_to_data);
     }
 
     /// Rebuild the flat/tree display list after the tree mode changed
     fn rebuild_display_list(&mut self) {
-        self.with_data(|this, data| this.rebuild_display_list_into(data));
+        self.with_data(ProcessesComponent::rebuild_display_list_into);
     }
 
     /// Refresh process data from every node concurrently
@@ -860,7 +860,7 @@ impl ProcessesComponent {
         // System resources info (summed over nodes)
         let cpu_count = data.cpu_count();
         let cpu_info = if cpu_count > 0 {
-            format!("{} CPU", cpu_count)
+            format!("{cpu_count} CPU")
         } else {
             String::new()
         };
@@ -931,7 +931,7 @@ impl ProcessesComponent {
                 _ => ("FILTER", Color::White),
             };
             spans.push(Span::styled(
-                format!("[{}]", label),
+                format!("[{label}]"),
                 Style::default().fg(color),
             ));
         }
@@ -969,22 +969,22 @@ impl ProcessesComponent {
         let cpu_usage = data.cpu_usage_percent();
         let (cpu_bar, cpu_color) = Self::usage_bar(cpu_usage.unwrap_or(0.0));
         let cpu_pct = match cpu_usage {
-            Some(pct) => format!("{:>3.0}%", pct),
+            Some(pct) => format!("{pct:>3.0}%"),
             None => " --%".to_string(),
         };
 
         // Memory bar with actual percentage
         let mem_usage = data.memory_usage_percent();
         let (mem_bar, mem_color) = Self::usage_bar(mem_usage);
-        let mem_pct = format!("{:>3.0}%", mem_usage);
+        let mem_pct = format!("{mem_usage:>3.0}%");
 
         let mut spans = vec![
             Span::raw("CPU "),
             Span::styled(cpu_bar, Style::default().fg(cpu_color)),
-            Span::raw(format!(" {} ", cpu_pct)),
+            Span::raw(format!(" {cpu_pct} ")),
             Span::raw("  MEM "),
             Span::styled(mem_bar, Style::default().fg(mem_color)),
-            Span::raw(format!(" {} ", mem_pct)),
+            Span::raw(format!(" {mem_pct} ")),
             Span::raw("  "),
             Span::styled("Load: ", Style::default().add_modifier(Modifier::DIM)),
         ];
@@ -995,7 +995,7 @@ impl ProcessesComponent {
             let loads = [stats.load_avg.0, stats.load_avg.1, stats.load_avg.2];
             for load in loads {
                 spans.push(Span::styled(
-                    format!("{:.2}", load),
+                    format!("{load:.2}"),
                     Style::default().fg(Self::load_color(load, stats.cpu_count)),
                 ));
                 spans.push(Span::raw(" "));
@@ -1185,7 +1185,7 @@ impl ProcessesComponent {
                         prefix
                     };
 
-                    let full_command = format!("{}{}", tree_prefix, command);
+                    let full_command = format!("{tree_prefix}{command}");
                     let command = if full_command.chars().count() > max_cmd_len {
                         let keep = max_cmd_len.saturating_sub(3);
                         format!("{}...", full_command.chars().take(keep).collect::<String>())
@@ -1465,7 +1465,7 @@ impl ProcessesComponent {
             Span::styled("█", Style::default().fg(Color::Cyan)), // Cursor
             Span::raw("  "),
             Span::styled(
-                format!("[{}/{}]", match_count, total),
+                format!("[{match_count}/{total}]"),
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
@@ -1508,7 +1508,7 @@ impl Component for ProcessesComponent {
             }
             // The first screen shows at once with CPU % pending; the second
             // sample follows shortly, whatever auto-refresh says
-            if self.data().is_some_and(|d| d.cpu_pending())
+            if self.data().is_some_and(ProcessesData::cpu_pending)
                 && !self.state.is_loading()
                 && self
                     .state
@@ -1532,7 +1532,7 @@ impl Component for ProcessesComponent {
 
         if let Some(err) = self.state.error() {
             let error =
-                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
@@ -1669,8 +1669,8 @@ impl ProcessesComponent {
                 // Yank (copy) the selected process command to clipboard
                 if let Some(proc) = self.selected_process() {
                     let full_cmd = proc.display_command().to_string();
-                    let preview_len = full_cmd.len().min(50);
-                    let preview = full_cmd[..preview_len].to_string();
+                    // By characters: 50 bytes can end inside a multi-byte one
+                    let preview: String = full_cmd.chars().take(50).collect();
                     if crate::clipboard::copy_to_clipboard(full_cmd).is_ok() {
                         tracing::info!("Copied to clipboard: {}...", preview);
                     }

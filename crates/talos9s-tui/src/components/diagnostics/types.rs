@@ -27,8 +27,8 @@ impl FixAction {
     /// Get a short description of the fix
     pub fn description(&self) -> String {
         match self {
-            FixAction::AddKernelModule(name) => format!("Add {} kernel module", name),
-            FixAction::RestartService(name) => format!("Restart {} service", name),
+            FixAction::AddKernelModule(name) => format!("Add {name} kernel module"),
+            FixAction::RestartService(name) => format!("Restart {name} service"),
             FixAction::HostCommand { description, .. } => description.clone(),
         }
     }

@@ -16,3 +16,6 @@ chrono.workspace = true
 
 # Error handling
 thiserror.workspace = true
+
+[lints]
+workspace = true

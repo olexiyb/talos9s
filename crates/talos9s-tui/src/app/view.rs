@@ -157,7 +157,7 @@ impl ViewComponent {
     }
 
     pub(super) fn set_error(&mut self, error: String) {
-        each!(self, c => c.set_error(error))
+        each!(self, c => c.set_error(error));
     }
 
     /// Start a refresh on a clone, off the event loop. Logs stream and

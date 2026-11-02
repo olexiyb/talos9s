@@ -35,7 +35,10 @@ impl NetworkStatsComponent {
     /// than the gRPC stats, so it runs in a spawned task on its own cadence
     /// instead of holding up every 2s refresh (which blocks the event loop).
     pub(super) fn poll_kubespan_data(&mut self) {
-        if self.kubespan_task.as_ref().is_some_and(|t| t.is_finished())
+        if self
+            .kubespan_task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
             && let Some(task) = self.kubespan_task.take()
             && let Some(Ok((enabled, peers))) = crate::task::poll_finished(task)
         {
@@ -288,7 +291,7 @@ impl NetworkStatsComponent {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{}/{} peers connected", connected, total),
+                format!("{connected}/{total} peers connected"),
                 if connected == total {
                     Style::default().fg(Color::Green)
                 } else {

@@ -87,23 +87,23 @@ impl CertificateInfo {
             if days == 1 {
                 "1 day".to_string()
             } else {
-                format!("{} days", days)
+                format!("{days} days")
             }
         } else if days < 365 {
             let months = days / 30;
             let remaining_days = days % 30;
             if remaining_days > 0 {
-                format!("{}m {}d", months, remaining_days)
+                format!("{months}m {remaining_days}d")
             } else {
-                format!("{}m", months)
+                format!("{months}m")
             }
         } else {
             let years = days / 365;
             let remaining_months = (days % 365) / 30;
             if remaining_months > 0 {
-                format!("{}y {}m", years, remaining_months)
+                format!("{years}y {remaining_months}m")
             } else {
-                format!("{}y", years)
+                format!("{years}y")
             }
         }
     }
@@ -148,13 +148,13 @@ pub fn parse_certificate_at(
 ) -> Result<CertificateInfo, String> {
     // Parse PEM to get DER
     let pem = parse_x509_pem(pem_data)
-        .map_err(|e| format!("Failed to parse PEM: {}", e))?
+        .map_err(|e| format!("Failed to parse PEM: {e}"))?
         .1;
 
     // Parse X.509 certificate
     let cert = pem
         .parse_x509()
-        .map_err(|e| format!("Failed to parse X.509: {}", e))?;
+        .map_err(|e| format!("Failed to parse X.509: {e}"))?;
 
     // Extract subject CN or full subject
     let subject = cert
@@ -162,7 +162,7 @@ pub fn parse_certificate_at(
         .iter_common_name()
         .next()
         .and_then(|cn| cn.as_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| cert.subject().to_string());
 
     let organizations = cert
@@ -177,7 +177,7 @@ pub fn parse_certificate_at(
         .iter_common_name()
         .next()
         .and_then(|cn| cn.as_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| cert.issuer().to_string());
 
     // Extract validity dates
@@ -220,7 +220,7 @@ pub fn parse_base64_certificate(name: &str, base64_data: &str) -> Result<Certifi
     use base64::Engine;
     let pem_data = base64::engine::general_purpose::STANDARD
         .decode(base64_data)
-        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+        .map_err(|e| format!("Failed to decode base64: {e}"))?;
     parse_certificate(name, &pem_data)
 }
 

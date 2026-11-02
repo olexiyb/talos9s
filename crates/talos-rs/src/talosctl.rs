@@ -290,9 +290,9 @@ pub async fn gen_config(
     exec_talosctl_async(&args).await?;
 
     Ok(GenConfigResult {
-        controlplane_path: format!("{}/controlplane.yaml", output_dir),
-        worker_path: format!("{}/worker.yaml", output_dir),
-        talosconfig_path: format!("{}/talosconfig", output_dir),
+        controlplane_path: format!("{output_dir}/controlplane.yaml"),
+        worker_path: format!("{output_dir}/worker.yaml"),
+        talosconfig_path: format!("{output_dir}/talosconfig"),
         output_dir: output_dir.to_string(),
     })
 }
@@ -337,7 +337,7 @@ pub async fn apply_config_insecure(
         }),
         Err(e) => Ok(InsecureApplyResult {
             success: false,
-            message: format!("Failed to apply config: {}", e),
+            message: format!("Failed to apply config: {e}"),
         }),
     }
 }
@@ -860,9 +860,9 @@ fn parse_tailscale_link(link: &str, addresses: &str, routes: &str) -> Option<Tai
     Some(TailscaleLink {
         up: spec
             .get("linkState")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
-        mtu: spec.get("mtu").and_then(|v| v.as_u64()),
+        mtu: spec.get("mtu").and_then(serde_json::Value::as_u64),
         addresses,
         peer_routes,
         subnet_routes,
@@ -887,7 +887,10 @@ fn is_tailnet_address(dst: &str) -> bool {
 
 /// `connectivityReady` from the NetworkStatus resource
 fn parse_connectivity_ready(yaml_str: &str) -> Option<bool> {
-    yaml_specs(yaml_str).find_map(|spec| spec.get("connectivityReady").and_then(|v| v.as_bool()))
+    yaml_specs(yaml_str).find_map(|spec| {
+        spec.get("connectivityReady")
+            .and_then(serde_json::Value::as_bool)
+    })
 }
 
 /// `spec.enabled` and `spec.advertiseKubernetesNetworks` of KubeSpanConfig;
@@ -896,7 +899,11 @@ fn parse_kubespan_settings(output: &str) -> KubeSpanSettings {
     resource_documents::<serde_json::Value>(output)
         .find_map(|doc| {
             let spec = doc.get("spec")?;
-            let flag = |key: &str| spec.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+            let flag = |key: &str| {
+                spec.get(key)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            };
             Some(KubeSpanSettings {
                 enabled: flag("enabled"),
                 advertise_kubernetes_networks: flag("advertiseKubernetesNetworks"),
@@ -1069,7 +1076,7 @@ fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosE
             .and_then(|s| s.get("machine"))
             .and_then(|m| m.get("type"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         let info = MachineConfigInfo {
             version,
@@ -1146,7 +1153,7 @@ fn parse_machine_config_text(yaml_str: &str) -> Result<MachineConfigText, TalosE
                     version: field("version").unwrap_or_default(),
                     updated: field("updated"),
                     staged_differs: false,
-                })
+                });
             }
             Some("persistent") => persistent = Some(spec.to_string()),
             _ => {}

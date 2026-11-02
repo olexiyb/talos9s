@@ -14,7 +14,10 @@ impl ClusterComponent {
     ///
     /// Runs in a spawned task so slow talosctl calls never block drawing.
     pub fn poll_network_info(&mut self) {
-        if self.network_fetch.as_ref().is_some_and(|f| f.is_finished())
+        if self
+            .network_fetch
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
             && let Some(fetch) = self.network_fetch.take()
         {
             let now = std::time::Instant::now();
@@ -185,7 +188,7 @@ impl ClusterComponent {
         if !self
             .node_stats_fetch
             .as_ref()
-            .is_some_and(|f| f.is_finished())
+            .is_some_and(tokio::task::JoinHandle::is_finished)
         {
             return;
         }

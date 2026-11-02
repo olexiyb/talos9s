@@ -1,0 +1,4 @@
+# Tests may unwrap: a panic there is a failed test, not a crashed TUI
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true

@@ -171,6 +171,6 @@ pub(super) fn check_cni_pods(id: &str, name: &str, cni_info: &CniInfo) -> Diagno
             .join("\n");
 
         DiagnosticCheck::fail(id, name, &summary, None)
-            .with_details(&format!("Unhealthy pods:\n{}", details))
+            .with_details(&format!("Unhealthy pods:\n{details}"))
     }
 }

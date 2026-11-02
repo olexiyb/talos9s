@@ -37,14 +37,14 @@ impl NetworkStatsComponent {
     /// Handle key events when a confirmation is pending
     pub(super) fn handle_confirmation_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
+            KeyCode::Char('y' | 'Y') => {
                 // Confirmed - execute the action
                 if let Some(action) = self.pending_action.take() {
                     return self.execute_pending_action(action);
                 }
                 Ok(None)
             }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                 // Cancelled
                 self.pending_action = None;
                 Ok(None)
@@ -69,7 +69,7 @@ impl NetworkStatsComponent {
         let service_vec = vec![service_name.to_string()];
         Ok(Some(Action::ShowMultiLogs(
             self.address.clone(),
-            "".to_string(), // role not needed for single service
+            String::new(), // role not needed for single service
             vec![LogNode {
                 name: self.hostname.clone(),
                 ip: self.address.clone(),
@@ -99,7 +99,7 @@ impl NetworkStatsComponent {
             .unwrap_or(false);
         if !service_exists {
             self.status_message = Some((
-                format!("Service '{}' not found", service_name),
+                format!("Service '{service_name}' not found"),
                 Instant::now(),
             ));
             return;
@@ -118,7 +118,7 @@ impl NetworkStatsComponent {
             PendingAction::RestartService(service_id, service_name) => {
                 // Show status message while waiting
                 self.status_message =
-                    Some((format!("Restarting {}...", service_name), Instant::now()));
+                    Some((format!("Restarting {service_name}..."), Instant::now()));
 
                 // Store that we need to restart - will be executed on next refresh
                 self.pending_restart_service = Some(service_id);
@@ -137,7 +137,7 @@ impl NetworkStatsComponent {
 
         let Some(client) = self.client.clone() else {
             let output = CommandOutput {
-                command: format!("Restart {}", service_id),
+                command: format!("Restart {service_id}"),
                 lines: vec!["Error: No client configured".to_string()],
                 timestamp: Instant::now(),
                 success: false,
@@ -147,7 +147,7 @@ impl NetworkStatsComponent {
             return;
         };
 
-        self.status_message = Some((format!("Restarting {}...", service_id), Instant::now()));
+        self.status_message = Some((format!("Restarting {service_id}..."), Instant::now()));
         self.tasks.restart = Some(tokio::spawn(async move {
             let result = with_timeout(client.service_restart(&service_id)).await;
             (service_id, result)
@@ -163,7 +163,7 @@ impl NetworkStatsComponent {
         match result {
             Ok(results) => {
                 let mut lines = Vec::new();
-                lines.push(format!("Restarting service: {}", service_id));
+                lines.push(format!("Restarting service: {service_id}"));
                 lines.push(String::new());
 
                 if let Some(result) = results.first() {
@@ -181,7 +181,7 @@ impl NetworkStatsComponent {
                 lines.push("The service will restart momentarily.".to_string());
 
                 let output = CommandOutput {
-                    command: format!("Restart {}", service_id),
+                    command: format!("Restart {service_id}"),
                     lines,
                     timestamp: Instant::now(),
                     success: true,
@@ -200,7 +200,7 @@ impl NetworkStatsComponent {
                 ];
 
                 let output = CommandOutput {
-                    command: format!("Restart {}", service_id),
+                    command: format!("Restart {service_id}"),
                     lines,
                     timestamp: Instant::now(),
                     success: false,
@@ -221,7 +221,7 @@ impl NetworkStatsComponent {
     ) {
         let (title, message) = match action {
             PendingAction::RestartService(_, name) => {
-                ("Confirm Restart", format!("Restart service '{}'?", name))
+                ("Confirm Restart", format!("Restart service '{name}'?"))
             }
         };
 
@@ -236,7 +236,7 @@ impl NetworkStatsComponent {
         // Draw the dialog block with background
         let block = Block::default()
             .title(Span::styled(
-                format!(" {} ", title),
+                format!(" {title} "),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),

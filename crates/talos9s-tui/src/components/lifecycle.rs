@@ -244,7 +244,7 @@ impl PreOpChecks {
         });
         let etcd = etcd_quorum
             .as_ref()
-            .map_or(HealthIndicator::Unknown, |e| e.health());
+            .map_or(HealthIndicator::Unknown, talos9s_core::HasHealth::health);
         PreOpChecks {
             pod_health,
             pdb_health,
@@ -302,7 +302,7 @@ pub struct LifecycleComponent {
 
 impl Default for LifecycleComponent {
     fn default() -> Self {
-        Self::new("".to_string(), None)
+        Self::new(String::new(), None)
     }
 }
 
@@ -389,7 +389,7 @@ impl LifecycleComponent {
                     e
                 );
                 // Preserve any cached versions for display; do not abort.
-                Some(format!("Failed to fetch versions: {}", e))
+                Some(format!("Failed to fetch versions: {e}"))
             }
         };
 
@@ -458,7 +458,7 @@ impl LifecycleComponent {
                         let cp_ip = etcd_members
                             .as_ref()
                             .ok()
-                            .and_then(|ms| ms.iter().find_map(|m| m.ip_address()))
+                            .and_then(|ms| ms.iter().find_map(talos_rs::EtcdMemberInfo::ip_address))
                             .or_else(|| fallback_ips.first().cloned());
                         if let Some(cp_ip) = cp_ip {
                             match bounded(CALL_TIMEOUT, discovery_members_via_k8s(&client, &cp_ip))
@@ -474,7 +474,7 @@ impl LifecycleComponent {
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
-                                    tracing::debug!("Kubernetes node enumeration failed: {}", e)
+                                    tracing::debug!("Kubernetes node enumeration failed: {}", e);
                                 }
                             }
                         }
@@ -488,7 +488,11 @@ impl LifecycleComponent {
             // yields nothing (graceful degradation).
             let hints: Vec<String> = etcd_members
                 .as_ref()
-                .map(|ms| ms.iter().filter_map(|m| m.ip_address()).collect())
+                .map(|ms| {
+                    ms.iter()
+                        .filter_map(talos_rs::EtcdMemberInfo::ip_address)
+                        .collect()
+                })
                 .unwrap_or_default();
             // Probes are bounded per address; this bounds the whole pass
             let _ = tokio::time::timeout(
@@ -604,7 +608,7 @@ impl LifecycleComponent {
             .as_ref()
             .ok()
             .and_then(|ms| ms.first())
-            .and_then(|m| m.ip_address());
+            .and_then(talos_rs::EtcdMemberInfo::ip_address);
 
         if self.k8s_client.is_none() {
             match crate::components::diagnostics::k8s::connect(client, cp_node_ip.as_deref()).await
@@ -620,7 +624,10 @@ impl LifecycleComponent {
         let etcd_quorum = match etcd_members {
             Ok(members) => {
                 // Target the status call by IP: hostnames may not resolve
-                let cp_ips: Vec<String> = members.iter().filter_map(|m| m.ip_address()).collect();
+                let cp_ips: Vec<String> = members
+                    .iter()
+                    .filter_map(talos_rs::EtcdMemberInfo::ip_address)
+                    .collect();
                 let statuses = bounded(CALL_TIMEOUT, client.etcd_status_for_nodes(&cp_ips))
                     .await
                     .inspect_err(|e| tracing::warn!("Failed to fetch etcd status: {}", e))
@@ -708,16 +715,14 @@ impl LifecycleComponent {
                 data.alerts.push(Alert {
                     severity: AlertSeverity::Warning,
                     message: format!(
-                        "Discovery: {}/{} nodes visible (some nodes may not be discoverable)",
-                        discovered_nodes, expected_nodes
+                        "Discovery: {discovered_nodes}/{expected_nodes} nodes visible (some nodes may not be discoverable)"
                     ),
                 });
             } else {
                 data.alerts.push(Alert {
                     severity: AlertSeverity::Info,
                     message: format!(
-                        "Discovery: {}/{} nodes healthy",
-                        discovered_nodes, expected_nodes
+                        "Discovery: {discovered_nodes}/{expected_nodes} nodes healthy"
                     ),
                 });
             }
@@ -987,19 +992,17 @@ impl LifecycleComponent {
         // K8s source info (show where kubeconfig came from)
         let k8s_source_text = match &self.k8s_source {
             Some(KubeconfigSource::Environment(_)) => "via KUBECONFIG".to_string(),
-            Some(KubeconfigSource::TalosNode(node)) => format!("via node {}", node),
+            Some(KubeconfigSource::TalosNode(node)) => format!("via node {node}"),
             Some(KubeconfigSource::Unavailable(err)) => {
                 // Truncate long error messages
                 let short_err = talos9s_core::truncate_string(err, 43);
-                format!("unavailable: {}", short_err)
+                format!("unavailable: {short_err}")
             }
             None => "not initialized".to_string(),
         };
 
         let k8s_color = match &self.k8s_source {
-            Some(KubeconfigSource::Environment(_)) | Some(KubeconfigSource::TalosNode(_)) => {
-                Color::Green
-            }
+            Some(KubeconfigSource::Environment(_) | KubeconfigSource::TalosNode(_)) => Color::Green,
             _ => Color::DarkGray,
         };
 
@@ -1056,7 +1059,7 @@ impl LifecycleComponent {
                 Span::styled("?", Style::default().fg(Color::DarkGray)),
                 Span::raw(" Pods: "),
                 Span::styled(
-                    format!("unavailable ({})", hint),
+                    format!("unavailable ({hint})"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
@@ -1088,7 +1091,7 @@ impl LifecycleComponent {
                 Span::styled("?", Style::default().fg(Color::DarkGray)),
                 Span::raw(" PDBs: "),
                 Span::styled(
-                    format!("unavailable ({})", hint),
+                    format!("unavailable ({hint})"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
@@ -1174,7 +1177,7 @@ impl Component for LifecycleComponent {
 
         if let Some(err) = self.state.error() {
             let error =
-                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
+                Paragraph::new(format!("Error: {err}")).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
@@ -1196,7 +1199,7 @@ impl Component for LifecycleComponent {
         .split(area);
 
         // Header
-        let header = Paragraph::new(format!(" Lifecycle │ {}", context_name)).style(
+        let header = Paragraph::new(format!(" Lifecycle │ {context_name}")).style(
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

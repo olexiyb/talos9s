@@ -289,7 +289,7 @@ impl ClusterComponent {
             return 0;
         };
         self.get_node_services(&node_name)
-            .map(|s| s.len())
+            .map(std::vec::Vec::len)
             .unwrap_or(0)
     }
 
@@ -440,7 +440,7 @@ impl ClusterComponent {
         let refreshing = self
             .background_refresh
             .get(idx)
-            .is_some_and(|h| h.is_some());
+            .is_some_and(std::option::Option::is_some);
         if self.clusters[idx].versions.is_empty() {
             if !refreshing && !self.clusters[idx].loading {
                 self.pending_selection = None;

@@ -75,7 +75,7 @@ impl ClusterComponent {
             };
 
             let mut cluster_line = vec![
-                Span::styled(format!("{} {} ", selector, expand_icon), header_style),
+                Span::styled(format!("{selector} {expand_icon} "), header_style),
                 Span::styled(status_symbol, Style::default().fg(status_color)),
                 Span::raw(" "),
                 Span::styled(&cluster.name, header_style),
@@ -83,7 +83,7 @@ impl ClusterComponent {
                     if cluster.loading {
                         " (…)".to_string()
                     } else {
-                        format!(" ({})", node_count)
+                        format!(" ({node_count})")
                     },
                     Style::default().dim(),
                 ),
@@ -147,7 +147,7 @@ impl ClusterComponent {
 
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(format!("{} {} ", selector, expand_icon), header_style),
+                    Span::styled(format!("{selector} {expand_icon} "), header_style),
                     Span::styled(format!("Control Plane ({})", cp_nodes.len()), header_style),
                 ]));
                 mark(&lines, NodeListItem::ControlPlaneHeader(cluster_idx));
@@ -182,7 +182,7 @@ impl ClusterComponent {
                         lines.push(Line::from(vec![
                             Span::raw("     "),
                             Span::styled(
-                                format!("{} {} ", selector, health_symbol),
+                                format!("{selector} {health_symbol} "),
                                 Style::default().fg(health_color),
                             ),
                             Span::styled(node_name, name_style),
@@ -216,7 +216,7 @@ impl ClusterComponent {
 
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(format!("{} {} ", selector, expand_icon), header_style),
+                    Span::styled(format!("{selector} {expand_icon} "), header_style),
                     Span::styled(format!("Workers ({})", worker_nodes.len()), header_style),
                 ]));
                 mark(&lines, NodeListItem::WorkersHeader(cluster_idx));
@@ -251,7 +251,7 @@ impl ClusterComponent {
                         lines.push(Line::from(vec![
                             Span::raw("     "),
                             Span::styled(
-                                format!("{} {} ", selector, health_symbol),
+                                format!("{selector} {health_symbol} "),
                                 Style::default().fg(health_color),
                             ),
                             Span::styled(node_name, name_style),

@@ -1033,23 +1033,23 @@ impl TalosClient {
 
         // Extract kubeconfig from the tarball
         let entries = archive.entries().map_err(|e| {
-            TalosError::Connection(format!("Failed to read kubeconfig tarball: {}", e))
+            TalosError::Connection(format!("Failed to read kubeconfig tarball: {e}"))
         })?;
 
         for entry in entries {
             let mut entry = entry.map_err(|e| {
-                TalosError::Connection(format!("Failed to read tarball entry: {}", e))
+                TalosError::Connection(format!("Failed to read tarball entry: {e}"))
             })?;
 
             // The kubeconfig file is typically named "kubeconfig" in the archive
             let path = entry
                 .path()
-                .map_err(|e| TalosError::Connection(format!("Failed to get entry path: {}", e)))?;
+                .map_err(|e| TalosError::Connection(format!("Failed to get entry path: {e}")))?;
 
             if path.to_string_lossy().contains("kubeconfig") {
                 let mut content = String::new();
                 entry.read_to_string(&mut content).map_err(|e| {
-                    TalosError::Connection(format!("Failed to read kubeconfig: {}", e))
+                    TalosError::Connection(format!("Failed to read kubeconfig: {e}"))
                 })?;
                 return Ok(content);
             }
@@ -1763,7 +1763,7 @@ fn format_bytes(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -1821,11 +1821,11 @@ impl ProcessInfo {
         } else if self.cpu_time < 3600.0 {
             let mins = (self.cpu_time / 60.0) as u32;
             let secs = (self.cpu_time % 60.0) as u32;
-            format!("{}m {}s", mins, secs)
+            format!("{mins}m {secs}s")
         } else {
             let hours = (self.cpu_time / 3600.0) as u32;
             let mins = ((self.cpu_time % 3600.0) / 60.0) as u32;
-            format!("{}h {}m", hours, mins)
+            format!("{hours}h {mins}m")
         }
     }
 
@@ -1999,7 +1999,7 @@ impl NetDevStats {
         } else if bytes >= KB {
             format!("{:.1} KB", bytes as f64 / KB as f64)
         } else {
-            format!("{} B", bytes)
+            format!("{bytes} B")
         }
     }
 
@@ -2016,7 +2016,7 @@ impl NetDevStats {
         } else if bytes_per_sec >= KB {
             format!("{:.1} KB/s", bytes_per_sec as f64 / KB as f64)
         } else {
-            format!("{} B/s", bytes_per_sec)
+            format!("{bytes_per_sec} B/s")
         }
     }
 }
@@ -3020,8 +3020,7 @@ mod tests {
         for value in &nodes_values {
             assert!(
                 !value.contains(','),
-                "Node metadata values should NOT be comma-separated: {}",
-                value
+                "Node metadata values should NOT be comma-separated: {value}"
             );
         }
 
