@@ -38,7 +38,6 @@ rustls = { version = "0.23", default-features = false, features = [
     "tls12",
     "ring",
 ] }
-rustls-pki-types = "1"
 
 # TUI
 ratatui = "0.30"
@@ -143,7 +142,6 @@ description = "A terminal UI for managing and monitoring Talos Linux Kubernetes 
 
 [dependencies]
 talos9s-tui.workspace = true
-talos-rs.workspace = true
 clap.workspace = true
 tokio.workspace = true
 color-eyre.workspace = true

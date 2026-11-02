@@ -3281,7 +3281,6 @@ dependencies = [
  "prost",
  "prost-types",
  "rustls",
- "rustls-pki-types",
  "serde",
  "serde-saphyr 2.0.0",
  "serde_json",
@@ -3301,7 +3300,6 @@ version = "0.2.0"
 dependencies = [
  "clap",
  "color-eyre",
- "talos-rs",
  "talos9s-tui",
  "tempfile",
  "tokio",
@@ -3316,7 +3314,6 @@ dependencies = [
  "chrono",
  "serde",
  "talos-rs",
- "thiserror 2.0.21",
  "tonic",
 ]
 
@@ -3349,7 +3346,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-stream",
  "tracing",
  "x509-parser",
 ]

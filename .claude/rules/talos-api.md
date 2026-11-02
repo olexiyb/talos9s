@@ -13,7 +13,7 @@ paths:
   for large resources such as the machine config); parse with serde-saphyr
   into `serde_json::Value`.
 - `config.rs` / `auth.rs`: talosconfig (`$TALOSCONFIG`, `~/.talos/config`),
-  client certs (PEM via rustls-pki-types).
+  client certs (PEM, handed to tonic's TLS config).
 
 ## API notes
 

@@ -44,6 +44,11 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all --all-targets -- -D warnings
 
+      # Clippy doesn't see Cargo.toml; the compiler's lint finds declared
+      # dependencies a crate never uses (libs and bins: tests have their own)
+      - name: No unused dependencies
+        run: RUSTFLAGS="-D unused-crate-dependencies" cargo check --all --lib --bins
+
       - name: Generated Talos API code matches proto/
         run: |
           cargo build -p talos-rs --features regenerate

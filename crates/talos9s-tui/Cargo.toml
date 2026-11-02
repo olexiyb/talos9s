@@ -20,7 +20,6 @@ rustls.workspace = true
 
 # Async
 tokio.workspace = true
-tokio-stream.workspace = true
 futures.workspace = true
 
 # Error handling

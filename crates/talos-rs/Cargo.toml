@@ -20,9 +20,6 @@ tokio.workspace = true
 tokio-stream.workspace = true
 futures.workspace = true
 
-# TLS
-rustls.workspace = true
-rustls-pki-types.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -55,6 +52,8 @@ tonic-prost-build = { version = "0.14", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "macros", "rt-multi-thread"] }
+# The key conversion test parses PEM with rustls
+rustls.workspace = true
 
 [lints]
 workspace = true
