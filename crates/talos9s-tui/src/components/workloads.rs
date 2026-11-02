@@ -500,15 +500,14 @@ impl WorkloadHealthComponent {
         let mut found = Vec::new();
         for d in &deployments.items {
             let (ns, name) = ns_name(&d.metadata);
-            let status = d.status.as_ref();
-            let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
+            let r = crate::components::diagnostics::k8s::DeploymentReplicas::of(d);
             found.push((
                 ns,
                 name,
                 WorkloadKind::Deployment,
-                ready,
-                d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1),
-                status.and_then(|s| s.available_replicas).unwrap_or(0),
+                r.ready,
+                r.desired,
+                r.available,
             ));
         }
         for sts in &statefulsets.items {

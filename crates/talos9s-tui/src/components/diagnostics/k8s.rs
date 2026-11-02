@@ -2,6 +2,7 @@
 //!
 //! Creates a K8s client from Talos-provided kubeconfig.
 
+use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::serde_json::json;
@@ -414,6 +415,32 @@ fn node_info_from(node: &Node) -> K8sNodeInfo {
 /// This is the discovery-independent fallback for enumerating nodes (including
 /// workers) when the Talos discovery service is disabled and
 /// `talosctl get members` returns nothing.
+/// A Deployment's replica counts. Desired is `spec.replicas` (1 when unset):
+/// `status.replicas` counts surge pods mid-rollout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeploymentReplicas {
+    pub desired: i32,
+    pub ready: i32,
+    pub available: i32,
+    pub unavailable: i32,
+}
+
+impl DeploymentReplicas {
+    pub fn of(deployment: &Deployment) -> Self {
+        let status = deployment.status.as_ref();
+        Self {
+            desired: deployment
+                .spec
+                .as_ref()
+                .and_then(|s| s.replicas)
+                .unwrap_or(1),
+            ready: status.and_then(|s| s.ready_replicas).unwrap_or(0),
+            available: status.and_then(|s| s.available_replicas).unwrap_or(0),
+            unavailable: status.and_then(|s| s.unavailable_replicas).unwrap_or(0),
+        }
+    }
+}
+
 pub async fn list_cluster_nodes(client: &Client) -> Result<Vec<K8sNodeInfo>, K8sError> {
     let nodes: Api<Node> = Api::all(client.clone());
     let list = nodes
@@ -1435,6 +1462,26 @@ mod tests {
             ready,
             boot_id: boot_id.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn deployment_replicas_desire_the_spec() {
+        let deployment = |v| -> Deployment { k8s_openapi::serde_json::from_value(v).unwrap() };
+        let r = DeploymentReplicas::of(&deployment(json!({
+            "spec": {"replicas": 0, "selector": {}, "template": {}},
+            "status": {"replicas": 2, "readyReplicas": 1, "availableReplicas": 1, "unavailableReplicas": 1}
+        })));
+        assert_eq!(
+            (r.desired, r.ready, r.available, r.unavailable),
+            (0, 1, 1, 1)
+        );
+        let r = DeploymentReplicas::of(&deployment(json!({
+            "spec": {"selector": {}, "template": {}}
+        })));
+        assert_eq!(
+            (r.desired, r.ready, r.available, r.unavailable),
+            (1, 0, 0, 0)
+        );
     }
 
     #[test]
