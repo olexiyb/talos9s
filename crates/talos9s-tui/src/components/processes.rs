@@ -756,7 +756,8 @@ impl ProcessesComponent {
         ) {
             while let Some(i) = stack.pop() {
                 if reached.insert(i)
-                    && let Some(children) = children_map.get(&processes[i].key())
+                    && let Some(process) = processes.get(i)
+                    && let Some(children) = children_map.get(&process.key())
                 {
                     stack.extend(children);
                 }
@@ -766,7 +767,9 @@ impl ProcessesComponent {
         let mut stack = root_indices.clone();
         reach(&mut stack, &mut reached, &data.processes, &children_map);
         for &idx in &data.filtered_indices {
-            let parent = data.processes[idx].parent_key();
+            let Some(parent) = data.processes.get(idx).map(NodeProcess::parent_key) else {
+                continue;
+            };
             let is_child = children_map.get(&parent).is_some_and(|c| c.contains(&idx));
             if is_child && !reached.contains(&idx) {
                 if let Some(c) = children_map.get_mut(&parent) {
