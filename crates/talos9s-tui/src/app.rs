@@ -81,6 +81,8 @@ pub struct App {
     /// A file to open in the log viewer once the action is handled: the
     /// loop owns the terminal
     open_in_viewer: Option<std::path::PathBuf>,
+    /// Namespace warp and recent namespaces per context (`W`)
+    namespaces: std::collections::BTreeMap<String, crate::state::NamespaceState>,
     /// Why the menu view has nothing to show (`View::Hint`)
     hint: Option<String>,
     /// Nodes of the KubeSpan matrix (`View::KubeSpanMatrix`)
@@ -171,6 +173,7 @@ impl App {
             applied_target: String::new(),
             pending_target: None,
             open_in_viewer: None,
+            namespaces: Default::default(),
             hint: None,
             kubespan_nodes: Vec::new(),
             last_click: None,
@@ -674,6 +677,11 @@ impl App {
         };
         let item = by_name(state.view.as_deref());
         self.update = state.update.clone();
+        self.namespaces = state
+            .namespaces
+            .iter()
+            .map(|n| (n.context.clone(), n.clone()))
+            .collect();
         self.cluster
             .set_newer_version(self.update.newer().map(str::to_string));
         self.saved_state = state;
@@ -747,6 +755,7 @@ impl App {
                 pod_sort: Some(workloads.pod_sort.name().to_string()),
             },
             update: self.update.clone(),
+            namespaces: self.namespaces.values().cloned().collect(),
         }
     }
 
@@ -1349,6 +1358,41 @@ impl App {
         }
     }
 
+    /// The namespace state of the selected cluster's context
+    fn namespaces_here(&mut self) -> &mut crate::state::NamespaceState {
+        let context = self.context().unwrap_or_default();
+        self.namespaces
+            .entry(context.clone())
+            .or_insert_with(|| crate::state::NamespaceState {
+                context,
+                ..Default::default()
+            })
+    }
+
+    /// Give the view that has namespaces the cluster's warp and recent
+    /// ones, and name the warp in the title
+    fn apply_warp(&mut self) {
+        let here = self.namespaces_here().clone();
+        let warpable = match &mut self.component {
+            Some(ViewComponent::Workloads(w)) => {
+                w.set_warp(here.warp.clone(), here.recent.clone());
+                true
+            }
+            Some(ViewComponent::Volumes(v)) => {
+                v.set_warp(here.warp.clone(), here.recent.clone());
+                true
+            }
+            _ => false,
+        };
+        if let Some(i) = self.pane_title.find(" · ns ") {
+            self.pane_title.truncate(i);
+        }
+        if warpable && let Some(ns) = &here.warp {
+            self.pane_title.push_str(" · ns ");
+            self.pane_title.push_str(ns);
+        }
+    }
+
     /// Bookkeeping once `view` shows menu entry `item` for the selection
     fn show_in_pane(&mut self, item: NavMenuItem, view: View) {
         self.pane = item;
@@ -1365,6 +1409,7 @@ impl App {
             item.label(),
             self.cluster.target_title(cluster_wide)
         );
+        self.apply_warp();
         self.applied_target = self.scope_key(item);
         self.pending_target = None;
         if self.view == View::Cluster {
@@ -1577,6 +1622,14 @@ impl App {
             }
             Action::FocusView => self.focus_view(),
             Action::OpenInViewer(path) => self.open_in_viewer = Some(path),
+            Action::WarpNamespace(namespace) => {
+                let here = self.namespaces_here();
+                if let Some(ns) = &namespace {
+                    talos9s_core::namespaces::push_recent(&mut here.recent, ns);
+                }
+                here.warp = namespace;
+                self.apply_warp();
+            }
             Action::Tick => {
                 // The tree stays on screen with every view: keep it current
                 if let Some(next_action) = self.cluster.update(Action::Tick)? {
@@ -2335,6 +2388,34 @@ mod tests {
         app.leave_view();
         assert!(!app.settings.log_wrap);
         assert_eq!(app.current_state().log_wrap, Some(false));
+    }
+
+    /// A warp is remembered per cluster with the recent namespaces, named
+    /// in the title, given to the next Workloads view and saved
+    #[tokio::test]
+    async fn namespace_warp_is_kept_and_saved() {
+        let mut app = app_with_view(View::Cluster);
+        app.show_component(
+            NavMenuItem::Workloads,
+            ViewComponent::Workloads(Box::new(WorkloadHealthComponent::new(None))),
+            false,
+        );
+        for ns in ["web", "db", "web"] {
+            app.handle_action(Action::WarpNamespace(Some(ns.into())))
+                .await
+                .unwrap();
+        }
+        assert!(app.pane_title.ends_with(" · ns web"), "{}", app.pane_title);
+        let saved = app.current_state().namespaces;
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].warp.as_deref(), Some("web"));
+        assert_eq!(saved[0].recent, ["web", "db"]);
+        // All again: no warp in the title, the recent ones stay
+        app.handle_action(Action::WarpNamespace(None))
+            .await
+            .unwrap();
+        assert!(!app.pane_title.contains(" · ns "));
+        assert_eq!(app.current_state().namespaces[0].recent, ["web", "db"]);
     }
 
     /// `A` in the disks view is remembered for the next view and run

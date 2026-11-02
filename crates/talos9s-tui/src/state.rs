@@ -42,6 +42,18 @@ pub struct UiState {
     pub workloads: WorkloadsSettings,
     /// The last new-release check (`update.rs`)
     pub update: UpdateCheck,
+    /// Namespace warp (`W`) and recent namespaces, per talosconfig context
+    pub namespaces: Vec<NamespaceState>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NamespaceState {
+    pub context: String,
+    /// The namespace the views are warped into; none for all
+    pub warp: Option<String>,
+    /// Newest first, at most `RECENT_NAMESPACES`
+    pub recent: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -16,6 +16,7 @@ helpers).
 | `formatting` | `format_bytes`, `format_kib` (storage, KiB/GiB), `format_eta`, `format_duration_human`, `truncate_string`, `pluralize` |
 | `selection` | `SelectableList<T>`, `VisualSelection` (anchor + cursor, for `V`/`y`) |
 | `errors` | `format_talos_error`: user-facing error text |
+| `namespaces` | namespace warp (`W`): recent namespaces (`push_recent`), picker entries |
 | `network` | port → service names, `cidr_contains`, route table and resolv.conf formatting |
 | `diagnostics` | `CheckStatus`, `CniType`, `CniInfo`, `PodHealthInfo` |
 | `constants` | thresholds, CRD lists, refresh intervals |

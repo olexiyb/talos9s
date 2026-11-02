@@ -584,6 +584,8 @@ pub struct ListOptions {
     pub by_namespace: bool,
     /// Keep rows whose namespace, name or node contains this (any case)
     pub filter: Option<String>,
+    /// Only this namespace, exactly (the warp, `W`)
+    pub namespace: Option<String>,
 }
 
 /// A row of the Workloads list
@@ -710,7 +712,11 @@ pub fn list_rows<'a>(
         .filter(|f| !f.is_empty())
         .map(str::to_lowercase);
     groups.retain(|g| {
-        (options.show_healthy || g.health() != WorkloadHealth::Healthy)
+        options
+            .namespace
+            .as_deref()
+            .is_none_or(|ns| g.namespace() == ns)
+            && (options.show_healthy || g.health() != WorkloadHealth::Healthy)
             && needle.as_deref().is_none_or(|n| g.matches(n))
     });
     groups.sort_by(|a, b| {
@@ -829,7 +835,11 @@ pub fn pod_rows<'a>(
         .iter()
         .map(|p| (p, pod_health(p, now)))
         .filter(|(p, health)| {
-            (options.show_healthy || *health != WorkloadHealth::Healthy)
+            options
+                .namespace
+                .as_deref()
+                .is_none_or(|ns| p.namespace == ns)
+                && (options.show_healthy || *health != WorkloadHealth::Healthy)
                 && needle.as_deref().is_none_or(|n| {
                     let hit = |s: &str| s.to_lowercase().contains(n);
                     hit(&p.namespace)
@@ -1198,6 +1208,13 @@ mod tests {
         assert_eq!(names(&list_rows(&workloads, &[], &filter("bc2"))), ["api"]);
         assert_eq!(list_rows(&workloads, &[], &filter("apps")).len(), 2);
         assert!(list_rows(&workloads, &[], &filter("nothing")).is_empty());
+        // The warp is exact: "app" isn't "apps"
+        let warp = |ns: &str| ListOptions {
+            namespace: Some(ns.into()),
+            ..Default::default()
+        };
+        assert_eq!(list_rows(&workloads, &[], &warp("apps")).len(), 2);
+        assert!(list_rows(&workloads, &[], &warp("app")).is_empty());
     }
 
     #[test]
@@ -1378,7 +1395,7 @@ mod tests {
         // Filter on the owner; sections per namespace
         let owner = ListOptions {
             filter: Some("job/".into()),
-            ..all
+            ..all.clone()
         };
         assert_eq!(
             names(pod_rows(&pods, None, &owner, PodSort::Health, NOW)),
@@ -1391,6 +1408,15 @@ mod tests {
         assert_eq!(
             names(pod_rows(&pods, None, &sections, PodSort::Health, NOW)),
             ["# apps", "  backup-29", "  db-0", "# web", "  api-1"]
+        );
+        let warped = ListOptions {
+            show_healthy: true,
+            namespace: Some("web".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            names(pod_rows(&pods, None, &warped, PodSort::Health, NOW)),
+            ["  api-1"]
         );
         assert_eq!(pod_owner(&pods[0], None), "sts/db");
         assert_eq!(pod_owner(&pods[1], None), "Job/backup");

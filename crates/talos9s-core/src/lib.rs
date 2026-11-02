@@ -31,6 +31,7 @@ pub mod etcd;
 pub mod formatting;
 pub mod indicators;
 pub mod logparse;
+pub mod namespaces;
 pub mod network;
 pub mod pod_logs;
 pub mod selection;

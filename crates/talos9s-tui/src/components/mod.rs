@@ -8,6 +8,7 @@ pub mod etcd;
 pub mod group;
 pub mod lifecycle;
 pub mod multi_logs;
+pub mod namespace_picker;
 pub mod network;
 pub mod node_info;
 pub mod node_operations;

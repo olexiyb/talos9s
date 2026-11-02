@@ -102,6 +102,15 @@ impl VolumeRow {
         }
     }
 
+    /// The namespace of its PVC, when it has one
+    fn pvc_namespace(&self) -> Option<&str> {
+        let pvc = match &self.source {
+            Source::Linstor(v) => v.pvc.as_deref(),
+            Source::Zfs(v) => v.pvc.as_deref(),
+        }?;
+        pvc.split_once('/').map(|(ns, _)| ns)
+    }
+
     fn label(&self) -> &str {
         match &self.source {
             Source::Linstor(v) => v.pvc.as_deref().unwrap_or(&v.resource),
@@ -311,6 +320,11 @@ pub struct VolumesComponent {
     copied_at: Option<std::time::Instant>,
     /// When the view opened, to show how long the first scan is taking
     opened_at: std::time::Instant,
+    /// Only the volumes of this PVC namespace (the warp, `W`)
+    namespace: Option<String>,
+    recent_namespaces: Vec<String>,
+    /// The namespace picker, drawn over the view while open
+    picker: Option<crate::components::namespace_picker::NamespacePicker>,
 }
 
 impl VolumesComponent {
@@ -337,7 +351,62 @@ impl VolumesComponent {
             pending_select: None,
             copied_at: None,
             opened_at: std::time::Instant::now(),
+            namespace: None,
+            recent_namespaces: Vec::new(),
+            picker: None,
         }
+    }
+
+    /// The namespace warped into (`None`: all) and the recent ones for the
+    /// picker; from the app, per cluster
+    pub fn set_warp(&mut self, namespace: Option<String>, recent: Vec<String>) {
+        self.recent_namespaces = recent;
+        if self.namespace != namespace {
+            self.namespace = namespace;
+            self.selected = 0;
+            self.clamp_selection();
+        }
+    }
+
+    /// The row is in the namespace warped into: its PVC's (a volume without
+    /// a PVC is in none)
+    fn in_warp(&self, row: &VolumeRow) -> bool {
+        self.namespace
+            .as_deref()
+            .is_none_or(|ns| row.pvc_namespace() == Some(ns))
+    }
+
+    /// `W`: the picker, with how many volumes each PVC namespace has
+    fn open_picker(&mut self) {
+        let Some(data) = self.state.data() else {
+            return;
+        };
+        let counts = talos9s_core::namespaces::count_by_namespace(
+            data.rows.iter().filter_map(VolumeRow::pvc_namespace),
+        );
+        self.picker = Some(crate::components::namespace_picker::NamespacePicker::new(
+            counts,
+            self.recent_namespaces.clone(),
+            self.namespace.clone(),
+            "volumes",
+        ));
+    }
+
+    /// `<W> ns: …` at the right of the summary line
+    fn warp_hint(&self) -> Line<'static> {
+        Line::from(vec![
+            Span::styled("<W>", crate::ui_ext::KEY),
+            Span::styled(" ns: ", Style::default().dim()),
+            match &self.namespace {
+                Some(ns) => Span::styled(
+                    ns.clone(),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                None => Span::styled("all", Style::default().dim()),
+            },
+        ])
     }
 
     /// Toggles, filter and selection to keep for the next visit
@@ -562,6 +631,7 @@ impl VolumesComponent {
         let filter = self.filter.to_lowercase();
         data.rows
             .iter()
+            .filter(|r| self.in_warp(r))
             .filter(|r| self.show_all || !r.issues.is_empty())
             .filter(|r| self.type_filter == TypeFilter::All || r.kind() == self.type_filter)
             .filter(|r| {
@@ -1064,14 +1134,33 @@ impl Component for VolumesComponent {
     }
 
     fn key_hints(&self) -> Option<Line<'static>> {
+        if let Some(picker) = &self.picker {
+            return Some(picker.key_hints());
+        }
         Some(self.key_hints_line())
     }
 
     fn captures_text(&self) -> bool {
-        self.filter_editing
+        self.filter_editing || self.picker.is_some()
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        if let Some(picker) = &mut self.picker {
+            use crate::components::namespace_picker::PickerEvent;
+            return Ok(match picker.handle_key(&key) {
+                PickerEvent::Stay => None,
+                PickerEvent::Close => {
+                    self.picker = None;
+                    None
+                }
+                PickerEvent::Pick(namespace) => {
+                    self.picker = None;
+                    let recent = self.recent_namespaces.clone();
+                    self.set_warp(namespace.clone(), recent);
+                    Some(Action::WarpNamespace(namespace))
+                }
+            });
+        }
         if self.filter_editing {
             use crate::ui_ext::{TextEdit, edit_text};
             match edit_text(&mut self.filter, &key) {
@@ -1108,6 +1197,7 @@ impl Component for VolumesComponent {
                 self.selected = 0;
             }
             KeyCode::Char('/') => self.filter_editing = true,
+            KeyCode::Char('W') => self.open_picker(),
             KeyCode::Char('r') => return Ok(Some(Action::Refresh)),
             KeyCode::Char('y') => self.copy_remedies(),
             _ => return Ok(None),
@@ -1148,9 +1238,11 @@ impl Component for VolumesComponent {
             );
             return Ok(());
         }
-        let Some(data) = self.state.data().cloned() else {
+        let Some(mut data) = self.state.data().cloned() else {
             return Ok(());
         };
+        // The summary counts the namespace warped into
+        data.rows.retain(|r| self.in_warp(r));
         if !data.installed {
             frame.render_widget(
                 Paragraph::new(
@@ -1180,6 +1272,13 @@ impl Component for VolumesComponent {
         .areas(inner);
 
         self.draw_summary(frame, summary_area, &data);
+        frame.render_widget(
+            Paragraph::new(self.warp_hint()).alignment(ratatui::layout::Alignment::Right),
+            Rect {
+                height: 1,
+                ..summary_area
+            },
+        );
         self.draw_table(frame, table_area);
         frame.render_widget(
             Paragraph::new(details)
@@ -1187,6 +1286,9 @@ impl Component for VolumesComponent {
                 .block(Block::default().borders(Borders::TOP)),
             detail_area,
         );
+        if let Some(picker) = &self.picker {
+            picker.draw(frame, area);
+        }
         Ok(())
     }
 }

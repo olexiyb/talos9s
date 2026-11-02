@@ -320,6 +320,10 @@ pub struct WorkloadHealthComponent {
     /// Every pod in one list (`P`), sorted by `pod_sort` (`1`-`5`)
     pod_mode: bool,
     pod_sort: PodSort,
+    /// The namespace picker (`W`), drawn over the view while open
+    picker: Option<crate::components::namespace_picker::NamespacePicker>,
+    /// This cluster's recent namespaces, for the picker
+    recent_namespaces: Vec<String>,
 
     /// The focused view (Enter): one workload, its pods and their logs
     focus: Option<Focus>,
@@ -359,6 +363,8 @@ impl WorkloadHealthComponent {
             log_wrap: false,
             pod_mode: false,
             pod_sort: PodSort::default(),
+            picker: None,
+            recent_namespaces: Vec::new(),
         }
     }
 
@@ -781,12 +787,80 @@ impl WorkloadHealthComponent {
         *self.table_state.offset_mut() = 0;
     }
 
+    /// The namespace warped into (`None`: all) and the recent ones for the
+    /// picker; from the app, per cluster
+    pub fn set_warp(&mut self, namespace: Option<String>, recent: Vec<String>) {
+        self.recent_namespaces = recent;
+        if self.options.namespace != namespace {
+            self.options.namespace = namespace;
+            self.options_changed();
+        }
+    }
+
+    /// `W`: the picker, with how many pods (else workloads) each namespace has
+    fn open_picker(&mut self) {
+        let Some(data) = self.data() else { return };
+        let (counts, what) = match &data.all_pods {
+            Some(pods) => (
+                talos9s_core::namespaces::count_by_namespace(
+                    pods.iter().map(|p| p.namespace.as_str()),
+                ),
+                "pods",
+            ),
+            None => (
+                talos9s_core::namespaces::count_by_namespace(
+                    data.workloads.iter().map(|w| w.namespace.as_str()),
+                ),
+                "workloads",
+            ),
+        };
+        self.picker = Some(crate::components::namespace_picker::NamespacePicker::new(
+            counts,
+            self.recent_namespaces.clone(),
+            self.options.namespace.clone(),
+            what,
+        ));
+    }
+
+    /// `<W> ns: …` at the right of the summary line
+    fn warp_hint(&self) -> Line<'static> {
+        let ns = self.options.namespace.clone();
+        Line::from(vec![
+            Span::styled("<W>", crate::ui_ext::KEY),
+            Span::styled(" ns: ", Style::default().dim()),
+            match ns {
+                Some(ns) => Span::styled(
+                    ns,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                None => Span::styled("all", Style::default().dim()),
+            },
+        ])
+    }
+
     /// The summary line, and the lists that couldn't be read below it
     fn summary_lines(&self) -> Vec<Line<'static>> {
         let Some(data) = self.data() else {
             return Vec::new();
         };
-        let summary = Summary::of(&data.workloads, &data.pods);
+        // Counts for the namespace warped into
+        let warp = self.options.namespace.as_deref();
+        let in_warp = |ns: &str| warp.is_none_or(|w| w == ns);
+        let workloads: Vec<WorkloadInfo> = data
+            .workloads
+            .iter()
+            .filter(|w| in_warp(&w.namespace))
+            .cloned()
+            .collect();
+        let pods: Vec<ProblemPod> = data
+            .pods
+            .iter()
+            .filter(|p| in_warp(&p.namespace))
+            .cloned()
+            .collect();
+        let summary = Summary::of(&workloads, &pods);
         let scope = match &self.scope {
             Some(nodes) if nodes.len() == 1 => "On this node: ".to_string(),
             Some(nodes) => format!("On {} nodes: ", nodes.len()),
@@ -1608,6 +1682,9 @@ impl WorkloadHealthComponent {
     }
 
     fn key_hints_line(&self) -> Line<'static> {
+        if let Some(picker) = &self.picker {
+            return picker.key_hints();
+        }
         if self.focus.is_some() {
             return self.focus_key_hints();
         }
@@ -1696,13 +1773,33 @@ impl Component for WorkloadHealthComponent {
     }
 
     fn captures_text(&self) -> bool {
-        self.filtering || self.focus.as_ref().is_some_and(|f| f.logs.captures_text())
+        self.filtering
+            || self.picker.is_some()
+            || self.focus.as_ref().is_some_and(|f| f.logs.captures_text())
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.filtering {
             self.handle_filter_key(key);
             return Ok(None);
+        }
+        if let Some(picker) = &mut self.picker {
+            use crate::components::namespace_picker::PickerEvent;
+            return Ok(match picker.handle_key(&key) {
+                PickerEvent::Stay => None,
+                PickerEvent::Close => {
+                    self.picker = None;
+                    None
+                }
+                PickerEvent::Pick(namespace) => {
+                    self.picker = None;
+                    if self.options.namespace != namespace {
+                        self.options.namespace = namespace.clone();
+                        self.options_changed();
+                    }
+                    Some(Action::WarpNamespace(namespace))
+                }
+            });
         }
         if self.focus.is_some() {
             return Ok(self.handle_focus_key(key));
@@ -1728,6 +1825,10 @@ impl Component for WorkloadHealthComponent {
             KeyCode::Char('A') => {
                 self.options.show_healthy = !self.options.show_healthy;
                 self.options_changed();
+                Ok(None)
+            }
+            KeyCode::Char('W') => {
+                self.open_picker();
                 Ok(None)
             }
             KeyCode::Char('P') => {
@@ -1806,18 +1907,40 @@ impl Component for WorkloadHealthComponent {
             Paragraph::new(summary).block(Block::default().borders(Borders::BOTTOM)),
             summary_area,
         );
+        frame.render_widget(
+            Paragraph::new(self.warp_hint()).alignment(ratatui::layout::Alignment::Right),
+            Rect {
+                height: 1,
+                ..summary_area
+            },
+        );
         if show_filter {
             self.draw_filter_bar(frame, filter_area);
         }
+        if self.picker.is_some() {
+            // The view under it, then the picker over the whole view
+            self.draw_content(frame, content);
+            if let Some(picker) = &self.picker {
+                picker.draw(frame, area);
+            }
+            return Ok(());
+        }
+        self.draw_content(frame, content);
+        Ok(())
+    }
+}
 
+impl WorkloadHealthComponent {
+    /// The list (or the focused view) below the summary
+    fn draw_content(&mut self, frame: &mut Frame, content: Rect) {
         if self.focus.is_some() {
             self.draw_focus(frame, content);
-            return Ok(());
+            return;
         }
         if self.list_rows().is_empty() {
             frame.render_widget(Paragraph::new(self.empty_message()), content);
             self.rows = Default::default();
-            return Ok(());
+            return;
         }
         // The detail pane takes up to half, and only when the list keeps
         // room for a few rows
@@ -1834,7 +1957,6 @@ impl Component for WorkloadHealthComponent {
             }
             _ => self.draw_list(frame, content),
         }
-        Ok(())
     }
 }
 
@@ -2069,6 +2191,34 @@ mod tests {
         press(&mut c, KeyCode::Esc);
         assert!(c.focus.is_none());
         assert_eq!(first(&c), "b");
+    }
+
+    /// `W` opens the picker; picking warps the list into that namespace
+    /// exactly and tells the app
+    #[test]
+    fn w_warps_into_a_namespace() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        press(&mut c, KeyCode::Char('A'));
+        assert_eq!(c.list_rows().len(), 2);
+        press(&mut c, KeyCode::Char('W'));
+        assert!(c.captures_text());
+        // Nothing matches "o": Enter just closes it
+        press(&mut c, KeyCode::Char('o'));
+        assert!(press(&mut c, KeyCode::Enter).is_none());
+        assert!(!c.captures_text());
+        press(&mut c, KeyCode::Char('W'));
+        for ch in "apps".chars() {
+            press(&mut c, KeyCode::Char(ch));
+        }
+        assert!(matches!(
+            press(&mut c, KeyCode::Enter),
+            Some(Action::WarpNamespace(Some(ns))) if ns == "apps"
+        ));
+        assert_eq!(c.list_rows().len(), 2);
+        c.set_warp(Some("other".into()), Vec::new());
+        assert!(c.list_rows().is_empty());
+        assert!(!c.captures_text());
     }
 
     /// Typing filters live; Esc drops a kept filter before leaving the view
