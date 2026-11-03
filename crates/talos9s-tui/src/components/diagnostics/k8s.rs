@@ -8,7 +8,7 @@ use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::serde_json::json;
 use kube::{
     Client, Config,
-    api::{Api, EvictParams, ListParams, Patch, PatchParams},
+    api::{Api, DeleteParams, EvictParams, ListParams, Patch, PatchParams},
 };
 use talos_rs::{DiscoveryMember, TalosClient};
 
@@ -836,24 +836,24 @@ pub struct DrainResult {
     pub pods_evicted: usize,
     /// Pods that failed to evict
     pub failed_pods: Vec<String>,
-    /// Pods that were force-deleted
-    pub force_deleted_pods: Vec<String>,
     /// Error message if failed
     pub error: Option<String>,
 }
 
-/// Options for drain and reboot operations
+/// Options for drain and reboot operations, the meaning of `kubectl drain`'s
+/// flags: an option left off stops the drain and names the pods, it never
+/// does something worse
 #[derive(Debug, Clone)]
 pub struct DrainOptions {
-    /// Timeout per pod for PDB retry (seconds)
-    pub per_pod_timeout_secs: u64,
-    /// Grace period for pod termination (None = use pod's default)
+    /// The whole drain of one node (`--timeout`); `None` waits for ever
+    pub timeout_secs: Option<u64>,
+    /// Grace period for pod termination (`--grace-period`; None = the pod's own)
     pub grace_period_secs: Option<i64>,
-    /// Force delete pods that can't be evicted (unmanaged pods)
-    pub force_delete_unmanaged: bool,
-    /// Ignore DaemonSet pods
+    /// Evict pods no controller will recreate (`--force`): they are gone after
+    pub force: bool,
+    /// Leave DaemonSet pods (`--ignore-daemonsets`); off, they stop the drain
     pub ignore_daemonsets: bool,
-    /// Delete pods with emptyDir volumes
+    /// Evict pods with emptyDir volumes, losing that data (`--delete-emptydir-data`)
     pub delete_emptydir_data: bool,
     /// Wait for node to become Ready after reboot
     pub wait_for_node_ready: bool,
@@ -866,9 +866,9 @@ pub struct DrainOptions {
 impl Default for DrainOptions {
     fn default() -> Self {
         Self {
-            per_pod_timeout_secs: 30,
+            timeout_secs: Some(300),
             grace_period_secs: None, // Use pod's default
-            force_delete_unmanaged: false,
+            force: false,
             ignore_daemonsets: true,
             delete_emptydir_data: true,
             wait_for_node_ready: true,     // Safe default for production
@@ -942,23 +942,56 @@ pub type DrainProgressCallback = Box<dyn Fn(&str) + Send + Sync>;
 struct PodToEvict {
     namespace: String,
     name: String,
-    /// Whether this pod is managed by a controller (ReplicaSet, Deployment, etc.)
-    is_managed: bool,
 }
 
-/// Pods to evict from a node: everything except mirror pods and (with
-/// `ignore_daemonsets`) DaemonSet pods. Pods with emptyDir volumes are an
-/// error unless `delete_emptydir_data`: `Err` lists them as `ns/name`.
+/// Pods that stop a drain with these options, as `ns/name`, by reason
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DrainBlockers {
+    /// DaemonSet pods, without `ignore_daemonsets`
+    pub daemonset: Vec<String>,
+    /// Pods no controller recreates, without `force`
+    pub unmanaged: Vec<String>,
+    /// Pods with emptyDir volumes, without `delete_emptydir_data`
+    pub emptydir: Vec<String>,
+}
+
+impl DrainBlockers {
+    pub fn is_empty(&self) -> bool {
+        self.daemonset.is_empty() && self.unmanaged.is_empty() && self.emptydir.is_empty()
+    }
+
+    /// One line naming the pods and the option that would let them go
+    pub fn message(&self) -> String {
+        let parts: Vec<String> = [
+            (&self.daemonset, "DaemonSet pod(s) (ignore DaemonSets)"),
+            (&self.unmanaged, "pod(s) no controller recreates (force)"),
+            (
+                &self.emptydir,
+                "pod(s) with emptyDir data (delete emptyDir data)",
+            ),
+        ]
+        .into_iter()
+        .filter(|(pods, _)| !pods.is_empty())
+        .map(|(pods, what)| format!("{} {what}: {}", pods.len(), pods.join(", ")))
+        .collect();
+        format!("drain stopped by {}", parts.join("; "))
+    }
+}
+
+/// Pods to evict from a node, like kubectl: mirror pods are skipped, and
+/// DaemonSet pods with `ignore_daemonsets`. DaemonSet, unmanaged and emptyDir
+/// pods the options don't allow stop the drain: `Err` lists them all
 fn select_pods_to_evict(
     pods: &[Pod],
     options: &DrainOptions,
-) -> std::result::Result<Vec<PodToEvict>, Vec<String>> {
+) -> std::result::Result<Vec<PodToEvict>, DrainBlockers> {
     let mut pods_to_evict = Vec::new();
-    let mut blocking = Vec::new();
+    let mut blockers = DrainBlockers::default();
 
     for pod in pods {
         let pod_name = pod.metadata.name.clone().unwrap_or_default();
         let namespace = pod.metadata.namespace.clone().unwrap_or_default();
+        let id = format!("{namespace}/{pod_name}");
 
         // Mirror pods are created by kubelet, not managed by the API server
         if pod
@@ -969,44 +1002,73 @@ fn select_pods_to_evict(
         {
             continue;
         }
+        // Finished pods hold nothing; kubectl deletes them without asking
+        let finished = pod
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.as_deref())
+            .is_some_and(|p| p == "Succeeded" || p == "Failed");
 
-        let owner_refs = pod.metadata.owner_references.as_ref();
-        let is_daemonset_pod =
-            owner_refs.is_some_and(|refs| refs.iter().any(|r| r.kind == "DaemonSet"));
-        if is_daemonset_pod && options.ignore_daemonsets {
+        // The controller owner, of any kind (operators own pods too), as
+        // kubectl's `GetControllerOf`
+        let controller = pod
+            .metadata
+            .owner_references
+            .as_ref()
+            .and_then(|refs| refs.iter().find(|r| r.controller == Some(true)));
+        if controller.is_some_and(|r| r.kind == "DaemonSet") {
+            if !options.ignore_daemonsets {
+                blockers.daemonset.push(id);
+            }
             continue;
         }
-        let is_managed = owner_refs.is_some_and(|refs| {
-            refs.iter().any(|r| {
-                matches!(
-                    r.kind.as_str(),
-                    "ReplicaSet" | "Deployment" | "StatefulSet" | "Job" | "DaemonSet"
-                )
-            })
-        });
+        if controller.is_none() && !finished && !options.force {
+            blockers.unmanaged.push(id.clone());
+        }
 
         let has_emptydir = pod.spec.as_ref().is_some_and(|spec| {
             spec.volumes
                 .as_ref()
                 .is_some_and(|volumes| volumes.iter().any(|v| v.empty_dir.is_some()))
         });
-        if has_emptydir && !options.delete_emptydir_data {
-            blocking.push(format!("{namespace}/{pod_name}"));
-            continue;
+        if has_emptydir && !finished && !options.delete_emptydir_data {
+            blockers.emptydir.push(id);
         }
 
         pods_to_evict.push(PodToEvict {
             namespace,
             name: pod_name,
-            is_managed,
         });
     }
 
-    if blocking.is_empty() {
+    if blockers.is_empty() {
         Ok(pods_to_evict)
     } else {
-        Err(blocking)
+        Err(blockers)
     }
+}
+
+/// The pods on a node, bounded like every Kubernetes call here
+async fn pods_on_node(client: &Client, node_name: &str) -> Result<Vec<Pod>, K8sError> {
+    let pods: Api<Pod> = Api::all(client.clone());
+    let list_params = ListParams::default().fields(&format!("spec.nodeName={node_name}"));
+    crate::kube_list::list(&pods, &list_params)
+        .await
+        .map(|list| list.items)
+        .map_err(|e| K8sError::ApiError(format!("Failed to list pods: {e}")))
+}
+
+/// What would stop a drain of `node_name` with `options`, checked before
+/// cordoning so a refused drain changes nothing
+pub async fn drain_blockers(
+    client: &Client,
+    node_name: &str,
+    options: &DrainOptions,
+) -> Result<DrainBlockers, K8sError> {
+    let pods = pods_on_node(client, node_name).await?;
+    Ok(select_pods_to_evict(&pods, options)
+        .err()
+        .unwrap_or_default())
 }
 
 /// Drain a node with progress callback
@@ -1016,249 +1078,114 @@ pub async fn drain_node_with_progress(
     options: &DrainOptions,
     progress_callback: Option<DrainProgressCallback>,
 ) -> Result<DrainResult, K8sError> {
-    use kube::api::DeleteParams;
+    use tokio::time::{Duration, Instant, sleep};
 
-    let pods: Api<Pod> = Api::all(client.clone());
+    let say = |msg: &str| {
+        if let Some(ref cb) = progress_callback {
+            cb(msg);
+        }
+    };
+    let fail = |failed_pods: Vec<String>, evicted: usize, msg: String| DrainResult {
+        node: node_name.to_string(),
+        success: false,
+        pods_evicted: evicted,
+        failed_pods,
+        error: Some(msg),
+    };
 
-    // List pods on this node
-    let list_params = ListParams::default().fields(&format!("spec.nodeName={node_name}"));
-
-    let pod_list = pods
-        .list(&list_params)
-        .await
-        .map_err(|e| K8sError::ApiError(format!("Failed to list pods: {e}")))?;
-
-    let pods_to_evict = match select_pods_to_evict(&pod_list.items, options) {
+    // Pods may have changed since the check before cordoning: check again
+    let pods = pods_on_node(client, node_name).await?;
+    let pods_to_evict = match select_pods_to_evict(&pods, options) {
         Ok(pods) => pods,
-        Err(blocking) => {
-            // Like kubectl: refuse up front instead of skipping, so the node
-            // isn't rebooted with pods still on it
-            let msg = format!(
-                "{} pod(s) with emptyDir data (local data would be lost): {}",
-                blocking.len(),
-                blocking.join(", ")
-            );
-            if let Some(ref cb) = progress_callback {
-                cb(&msg);
-            }
-            return Ok(DrainResult {
-                node: node_name.to_string(),
-                success: false,
-                pods_evicted: 0,
-                failed_pods: blocking,
-                force_deleted_pods: Vec::new(),
-                error: Some(msg),
-            });
+        Err(blockers) => {
+            let msg = blockers.message();
+            say(&msg);
+            let mut failed = blockers.daemonset;
+            failed.extend(blockers.unmanaged);
+            failed.extend(blockers.emptydir);
+            return Ok(fail(failed, 0, msg));
         }
     };
 
     let total_pods = pods_to_evict.len();
     let mut evicted = 0;
-    let mut failed_pods = Vec::new();
-    let mut force_deleted_pods = Vec::new();
+    say(&format!("Found {total_pods} pods to evict"));
 
-    // Report initial count
-    if let Some(ref cb) = progress_callback {
-        cb(&format!("Found {total_pods} pods to evict"));
-    }
+    let deadline = options
+        .timeout_secs
+        .map(|s| Instant::now() + Duration::from_secs(s));
+    let expired = || deadline.is_some_and(|d| Instant::now() >= d);
 
-    // Calculate max attempts based on configurable timeout
-    // Each attempt waits 2 seconds, so max_attempts = timeout / 2
-    let max_attempts = (options.per_pod_timeout_secs / 2).max(1) as usize;
+    // Like kubectl, the grace period applies to the eviction itself
+    let evict_params = EvictParams {
+        delete_options: options.grace_period_secs.map(|grace| {
+            DeleteParams::default().grace_period(
+                u32::try_from(talos9s_core::convert::non_negative(grace)).unwrap_or(u32::MAX),
+            )
+        }),
+        ..EvictParams::default()
+    };
 
-    // Eviction uses the pod's configured grace period by default.
-    // Custom grace_period_secs is only applied to force-delete operations.
-    let evict_params = EvictParams::default();
-
-    // Evict pods one at a time, respecting PDBs
-    // PDBs may temporarily block eviction, so we retry with backoff
-    for (idx, pod_info) in pods_to_evict.into_iter().enumerate() {
+    // Evict pods one at a time; a PodDisruptionBudget may refuse for now,
+    // so retry until the drain's timeout
+    for (idx, pod_info) in pods_to_evict.iter().enumerate() {
         let namespace = &pod_info.namespace;
         let pod_name = &pod_info.name;
         let ns_pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
+        say(&format!(
+            "Evicting {namespace}/{pod_name} ({}/{total_pods})",
+            idx + 1
+        ));
 
-        // Report which pod we're evicting
-        if let Some(ref cb) = progress_callback {
-            cb(&format!(
-                "Evicting {}/{} ({}/{})",
-                namespace,
-                pod_name,
-                idx + 1,
-                total_pods
-            ));
-        }
-
-        let mut attempts = 0;
-        let mut success = false;
-
-        while attempts < max_attempts && !success {
-            match ns_pods.evict(pod_name, &evict_params).await {
+        let mut attempt = 0;
+        loop {
+            let err = match crate::kube_list::bounded(ns_pods.evict(pod_name, &evict_params)).await
+            {
                 Ok(_) => {
                     evicted += 1;
                     tracing::info!("Evicted pod {}/{}", namespace, pod_name);
-                    success = true;
-
-                    // Report success
-                    if let Some(ref cb) = progress_callback {
-                        cb(&format!(
-                            "Evicted {namespace}/{pod_name} ({evicted}/{total_pods})"
-                        ));
-                    }
-
-                    // Wait briefly for pod to start terminating before next eviction
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                }
-                Err(e) => {
-                    let outcome = classify_eviction_error(&e);
-
-                    // Pod already gone - count as success
-                    if outcome == EvictionErrorKind::PodGone {
-                        evicted += 1;
-                        success = true;
-                        if let Some(ref cb) = progress_callback {
-                            cb(&format!(
-                                "Pod gone {namespace}/{pod_name} ({evicted}/{total_pods})"
-                            ));
-                        }
-                        continue;
-                    }
-
-                    // PDB blocking eviction - retry after delay
-                    if outcome == EvictionErrorKind::BlockedByPdb {
-                        attempts += 1;
-                        tracing::debug!(
-                            "PDB blocking eviction of {}/{}, attempt {}/{}",
-                            namespace,
-                            pod_name,
-                            attempts,
-                            max_attempts
-                        );
-                        // Report PDB wait
-                        if let Some(ref cb) = progress_callback {
-                            cb(&format!(
-                                "Waiting for PDB: {namespace}/{pod_name} (retry {attempts}/{max_attempts})"
-                            ));
-                        }
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        continue;
-                    }
-
-                    // Other error - check if we can force delete
-                    tracing::warn!("Failed to evict {}/{}: {}", namespace, pod_name, e);
-
-                    // Try force delete if enabled and pod is unmanaged
-                    if options.force_delete_unmanaged && !pod_info.is_managed {
-                        if let Some(ref cb) = progress_callback {
-                            cb(&format!(
-                                "Force deleting unmanaged pod {namespace}/{pod_name}"
-                            ));
-                        }
-
-                        let delete_params = if let Some(grace) = options.grace_period_secs {
-                            DeleteParams::default().grace_period(
-                                u32::try_from(talos9s_core::convert::non_negative(grace))
-                                    .unwrap_or(u32::MAX),
-                            )
-                        } else {
-                            DeleteParams::default().grace_period(0)
-                        };
-
-                        match ns_pods.delete(pod_name, &delete_params).await {
-                            Ok(_) => {
-                                evicted += 1;
-                                force_deleted_pods.push(format!("{namespace}/{pod_name}"));
-                                tracing::info!(
-                                    "Force deleted unmanaged pod {}/{}",
-                                    namespace,
-                                    pod_name
-                                );
-                                success = true;
-                                if let Some(ref cb) = progress_callback {
-                                    cb(&format!(
-                                        "Force deleted {namespace}/{pod_name} ({evicted}/{total_pods})"
-                                    ));
-                                }
-                            }
-                            Err(del_err) => {
-                                tracing::warn!(
-                                    "Force delete failed for {}/{}: {}",
-                                    namespace,
-                                    pod_name,
-                                    del_err
-                                );
-                                failed_pods.push(format!("{namespace}/{pod_name}"));
-                                if let Some(ref cb) = progress_callback {
-                                    cb(&format!("Failed: {namespace}/{pod_name}"));
-                                }
-                            }
-                        }
-                    } else {
-                        failed_pods.push(format!("{namespace}/{pod_name}"));
-                        if let Some(ref cb) = progress_callback {
-                            cb(&format!("Failed: {namespace}/{pod_name}"));
-                        }
-                    }
+                    say(&format!(
+                        "Evicted {namespace}/{pod_name} ({evicted}/{total_pods})"
+                    ));
+                    // Let it start terminating before the next eviction
+                    sleep(Duration::from_millis(500)).await;
                     break;
                 }
-            }
-        }
-
-        if !success && attempts >= max_attempts {
-            tracing::warn!(
-                "Timed out waiting for PDB to allow eviction of {}/{}",
-                namespace,
-                pod_name
-            );
-
-            // Try force delete on timeout if enabled and pod is unmanaged
-            if options.force_delete_unmanaged && !pod_info.is_managed {
-                if let Some(ref cb) = progress_callback {
-                    cb(&format!(
-                        "Force deleting unmanaged pod {namespace}/{pod_name} after timeout"
+                Err(e) => e,
+            };
+            match classify_eviction_error(&err) {
+                EvictionErrorKind::PodGone => {
+                    evicted += 1;
+                    say(&format!(
+                        "Pod gone {namespace}/{pod_name} ({evicted}/{total_pods})"
                     ));
+                    break;
                 }
-
-                let delete_params = if let Some(grace) = options.grace_period_secs {
-                    DeleteParams::default().grace_period(
-                        u32::try_from(talos9s_core::convert::non_negative(grace))
-                            .unwrap_or(u32::MAX),
-                    )
-                } else {
-                    DeleteParams::default().grace_period(0)
-                };
-
-                match ns_pods.delete(pod_name, &delete_params).await {
-                    Ok(_) => {
-                        evicted += 1;
-                        force_deleted_pods.push(format!("{namespace}/{pod_name}"));
-                        tracing::info!(
-                            "Force deleted unmanaged pod {}/{} after timeout",
-                            namespace,
-                            pod_name
-                        );
-                        if let Some(ref cb) = progress_callback {
-                            cb(&format!(
-                                "Force deleted {namespace}/{pod_name} ({evicted}/{total_pods})"
-                            ));
-                        }
-                    }
-                    Err(del_err) => {
-                        tracing::warn!(
-                            "Force delete failed for {}/{}: {}",
-                            namespace,
-                            pod_name,
-                            del_err
-                        );
-                        failed_pods.push(format!("{namespace}/{pod_name}"));
-                        if let Some(ref cb) = progress_callback {
-                            cb(&format!("Timeout: {namespace}/{pod_name}"));
-                        }
-                    }
+                EvictionErrorKind::BlockedByPdb if !expired() => {
+                    attempt += 1;
+                    say(&format!(
+                        "Waiting for PDB: {namespace}/{pod_name} (retry {attempt})"
+                    ));
+                    sleep(Duration::from_secs(2)).await;
                 }
-            } else {
-                failed_pods.push(format!("{namespace}/{pod_name}"));
-                if let Some(ref cb) = progress_callback {
-                    cb(&format!("Timeout: {namespace}/{pod_name}"));
+                kind => {
+                    tracing::warn!("Failed to evict {}/{}: {}", namespace, pod_name, err);
+                    let why = if kind == EvictionErrorKind::BlockedByPdb {
+                        format!(
+                            "timed out, a PodDisruptionBudget still blocks {namespace}/{pod_name}"
+                        )
+                    } else {
+                        format!("could not evict {namespace}/{pod_name}: {err}")
+                    };
+                    say(&why);
+                    // Stop here, like kubectl: the rest would be evicted
+                    // from a node the run is about to give up on
+                    let left = pods_to_evict
+                        .iter()
+                        .skip(idx)
+                        .map(|p| format!("{}/{}", p.namespace, p.name))
+                        .collect();
+                    return Ok(fail(left, evicted, why));
                 }
             }
         }
@@ -1266,10 +1193,9 @@ pub async fn drain_node_with_progress(
 
     Ok(DrainResult {
         node: node_name.to_string(),
-        success: failed_pods.is_empty(),
+        success: true,
         pods_evicted: evicted,
-        failed_pods,
-        force_deleted_pods,
+        failed_pods: Vec::new(),
         error: None,
     })
 }
@@ -1572,7 +1498,8 @@ mod tests {
                     json!({})
                 },
                 "ownerReferences": owner.map(|kind| vec![json!({
-                    "apiVersion": "apps/v1", "kind": kind, "name": "o", "uid": "u"
+                    "apiVersion": "apps/v1", "kind": kind, "name": "o", "uid": "u",
+                    "controller": true
                 })]).unwrap_or_default(),
             },
             "spec": {
@@ -1635,19 +1562,62 @@ mod tests {
             pod("mirror", None, true, false),
             pod("ds", Some("DaemonSet"), false, false),
             pod("app", Some("ReplicaSet"), false, false),
-            pod("bare", None, false, false),
+            // An operator's pod is managed too
+            pod("db", Some("Cluster"), false, false),
         ];
         let selected = select_pods_to_evict(&pods, &DrainOptions::default()).unwrap();
-        assert_eq!(names(&selected), ["app", "bare"]);
-        assert!(selected[0].is_managed);
-        assert!(!selected[1].is_managed);
+        assert_eq!(names(&selected), ["app", "db"]);
+    }
 
+    /// DaemonSet pods left unignored stop the drain, never get evicted
+    #[test]
+    fn daemonset_pods_stop_the_drain_unless_ignored() {
+        let pods = [
+            pod("ds", Some("DaemonSet"), false, false),
+            pod("app", Some("ReplicaSet"), false, false),
+        ];
         let options = DrainOptions {
             ignore_daemonsets: false,
             ..Default::default()
         };
+        let blockers = select_pods_to_evict(&pods, &options).unwrap_err();
+        assert_eq!(blockers.daemonset, ["ns/ds"]);
+        assert!(blockers.message().contains("ignore DaemonSets"));
+    }
+
+    /// A pod no controller recreates is gone after eviction: only with force
+    #[test]
+    fn unmanaged_pods_need_force() {
+        let pods = [
+            pod("bare", None, false, false),
+            pod("app", Some("ReplicaSet"), false, false),
+        ];
+        let blockers = select_pods_to_evict(&pods, &DrainOptions::default()).unwrap_err();
+        assert_eq!(blockers.unmanaged, ["ns/bare"]);
+        assert!(blockers.daemonset.is_empty() && blockers.emptydir.is_empty());
+
+        let options = DrainOptions {
+            force: true,
+            ..Default::default()
+        };
         let selected = select_pods_to_evict(&pods, &options).unwrap();
-        assert_eq!(names(&selected), ["ds", "app", "bare"]);
+        assert_eq!(names(&selected), ["bare", "app"]);
+    }
+
+    /// Finished pods hold nothing: they never stop a drain
+    #[test]
+    fn finished_pods_never_block() {
+        let mut done = pod("job-run", None, false, true);
+        done.status = Some(k8s_openapi::api::core::v1::PodStatus {
+            phase: Some("Succeeded".into()),
+            ..Default::default()
+        });
+        let options = DrainOptions {
+            delete_emptydir_data: false,
+            ..Default::default()
+        };
+        let selected = select_pods_to_evict(&[done], &options).unwrap();
+        assert_eq!(names(&selected), ["job-run"]);
     }
 
     #[test]
@@ -1663,9 +1633,22 @@ mod tests {
             delete_emptydir_data: false,
             ..Default::default()
         };
+        let blockers = select_pods_to_evict(&pods, &options).unwrap_err();
+        assert_eq!(blockers.emptydir, ["ns/cache"]);
+    }
+
+    /// Every reason is named, with its pods
+    #[test]
+    fn blockers_message_names_each_reason() {
+        let b = DrainBlockers {
+            daemonset: vec![],
+            unmanaged: vec!["ns/a".into()],
+            emptydir: vec!["ns/b".into(), "ns/c".into()],
+        };
         assert_eq!(
-            select_pods_to_evict(&pods, &options),
-            Err(vec!["ns/cache".to_string()])
+            b.message(),
+            "drain stopped by 1 pod(s) no controller recreates (force): ns/a; \
+             2 pod(s) with emptyDir data (delete emptyDir data): ns/b, ns/c"
         );
     }
 

@@ -205,11 +205,121 @@ running ones", e.g. before a planned drain, and Uncordon undoes either.
 Today's "Rolling drain" and "Rolling reboot" become Drain and Reboot on a
 group.
 
+## Drain options
+
+Status: proposed · 2026-11-03
+
+Drain, Reboot and Shutdown all drain first. Today they always use
+fixed options (ignore DaemonSets, delete emptyDir data, pod default grace
+period, 30 s PDB retry per pod, 30 s between nodes) and the dialog can't
+change them.
+
+### How others do it
+
+| Tool | Options offered | Defaults |
+|---|---|---|
+| `kubectl drain` | `--ignore-daemonsets`, `--delete-emptydir-data`, `--force`, `--grace-period`, `--timeout`, `--pod-selector`, `--disable-eviction`, `--skip-wait-for-delete-timeout` | all off, so drain refuses and lists the pods that stop it; timeout none |
+| k9s (`r` on a node) | a form: grace period, timeout, check boxes Ignore DaemonSets, Delete local data, Force | grace -1 (pod default), timeout 5 s |
+| Rancher | Delete emptyDir data, Force, grace period (pod default or N s), timeout (none or N s); DaemonSets always ignored | off |
+| Lens / Freelens | one confirmation, no options | |
+
+The common set is three check boxes (DaemonSets, emptyDir, force) and two
+values (grace period, timeout). kubectl's model is the useful part: an
+option left off doesn't do something worse, it **stops the drain and names
+the pods**.
+
+### Gaps in our engine (fixed)
+
+The engine doesn't follow kubectl where the options matter
+(`select_pods_to_evict`, `drain_node_with_progress`):
+
+1. **Unmanaged pods are evicted without `--force`.** kubectl refuses them,
+   since they won't come back; ours evicts them and they're gone. Without
+   Force they must stop the drain, listed; with Force they are evicted.
+2. **DaemonSets unchecked evicts DaemonSet pods**, which their controller
+   recreates on the same node at once. kubectl stops and lists them. Do
+   the same.
+3. **Grace period only reaches force deletes.** kubectl passes it to the
+   eviction too (`DeleteOptions.gracePeriodSeconds`).
+4. **Timeout is per pod** (PDB retry, 30 s). kubectl's `--timeout` is for
+   the whole drain. Use one timeout per node; on expiry the drain fails
+   naming the pods left (and the run uncordons what it cordoned, as now).
+5. Check the blocking pods **before cordoning**, so a refused drain changes
+   nothing.
+
+### The dialog
+
+The start dialog gets an options block when the operation drains:
+
+```
+┌ Drain bc2 ─────────────────────────────────────────────────────────┐
+│ Options                                                            │
+│ ▶ [✓] Ignore DaemonSets      7 pods stay                           │
+│   [✓] Delete emptyDir data   2 pods lose it: web/cache-0, mon/prom-0│
+│   [ ] Force                  1 unmanaged pod stops the drain:      │
+│                              default/debug-shell                   │
+│       Grace period           pod default                           │
+│       Timeout                5m                                    │
+│       Between nodes          30s            (group, Reboot only)   │
+│                                                                    │
+│ $ kubectl --context bc drain bc2 --ignore-daemonsets               │
+│     --delete-emptydir-data --timeout=5m                            │
+│                                                                    │
+│ <↑/↓> option  <Space> toggle  <←/→> value  <y> start  <n/Esc> cancel│
+└────────────────────────────────────────────────────────────────────┘
+```
+
+- Check boxes use the shared pick style (`check_box`, `PICK_CURSOR`).
+- **Each option says what it hits on the checked nodes**, from a pod list
+  read when the dialog opens (bounded, like the node facts): how many
+  DaemonSet pods stay, which pods lose emptyDir data, which unmanaged pods
+  Force would remove or which stop the drain. Unknown (pods not read) says
+  unknown, never "none".
+- An option left off that will stop the drain shows its pods in red, and
+  the dialog says `drain will stop: 1 unmanaged pod`. `y` still starts it
+  (pods may change before the run reaches that node); the engine checks
+  again.
+- Values step with `←`/`→`: grace period pod default, 0, 10, 30, 60, 120 s;
+  timeout 1, 5, 10, 30 min, none; between nodes 0, 30 s, 1, 2, 5 min.
+- The `$` command updates as options change and goes to the run header.
+- Mouse: a click on a check box toggles it.
+- Cordon and Uncordon have no options; the block isn't shown.
+
+### Defaults and memory
+
+- First time: Ignore DaemonSets on (every Talos cluster has CNI and
+  storage DaemonSets, so off always stops), Delete emptyDir **on** (today's
+  behaviour), Force off, grace pod default, timeout 5 min, 30 s between
+  nodes.
+- The last choice is saved per talosconfig context in `state.yaml`, as the
+  namespace warp is. Force is never saved: it starts off every time.
+
+### Not offered
+
+- `--disable-eviction`: deletes pods past their PDBs; defeats the point.
+- `--pod-selector`, `--chunk-size`, `--skip-wait-for-delete-timeout`:
+  rare, and easy to get wrong in a dialog. Run kubectl for those.
+
+### Steps
+
+1. Done. Engine: the five gaps above, with unit tests on
+   `select_pods_to_evict` (DaemonSet off, unmanaged without and with Force,
+   emptyDir, finished pods). The force-delete fallback for unmanaged pods
+   (deleting past a PDB) was removed: kubectl has none.
+2. Done in part: `DrainOptions` has `timeout_secs` (5 min) and `force`;
+   `drain_command` prints `--force` and `--timeout`. `between_nodes` comes
+   with the dialog.
+3. The dialog's options block, the pod preview, keys, mouse; TestBackend
+   at 70-120 columns, key line fits.
+4. Saved choice per context (`state.rs`, readable when missing).
+5. README, `.claude/rules/operations.md`, this plan.
+6. Live: open the dialog on bc, toggle, check the preview and the command,
+   cancel with `n`. A real drain only on `test-clusters/`, with an
+   unmanaged pod, an emptyDir pod and a PDB to see each one stop it.
+
 ## Not done yet
 
-- **Drain options** are the defaults (ignore DaemonSets, delete emptyDir
-  data, 30 s between nodes of a reboot); the dialog has no way to change
-  them yet.
+- **Drain options**: proposed below, in "Drain options".
 - **A real run** was not tested against a live cluster (only dialogs opened
   and cancelled, per the live-test rule); try it on `test-clusters/` first.
 

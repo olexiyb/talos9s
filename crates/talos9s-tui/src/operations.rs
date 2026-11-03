@@ -10,8 +10,8 @@
 
 use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::diagnostics::k8s::{
-    DrainOptions, PdbHealthInfo, check_pdb_health, cordon_node, drain_node_with_progress,
-    get_node_boot_id, uncordon_node, wait_for_node_ready,
+    DrainOptions, PdbHealthInfo, check_pdb_health, cordon_node, drain_blockers,
+    drain_node_with_progress, get_node_boot_id, uncordon_node, wait_for_node_ready,
 };
 use chrono::Utc;
 use kube::Client;
@@ -377,11 +377,19 @@ fn drain_command(h: &str, options: &DrainOptions) -> String {
     if options.delete_emptydir_data {
         drain.push_str(" --delete-emptydir-data");
     }
-    if options.force_delete_unmanaged {
+    if options.force {
         drain.push_str(" --force");
     }
     if let Some(grace) = options.grace_period_secs {
         let _ = write!(drain, " --grace-period={grace}");
+    }
+    // kubectl waits for ever without one; ours always has a limit unless None
+    if let Some(secs) = options.timeout_secs {
+        if secs % 60 == 0 {
+            let _ = write!(drain, " --timeout={}m", secs / 60);
+        } else {
+            let _ = write!(drain, " --timeout={secs}s");
+        }
     }
     drain
 }
@@ -865,6 +873,12 @@ async fn run_node(
 
     // A node cordoned before the run stays cordoned after it: a failure or
     // the reboot's end uncordons only what this run cordoned
+    // Pods the options don't let go stop the drain before anything changes
+    match drain_blockers(k8s, h, options).await {
+        Ok(b) if !b.is_empty() => return Err(b.message()),
+        Ok(_) => {}
+        Err(e) => return Err(format!("drain failed: {e}")),
+    }
     let was_cordoned = is_cordoned(k8s, h).await == Some(true);
     if was_cordoned {
         rec.line(&format!("{h} is cordoned already; it stays cordoned"));
@@ -892,14 +906,7 @@ async fn run_node(
             return Err(undo_cordon(k8s, h, rec, was_cordoned, format!("drain failed: {e}")).await);
         }
     };
-    let mut summary = format!("{} pod(s) evicted", drained.pods_evicted);
-    if !drained.force_deleted_pods.is_empty() {
-        let _ = write!(
-            summary,
-            ", {} force-deleted",
-            drained.force_deleted_pods.len()
-        );
-    }
+    let summary = format!("{} pod(s) evicted", drained.pods_evicted);
     rec.line(&summary);
     if request.kind == OpKind::Drain {
         return Ok(Step::Done(format!("drained, {summary}; stays cordoned")));
@@ -1227,7 +1234,7 @@ mod tests {
         assert_eq!(
             commands_for("bc", OpKind::Reboot, &n, &options),
             [
-                "kubectl --context bc drain bc2 --ignore-daemonsets --delete-emptydir-data",
+                "kubectl --context bc drain bc2 --ignore-daemonsets --delete-emptydir-data --timeout=5m",
                 "talosctl --context bc -n 10.0.0.3 reboot",
                 "kubectl --context bc uncordon bc2",
             ]
@@ -1239,13 +1246,15 @@ mod tests {
         let options = DrainOptions {
             ignore_daemonsets: false,
             delete_emptydir_data: false,
+            force: true,
             grace_period_secs: Some(5),
+            timeout_secs: Some(90),
             ..DrainOptions::default()
         };
         assert_eq!(
             commands_for("bc", OpKind::Shutdown, &n, &options),
             [
-                "kubectl --context bc drain bc2 --grace-period=5",
+                "kubectl --context bc drain bc2 --force --grace-period=5 --timeout=90s",
                 "talosctl --context bc -n 10.0.0.3 shutdown"
             ]
         );

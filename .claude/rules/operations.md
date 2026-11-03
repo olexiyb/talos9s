@@ -25,9 +25,15 @@ What talos9s changes on a cluster, and the guards each change needs.
 - **Waiting for a node:** it's back when Ready with a new boot ID (or a
   Ready transition after the reboot started), not when a stale Ready=True
   is seen before it went down.
-- **Drain** like kubectl: skip mirror and DaemonSet pods, stop on
-  unmanaged pods, and on emptyDir pods unless `delete_emptydir_data`; eviction errors are classified,
-  PDB blocks reported.
+- **Drain** like kubectl (`select_pods_to_evict`): skip mirror pods;
+  DaemonSet pods are skipped with `ignore_daemonsets`, otherwise they stop
+  the drain (never evicted: their controller recreates them at once). Pods
+  with no controller owner (any kind, operators count) stop it unless
+  `force`; emptyDir pods unless `delete_emptydir_data`. Finished pods never
+  stop it. The blockers are checked before cordoning (`drain_blockers`) and
+  again in the drain. The grace period goes into the eviction; the timeout
+  is for the whole drain of a node, PDB refusals retry until it, then the
+  drain fails naming the pods left.
 - **Fixes are not operations:** diagnostic fixes and storage remedies are
   shown and copied, never run (`CLAUDE.md`).
 - Live tests open these dialogs and cancel with `n`; never confirm one.
