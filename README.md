@@ -218,7 +218,7 @@ node and stops at the first failure.
   within 2 seconds does.
 - **History:** every run is kept in `~/.talos9s/operations/` (one private file
   each: time, context, nodes, commands, every step, how it ended) until you
-  delete it with `D`. The list shows all contexts (`A`: this one only), `/`
+  delete it with `D`. On a node the list shows that node's runs (`A`: every run); on a group or cluster every context's (`A`: this one only), `/`
   filters by node, operation, status or command, `Enter` shows a run's output
   (search, wrap, `V`/`y` lines, `v` viewer), `y` copies its commands.
 

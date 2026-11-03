@@ -92,7 +92,8 @@ pub struct OperationsComponent {
     table: TableState,
     filter: String,
     filtering: bool,
-    /// `A`: only this context's runs (default: every context)
+    /// `A`: narrow the history to this node's runs (a node, the default
+    /// there) or this cluster's (a group); wide is every run
     this_context: bool,
     dialog: Option<Dialog>,
     /// The run shown (Enter), and its output
@@ -140,7 +141,8 @@ impl OperationsComponent {
             table: TableState::default(),
             filter: String::new(),
             filtering: false,
-            this_context: false,
+            // A node shows its own runs first; a group every run
+            this_context: !group,
             dialog: None,
             focus: None,
             focus_was_running: false,
@@ -199,12 +201,24 @@ impl OperationsComponent {
         let paths: Vec<&PathBuf> = self.history.iter().map(|(p, _)| p).collect();
         let filter = self.filter.to_lowercase();
         let context = self.this_context.then_some(self.context.as_str());
+        // On a node, narrowed: only the runs that included it
+        let node = (self.this_context && !self.group)
+            .then(|| self.nodes.first().map(|n| n.hostname.as_str()))
+            .flatten();
         run_rows(&runs, context, &filter, |run| {
             runs.iter()
                 .position(|r| std::ptr::eq(r, run))
                 .and_then(|i| paths.get(i))
                 .is_some_and(|p| running.contains(p))
         })
+        .into_iter()
+        .filter(|&i| {
+            node.is_none_or(|n| {
+                runs.get(i)
+                    .is_some_and(|r| r.header.nodes.iter().any(|x| x == n))
+            })
+        })
+        .collect()
     }
 
     /// The operation picked
@@ -773,10 +787,10 @@ impl OperationsComponent {
             key("</>"),
             label(" filter  "),
             key("<A>"),
-            label(if self.this_context {
-                " all clusters  "
-            } else {
-                " this cluster  "
+            label(match (self.this_context, self.group) {
+                (true, _) => " all runs  ",
+                (false, true) => " this cluster  ",
+                (false, false) => " this node  ",
             }),
             key("<y>"),
             label(" copy  "),
@@ -937,11 +951,12 @@ impl OperationsComponent {
         if failed > 0 {
             let _ = write!(title, " · {failed} failed");
         }
-        title.push_str(if self.this_context {
-            " · this cluster "
-        } else {
-            " · all clusters "
-        });
+        let scope = match (self.this_context, self.group) {
+            (true, true) => " · this cluster ".to_string(),
+            (true, false) => format!(" · {} only ", self.target),
+            (false, _) => " · all clusters ".to_string(),
+        };
+        title.push_str(&scope);
         if !self.filter.is_empty() || self.filtering {
             let _ = write!(title, "· /{} ", self.filter);
         }
@@ -1612,10 +1627,12 @@ mod tests {
         {
             let started =
                 chrono::Utc::now() - chrono::Duration::hours(i64::try_from(i).unwrap() + 1);
+            // The bc run was on bc1, the kprod one on another node
+            let n = if ctx == "bc" { "bc1" } else { "n1" };
             let h = RunHeader {
                 context: ctx.into(),
-                target: "n1".into(),
-                nodes: vec!["n1".into()],
+                target: n.into(),
+                nodes: vec![n.into()],
                 operation: op.into(),
                 commands: vec![format!("kubectl {op} n1")],
                 started,
@@ -1659,10 +1676,16 @@ mod tests {
         let mut c = component(&dir, false);
         c.reload();
         assert_eq!(c.ops().len(), 5);
+        // On a node: its own runs; `A` shows every run
+        assert_eq!(c.history_rows().len(), 1, "bc1's runs only");
+        press(&mut c, KeyCode::Char('A'));
         assert_eq!(c.history_rows().len(), 2);
-        press(&mut c, KeyCode::Char('A'));
-        assert_eq!(c.history_rows().len(), 1, "this cluster only");
-        press(&mut c, KeyCode::Char('A'));
+        // On a group: every run; `A` this cluster's
+        let mut g = component(&dir, true);
+        g.reload();
+        assert_eq!(g.history_rows().len(), 2);
+        press(&mut g, KeyCode::Char('A'));
+        assert_eq!(g.history_rows().len(), 1, "this cluster only");
         press(&mut c, KeyCode::Char('/'));
         for ch in "failed".chars() {
             press(&mut c, KeyCode::Char(ch));
