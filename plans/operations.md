@@ -1,6 +1,6 @@
 # Design: Operations view and run history
 
-Status: proposed · Author: Olexiy Buyanskyy · 2026-11-03
+Status: built · Author: Olexiy Buyanskyy · 2026-11-03
 
 ## Summary
 
@@ -112,9 +112,10 @@ Shelling out to `talosctl reboot` would lose them. So:
 ## Data
 
 - `~/.talos9s/operations/<YYYYMMDD-HHMMSS>-<context>-<op>-<target>.log`,
-  0600, one per run: a YAML header (context, target, nodes, operation,
-  options, command(s), started, finished, status, exit code), a separator,
-  then the output lines with a time each.
+  0600, one per run: a JSON header line (context, target, nodes,
+  operation, commands, started), the output lines with a time each, and a
+  JSON end line (finished, status, message). Format and parsing in
+  `talos9s_core::operations`.
 - Written as the run goes (appended, flushed per line), so a crash keeps
   what happened; a run with no `finished` on next start shows as
   `interrupted`.
@@ -138,19 +139,19 @@ Shelling out to `talosctl reboot` would lose them. So:
 
 ## Implementation steps
 
-1. Core (`talos9s-core::operations`): run header type, file name, parse
+1. Done. Core (`talos9s-core::operations`): run header type, file name, parse
    and format, filter and sort of runs, `interrupted` detection. Tests.
-2. A run recorder in the TUI: open the file, append lines, finish; feed it
+2. Done. A run recorder in the TUI: open the file, append lines, finish; feed it
    from the existing drain/reboot/shutdown/rolling code's progress
    messages instead of (or as well as) the popup.
-3. The Operations view: list of operations for the target, history,
+3. Done. The Operations view: list of operations for the target, history,
    filter, `A`, `D` with confirmation. Menu entry and wiring
    (`.claude/rules/tui-views.md`).
-4. The run pane: `LogPane` with a run source (file while finished, the
+4. Done. The run pane: `LogPane` with a run source (file while finished, the
    live recorder while running).
-5. Move `o`/`O` to open the view; remove the popups. Service restart from
+5. Done. Move `o`/`O` to open the view; remove the popups. Service restart from
    Connections becomes a run.
-6. README, key bindings, `.claude/rules/operations.md`.
+6. Done. README, key bindings, `.claude/rules/operations.md`.
 
 ## Testing
 
@@ -202,6 +203,17 @@ Drain cordons first, so Cordon is for "stop new pods here, keep the
 running ones", e.g. before a planned drain, and Uncordon undoes either.
 Today's "Rolling drain" and "Rolling reboot" become Drain and Reboot on a
 group.
+
+## Not done yet
+
+- **Service restart** is still `R` in Network → Connections, with its own
+  confirmation and audit entry, not a run in this view: it needs a service
+  picker here first.
+- **Drain options** are the defaults (ignore DaemonSets, delete emptyDir
+  data, 30 s between nodes of a reboot); the dialog has no way to change
+  them yet.
+- **A real run** was not tested against a live cluster (only dialogs opened
+  and cancelled, per the live-test rule); try it on `test-clusters/` first.
 
 ## Decided
 

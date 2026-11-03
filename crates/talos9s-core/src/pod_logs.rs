@@ -19,6 +19,8 @@ pub struct LogSource {
     pub has_previous: bool,
     /// Read through the Talos API instead (the Containers view)
     pub talos: Option<TalosLog>,
+    /// An operation run's file instead (the Operations view): its output
+    pub file: Option<std::path::PathBuf>,
 }
 
 /// A container whose logs are read through the Talos API, from its node
@@ -125,6 +127,7 @@ pub fn log_sources(pods: &[&PodFacts], container: Option<&str>) -> Vec<LogSource
                 label,
                 has_previous: c.last_terminated.is_some(),
                 talos: None,
+                file: None,
             });
         }
     }

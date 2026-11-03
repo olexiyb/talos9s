@@ -151,15 +151,32 @@ talos9s never runs them.
 
 ### Operations
 
+The Operations view (`o`) lists what can run on the selected node, group or
+cluster, and every run so far. On a group or cluster an operation runs node by
+node and stops at the first failure.
+
 | Operation | What it does |
 |---|---|
-| Drain | Cordon and evict pods, respecting PodDisruptionBudgets |
-| Reboot | Cordon, drain, reboot, wait for the node to be Ready, uncordon |
-| Shutdown | Cordon, drain, power off; the node stays cordoned until you uncordon it |
-| Rolling | Drain or reboot nodes one after another, with progress |
+| Cordon / Uncordon | Stop new pods on the node(s), keeping the running ones / allow them again |
+| Drain | Cordon and evict pods, respecting PodDisruptionBudgets; stays cordoned |
+| Reboot | Drain, reboot, wait for Ready with a new boot ID, uncordon; on a group, one node at a time with etcd quorum checked before each control plane node |
+| Shutdown | Drain, power off; stays cordoned until you uncordon it (one node only) |
 
-Each operation checks etcd quorum and PDBs first, asks for confirmation and is
-written to the audit log.
+- **Starting:** `Enter` on an operation opens a dialog with the nodes (on a group
+  none is picked: `Space` picks one, `a` all), the equivalent `kubectl`/`talosctl` commands, etcd
+  quorum and blocking PDBs; `y` starts it, `n`/`Esc` cancels.
+- **Runs in the background:** switch views or nodes freely; the header shows
+  the run and its step on every view. One run at a time per cluster context.
+  `x` cancels after the current step (a failed or cancelled node is uncordoned
+  again). While a run goes, `q` and `Ctrl+C` don't quit; a second `Ctrl+C`
+  within 2 seconds does.
+- **History:** every run is kept in `~/.talos9s/operations/` (one private file
+  each: time, context, nodes, commands, every step, how it ended) until you
+  delete it with `D`. The list shows all contexts (`A`: this one only), `/`
+  filters by node, operation, status or command, `Enter` shows a run's output
+  (search, wrap, `V`/`y` lines, `v` viewer), `y` copies its commands.
+
+Every step also goes to the audit log.
 
 ## Keys
 
@@ -177,10 +194,9 @@ mouse do the same):
 | `p` | Processes | Processes |
 | `C` | Containers | Containers of every node |
 | `m` / `x` | Machine config / extensions | |
-| `o` | Operations (drain, reboot, shutdown) | |
+| `o` | Operations: cordon, uncordon, drain, reboot, shutdown; run history | Same, node by node (no shutdown) |
 | `v` / `w` | Volumes / workloads on this node | Volumes / workloads on those nodes |
 | `e` `b` `c` | etcd, lifecycle (boot and upgrades), security (cluster-wide) | same |
-| `O` | Rolling operations | Rolling operations |
 
 Everywhere:
 
@@ -190,11 +206,11 @@ Everywhere:
   gives it back (`q` doubles for `Esc` because some terminals, IntelliJ's
   among them, never pass `Esc`). `Tab` / `Shift+Tab` cycle Nodes → menu → view.
 - `q` in a view returns to the Dashboard; there it asks before quitting
-  (`y`). `Ctrl+C` quits at once.
+  (`y`). `Ctrl+C` quits at once, unless an operation runs (then twice).
 - `/` filter or search, `r` refresh, `a` auto-refresh, `A` show all (or issues
   only), `0` all levels, services or nodes in logs, `y` copy, `Space` fold.
   The same letter means the same thing in every view; uppercase in the tree
-  (`L`, `O`) is the across-nodes version of a view.
+  (`L`) is the across-nodes version of a view.
 - `[` / `]` narrow or widen the left pane, `Z` zooms the view to full width.
 - Mouse: click a row to select it, double-click to open it, click a menu
   entry or a sortable column header (Network) to switch or sort; the wheel
@@ -209,14 +225,15 @@ talos9s starts where you left it (see [Safety](#safety) for the state file).
 talos9s runs with your talosconfig, which usually means full admin on every
 node, so it is careful about what it changes:
 
-- **Reads by default.** It changes a node only for drain, reboot, shutdown,
-  rolling operations, cluster install and bootstrap, each after a
-  confirmation dialog, and logs every step to `~/.talos9s/audit.log`.
+- **Reads by default.** It changes a node only for cordon, uncordon, drain,
+  reboot, shutdown, service restart, cluster install and bootstrap, each after
+  a confirmation dialog, and logs every step to `~/.talos9s/audit.log`
+  (operations also to their run file in `~/.talos9s/operations/`).
 - **Never runs suggested commands.** Diagnostic fixes (talosctl) and storage
   fixes (drbdadm, kubectl) are shown and copied for you to review and run.
 - **Never shows secrets.** The machine config viewer masks keys, tokens,
   passwords, private keys and Secret data before anything is drawn.
-- **Writes only:** the audit log, the remembered view state
+- **Writes only:** the audit log, the operation runs, the remembered view state
   (`~/.talos9s/state.yaml`: selection, view, pane width, folded groups, sort
   orders and toggles, no cluster data, no text filters; delete it to start
   fresh), its debug log (temp dir or

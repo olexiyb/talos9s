@@ -9,8 +9,8 @@ use crate::components::workloads;
 use crate::components::{
     BackgroundRefresh, Component, ContainersComponent, DiagnosticsComponent, EtcdComponent,
     GroupComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent,
-    NodeInfoComponent, ProcessesComponent, SecurityComponent, StorageComponent, VolumesComponent,
-    WorkloadHealthComponent,
+    NodeInfoComponent, OperationsComponent, ProcessesComponent, SecurityComponent,
+    StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
 use tokio::task::JoinHandle;
 
@@ -31,8 +31,7 @@ pub(super) enum View {
     Volumes,
     Storage,
     NodeInfo,
-    NodeOperations,
-    RollingOperations,
+    Operations,
     Group,
     /// A menu view with nothing to show for the selection (`App::hint`)
     Hint,
@@ -41,16 +40,8 @@ pub(super) enum View {
     KubeSpanMatrix,
 }
 
-impl View {
-    /// An operations overlay, drawn over the whole screen
-    pub(super) fn is_overlay(&self) -> bool {
-        matches!(self, View::NodeOperations | View::RollingOperations)
-    }
-}
-
-/// The component of the view on the right. Overlays (operations) and the
-/// dashboard live outside it: they aren't replaced, cached or refreshed in
-/// the background like these.
+/// The component of the view on the right. The dashboard lives outside it:
+/// it isn't replaced, cached or refreshed in the background like these.
 pub(super) enum ViewComponent {
     MultiLogs(Box<MultiLogsComponent>),
     Etcd(Box<EtcdComponent>),
@@ -64,6 +55,7 @@ pub(super) enum ViewComponent {
     Volumes(Box<VolumesComponent>),
     Storage(Box<StorageComponent>),
     NodeInfo(Box<NodeInfoComponent>),
+    Operations(Box<OperationsComponent>),
     Group(Box<GroupComponent>),
 }
 
@@ -83,6 +75,7 @@ macro_rules! each {
             ViewComponent::Volumes($c) => $body,
             ViewComponent::Storage($c) => $body,
             ViewComponent::NodeInfo($c) => $body,
+            ViewComponent::Operations($c) => $body,
             ViewComponent::Group($c) => $body,
         }
     };
@@ -150,6 +143,7 @@ impl ViewComponent {
                 settings.log_wrap = c.log_wrap();
             }
             ViewComponent::Network(n) => settings.network = n.settings(),
+            ViewComponent::Operations(o) => settings.log_wrap = o.log_wrap(),
             ViewComponent::Storage(s) => settings.storage_show_all = s.show_all(),
             ViewComponent::Workloads(w) => {
                 settings.workloads = w.settings();
@@ -178,6 +172,7 @@ impl ViewComponent {
             ViewComponent::Volumes(_) => View::Volumes,
             ViewComponent::Storage(_) => View::Storage,
             ViewComponent::NodeInfo(_) => View::NodeInfo,
+            ViewComponent::Operations(_) => View::Operations,
             ViewComponent::Group(_) => View::Group,
         }
     }
@@ -198,7 +193,11 @@ impl ViewComponent {
     /// network refreshes in the background on its own: they have none.
     pub(super) fn spawn_refresh(&self) -> Option<JoinHandle<ViewComponent>> {
         Some(match self {
-            ViewComponent::MultiLogs(_) | ViewComponent::Network(_) => return None,
+            ViewComponent::MultiLogs(_)
+            | ViewComponent::Network(_)
+            | ViewComponent::Operations(_) => {
+                return None;
+            }
             ViewComponent::Etcd(c) => spawn_refresh!(c, ViewComponent::Etcd),
             ViewComponent::Processes(c) => spawn_refresh!(c, ViewComponent::Processes),
             ViewComponent::Containers(c) => spawn_refresh!(c, ViewComponent::Containers),

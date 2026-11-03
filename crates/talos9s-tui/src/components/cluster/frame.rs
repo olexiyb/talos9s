@@ -280,6 +280,16 @@ impl ClusterComponent {
             ]);
         }
 
+        // A running operation, on every view
+        if let Some(status) = &self.run_status {
+            header_spans.push(Span::styled(
+                format!("  {status}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
         // Active cluster name on the right
         let active_name = self
             .clusters

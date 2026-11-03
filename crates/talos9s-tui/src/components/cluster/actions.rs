@@ -16,6 +16,36 @@ impl ClusterComponent {
         Some(Action::ShowContainers(title, nodes))
     }
 
+    /// Operations for the selection: every node under it, offline ones too
+    /// (uncordon a node that was shut down)
+    pub(super) fn operations_action(&self) -> Option<Action> {
+        let (cluster_idx, names) = self.selected_nodes()?;
+        let cluster = self.clusters.get(cluster_idx)?;
+        let nodes: Vec<crate::operations::OpNode> = names
+            .into_iter()
+            .map(|name| crate::operations::OpNode {
+                address: cluster
+                    .node_ips
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone()),
+                // The tree's role, not "runs etcd now": an offline control
+                // plane node runs nothing
+                is_controlplane: cluster.is_controlplane(&name),
+                hostname: name,
+            })
+            .collect();
+        let (title, group) = match &self.selected_item {
+            NodeListItem::ClusterHeader(_) => (cluster.name.clone(), true),
+            NodeListItem::ControlPlaneHeader(_) => {
+                (format!("{} control plane", cluster.name), true)
+            }
+            NodeListItem::WorkersHeader(_) => (format!("{} workers", cluster.name), true),
+            _ => (nodes.first()?.hostname.clone(), false),
+        };
+        (!nodes.is_empty()).then_some(Action::ShowOperations(title, nodes, group))
+    }
+
     /// The selected node, or the online nodes under the selected header,
     /// with the title for them; none when there are none
     fn online_nodes(&self) -> Option<(String, Vec<ProcessNode>)> {
@@ -298,6 +328,7 @@ impl ClusterComponent {
             NavMenuItem::Workloads => Some(self.workloads_action()),
             NavMenuItem::Volumes => Some(self.volumes_action()),
             NavMenuItem::Containers => self.containers_action(),
+            NavMenuItem::Operations => self.operations_action(),
             NavMenuItem::Config => node_only(NodeInfoTab::Config),
             NavMenuItem::Extensions => node_only(NodeInfoTab::Extensions),
         };

@@ -108,6 +108,7 @@ pub enum NavMenuItem {
     Containers,
     Config,
     Extensions,
+    Operations,
 }
 
 impl NavMenuItem {
@@ -147,11 +148,12 @@ impl NavMenuItem {
                 NavMenuItem::Workloads,
                 NavMenuItem::Lifecycle,
                 NavMenuItem::Certs,
+                NavMenuItem::Operations,
             ],
         ),
     ];
 
-    pub const ALL: [NavMenuItem; 16] = [
+    pub const ALL: [NavMenuItem; 17] = [
         NavMenuItem::Dashboard,
         NavMenuItem::Diagnostics,
         NavMenuItem::Logs,
@@ -168,6 +170,7 @@ impl NavMenuItem {
         NavMenuItem::Workloads,
         NavMenuItem::Lifecycle,
         NavMenuItem::Certs,
+        NavMenuItem::Operations,
     ];
 
     /// Rows the menu takes: the separator, a heading per section, the entries
@@ -215,6 +218,7 @@ impl NavMenuItem {
             NavMenuItem::Containers => "Containers",
             NavMenuItem::Config => "Machine config",
             NavMenuItem::Extensions => "Extensions",
+            NavMenuItem::Operations => "Operations",
         }
     }
 
@@ -236,6 +240,7 @@ impl NavMenuItem {
             NavMenuItem::Containers => "C",
             NavMenuItem::Config => "m",
             NavMenuItem::Extensions => "x",
+            NavMenuItem::Operations => "o",
         }
     }
 }
@@ -339,6 +344,8 @@ pub struct ClusterComponent {
     pending_selection: Option<crate::state::Selection>,
     /// A newer talos9s release, for the top line
     newer_version: Option<String>,
+    /// The operations running, for the header (`operations::header_status`)
+    run_status: Option<String>,
     /// First tree row shown, when the tree is taller than its pane
     tree_scroll: usize,
     /// Scroll of the node pane (lines), the node it belongs to, and how far
@@ -406,6 +413,7 @@ impl ClusterComponent {
             back_hint: None,
             pending_selection: None,
             newer_version: None,
+            run_status: None,
             tree_scroll: 0,
             details_scroll: 0,
             details_scroll_node: String::new(),

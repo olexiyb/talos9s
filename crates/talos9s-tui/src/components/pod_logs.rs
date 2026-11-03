@@ -330,7 +330,10 @@ impl LogPane {
         self.generation += 1;
         let kube = client.cloned();
         let talos = self.talos.clone();
-        let needs_kube = self.sources.iter().any(|s| s.talos.is_none());
+        let needs_kube = self
+            .sources
+            .iter()
+            .any(|s| s.talos.is_none() && s.file.is_none());
         if needs_kube && kube.is_none() {
             self.read = Some(Read {
                 lines: Vec::new(),
@@ -355,6 +358,12 @@ impl LogPane {
                 let kube = kube.clone();
                 let talos = talos.clone();
                 async move {
+                    if let Some(path) = &s.file {
+                        return tokio::fs::read_to_string(path)
+                            .await
+                            .map(|text| crate::operations::run_output(&text))
+                            .map_err(|e| e.to_string());
+                    }
                     if let Some(target) = &s.talos {
                         // CRI lines carry their time; services' lines don't
                         let Some(talos) = talos else {
@@ -1035,6 +1044,7 @@ mod tests {
             label: pod.into(),
             has_previous: true,
             talos: None,
+            file: None,
         }
     }
 

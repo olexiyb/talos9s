@@ -11,6 +11,7 @@ pub mod components;
 pub mod kube_list;
 pub mod linstor;
 pub mod linstor_volumes;
+pub mod operations;
 pub mod orphans;
 pub mod reachability;
 pub mod state;

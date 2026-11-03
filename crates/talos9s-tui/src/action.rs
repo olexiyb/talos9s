@@ -71,10 +71,9 @@ pub enum Action {
     WarpNamespace(Vec<String>),
     /// Suspend the TUI and open this file in the log viewer (`v`)
     OpenInViewer(std::path::PathBuf),
-    /// Show node operations overlay: (hostname, address, is_controlplane)
-    ShowNodeOperations(String, String, bool),
-    /// Show rolling operations overlay with node list: Vec<(hostname, address, is_controlplane)>
-    ShowRollingOperations(Vec<(String, String, bool)>),
+    /// Operations view for a node, a group or a cluster: its title, its
+    /// nodes, whether it is a group
+    ShowOperations(String, Vec<crate::operations::OpNode>, bool),
 
     // UI state
     Tick,

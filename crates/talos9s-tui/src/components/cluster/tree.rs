@@ -533,6 +533,10 @@ impl ClusterComponent {
     }
 
     /// A newer release found by the daily check, or none
+    pub fn set_run_status(&mut self, status: Option<String>) {
+        self.run_status = status;
+    }
+
     pub fn set_newer_version(&mut self, version: Option<String>) {
         self.newer_version = version;
     }

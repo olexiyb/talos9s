@@ -232,56 +232,6 @@ impl Component for ClusterComponent {
             {
                 Ok(self.action_for(*item))
             }
-            KeyCode::Char('o') => {
-                // Show node operations overlay for selected node
-                if let Some(node_name) = self.current_node_name() {
-                    let node_ip = self
-                        .node_ips()
-                        .get(&node_name)
-                        .cloned()
-                        .unwrap_or_else(|| node_name.clone());
-                    let is_controlplane = self.current_node_role() == "controlplane";
-                    Ok(Some(Action::ShowNodeOperations(
-                        node_name,
-                        node_ip,
-                        is_controlplane,
-                    )))
-                } else {
-                    Ok(None)
-                }
-            }
-            KeyCode::Char('O') => {
-                // Show rolling operations overlay with all nodes from active cluster
-                let cluster_idx = self.active_cluster;
-                let nodes: Vec<(String, String, bool)> =
-                    if let Some(cluster) = self.clusters.get(cluster_idx) {
-                        cluster
-                            .versions
-                            .iter()
-                            .map(|v| {
-                                let hostname = v.node.clone();
-                                let ip = cluster
-                                    .node_ips
-                                    .get(&hostname)
-                                    .cloned()
-                                    .unwrap_or_else(|| hostname.clone());
-                                // The tree's role (discovery, then etcd members),
-                                // not "runs etcd now": an offline control plane
-                                // node runs nothing
-                                let is_controlplane = cluster.is_controlplane(&hostname);
-                                (hostname, ip, is_controlplane)
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                if !nodes.is_empty() {
-                    Ok(Some(Action::ShowRollingOperations(nodes)))
-                } else {
-                    Ok(None)
-                }
-            }
-
             // Toggle auto-refresh
             KeyCode::Char('a') => {
                 self.auto_refresh = !self.auto_refresh;

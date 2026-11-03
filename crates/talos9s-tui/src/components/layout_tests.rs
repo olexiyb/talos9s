@@ -65,6 +65,22 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
             )),
         ),
         (
+            "operations",
+            Box::new(crate::components::OperationsComponent::new(
+                "bc".into(),
+                "bc control plane".into(),
+                ["bc1", "bc2"]
+                    .map(|n| crate::operations::OpNode {
+                        hostname: n.into(),
+                        address: a.clone(),
+                        is_controlplane: true,
+                    })
+                    .to_vec(),
+                true,
+                crate::operations::Runs::default(),
+            )),
+        ),
+        (
             "node info",
             Box::new(NodeInfoComponent::new(
                 h,

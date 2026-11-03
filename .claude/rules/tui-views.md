@@ -30,7 +30,7 @@ paths:
 at `PaneWidth` Full/Compact/Hidden, key line) and the current view in the
 area it returns. `App::pane` is the menu entry shown, `App::view` the
 component realizing it for the selection (Network is `View::Network` on a
-node, `View::Group` on a group). Overlays (operations) draw over everything.
+node, `View::Group` on a group).
 
 - **Focus:** the tree or the view (`view_has_focus`). Keys go to the focused
   side only, so views keep their letters; a component's `Action::Back` hands
@@ -57,8 +57,10 @@ node, `View::Group` on a group). Overlays (operations) draw over everything.
 - **Pane widths:** Full (sized to content), Compact (longest node name,
   14-22 columns), Hidden. `[` narrows, `]` widens, `Z` toggles Hidden.
   Default is Full when the view keeps at least 100 columns.
-- **Pop-ups** (operations `o`, rolling operations `O`, confirmations) draw
-  over the whole screen. A picker that belongs to one view (the namespace
+- **Dialogs** (confirmations, the Operations view's start dialog) draw over
+  the view; nothing draws over the whole screen. Work that must outlive a
+  view (operations) lives in the app (`App::runs`), not in the component.
+- A picker that belongs to one view (the namespace
   picker, `components/namespace_picker.rs`) is the view's: it draws over
   the view, takes its keys, and tells the app the result through an action
   (`WarpNamespace`).
@@ -88,6 +90,7 @@ What each view shows per target:
 | Logs | node services | merged across the group | merged across the cluster |
 | Network, Storage, Diagnostics | the node | group view | group view (all nodes) |
 | Processes, Containers | the node | the group's nodes | all nodes |
+| Operations | the node | node by node over the group | node by node over all |
 | Machine config, Extensions | the node | "Select a node" hint | same hint |
 | Volumes, Workloads | on this node | on those nodes | whole cluster |
 | etcd, Lifecycle, Security | the target's cluster | same | same |

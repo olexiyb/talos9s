@@ -34,6 +34,7 @@ pub mod indicators;
 pub mod logparse;
 pub mod namespaces;
 pub mod network;
+pub mod operations;
 pub mod pod_logs;
 pub mod selection;
 pub mod stats;

@@ -3,14 +3,13 @@
 use crate::action::Action;
 use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::cluster::{ClickTarget, FocusedPane, NavMenuItem, PaneWidth, TreeSelection};
-use crate::components::rolling_operations::RollingNodeInfo;
 use crate::components::wizard::{WizardComponent, WizardState};
 use crate::components::workloads;
 use crate::components::{
     ClusterComponent, Component, ContainersComponent, DiagnosticsComponent, EtcdComponent,
     GroupComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent,
-    NodeInfoComponent, NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent,
-    SecurityComponent, StorageComponent, VolumesComponent, WorkloadHealthComponent,
+    NodeInfoComponent, OperationsComponent, ProcessesComponent, SecurityComponent,
+    StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
 use crate::components::{GroupKind, NodeInfoTab, StorageViewMode};
 use crate::tui::{self, Tui};
@@ -42,6 +41,11 @@ fn is_ctrl_c(key: &KeyEvent) -> bool {
         && matches!(key.code, KeyCode::Char('c' | 'C'))
 }
 
+/// A second Ctrl+C within this quits even while an operation runs
+const QUIT_ANYWAY: Duration = Duration::from_secs(2);
+/// How long the "an operation runs" line stays on the key line
+const QUIT_REFUSED_SHOWN: Duration = Duration::from_secs(5);
+
 /// Bottom line while `q` on the dashboard waits for an answer
 fn quit_question() -> Line<'static> {
     let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
@@ -62,7 +66,7 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct App {
     /// Whether the application should quit
     should_quit: bool,
-    /// Component shown on the right (or an operations overlay over everything)
+    /// Component shown on the right
     view: View,
     /// Menu entry the right side shows; `view` is the component realizing it
     /// for the selection (e.g. Network is a node's or a group's view)
@@ -94,8 +98,6 @@ pub struct App {
     /// A node view opened from a group view (Enter in its table): the group
     /// row to reselect on Esc, so the group view comes back
     drill_return: Option<(TreeSelection, String)>,
-    /// View under an operations overlay, shown again when it closes
-    overlay_return: View,
     /// Nodes pane and view areas of the last frame, for the mouse
     tree_area: Rect,
     view_area: Rect,
@@ -118,10 +120,12 @@ pub struct App {
     update_check_enabled: bool,
     update: crate::state::UpdateCheck,
     update_job: Option<tokio::task::JoinHandle<Result<String, String>>>,
-    /// Node operations component (overlay for node operations)
-    node_operations: Option<NodeOperationsComponent>,
-    /// Rolling operations component (overlay for multi-node operations)
-    rolling_operations: Option<RollingOperationsComponent>,
+    /// Operations running in the background, one per context
+    /// (`crate::operations`)
+    runs: crate::operations::Runs,
+    /// When Ctrl+C was refused because a run goes; a second one within
+    /// `QUIT_ANYWAY` quits anyway
+    quit_refused: Option<std::time::Instant>,
     /// Number of log lines to fetch per service
     tail_lines: i32,
     /// Tick rate for animations (ms)
@@ -131,8 +135,6 @@ pub struct App {
     /// In-flight background refresh of the view's component, on a clone
     /// (`ViewComponent::spawn_refresh`)
     refresh_job: Option<JoinHandle<ViewComponent>>,
-    /// In-flight Kubernetes client creation for rolling operations
-    rolling_k8s_fetch: Option<JoinHandle<Option<kube::Client>>>,
     /// Whether running in insecure mode (no TLS)
     insecure: bool,
     /// Endpoint for insecure mode
@@ -179,7 +181,6 @@ impl App {
             last_click: None,
             pane_title: String::new(),
             drill_return: None,
-            overlay_return: View::Cluster,
             tree_area: Rect::default(),
             view_area: Rect::default(),
             view_cache: Vec::new(),
@@ -192,13 +193,12 @@ impl App {
             update_check_enabled: true,
             update: Default::default(),
             update_job: None,
-            node_operations: None,
-            rolling_operations: None,
+            runs: crate::operations::Runs::default(),
+            quit_refused: None,
             tail_lines,
             tick_rate: Duration::from_millis(100),
             config_path,
             refresh_job: None,
-            rolling_k8s_fetch: None,
             insecure,
             insecure_endpoint,
         }
@@ -262,7 +262,9 @@ impl App {
             if event::poll(self.tick_rate)? {
                 match event::read()? {
                     Event::Key(key) if is_ctrl_c(&key) => {
-                        self.should_quit = true;
+                        if self.may_quit() {
+                            self.should_quit = true;
+                        }
                     }
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if let Some(action) = wizard.handle_key_event(key)? {
@@ -833,7 +835,9 @@ impl App {
                     // The terminal is in raw mode, so Ctrl+C arrives as a key
                     // rather than SIGINT: quit from any view
                     Event::Key(key) if is_ctrl_c(&key) => {
-                        self.should_quit = true;
+                        if self.may_quit() {
+                            self.should_quit = true;
+                        }
                     }
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if let Some(action) = self.dispatch_key(key)? {
@@ -869,7 +873,6 @@ impl App {
 
             // Check async results (non-blocking)
             self.poll_refresh_job();
-            self.poll_view_setup();
             self.follow_selection().await?;
 
             // Check if we should quit
@@ -919,6 +922,7 @@ impl App {
             match &mut self.component {
                 Some(ViewComponent::Workloads(w)) => w.viewer_failed(problem),
                 Some(ViewComponent::Containers(c)) => c.viewer_failed(problem),
+                Some(ViewComponent::Operations(o)) => o.viewer_failed(problem),
                 _ => {}
             }
         }
@@ -971,23 +975,6 @@ impl App {
         }
     }
 
-    /// Finish view setup that ran in the background: the Kubernetes client
-    /// of rolling operations
-    fn poll_view_setup(&mut self) {
-        if self
-            .rolling_k8s_fetch
-            .as_ref()
-            .is_some_and(tokio::task::JoinHandle::is_finished)
-            && let Some(Some(Ok(Some(k8s)))) = self
-                .rolling_k8s_fetch
-                .take()
-                .map(crate::task::poll_finished)
-            && let Some(rolling_ops) = &mut self.rolling_operations
-        {
-            rolling_ops.set_k8s_client(k8s);
-        }
-    }
-
     /// Drop an in-flight background refresh, e.g. because its view is being
     /// replaced by one for another node; its result would be stale.
     fn cancel_refresh_job(&mut self) {
@@ -996,7 +983,7 @@ impl App {
         }
     }
 
-    /// Route a key press: overlays first, then the layout keys, then the
+    /// Route a key press: the layout keys first, then the
     /// tree or the view on the right, whichever has the keyboard
     fn dispatch_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Where each key goes, for the debug log (--debug): tree or view,
@@ -1018,9 +1005,6 @@ impl App {
             self.confirm_quit = false;
             let yes = matches!(key.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter);
             return Ok(yes.then_some(Action::Quit));
-        }
-        if self.view.is_overlay() {
-            return self.dispatch_view_key(key);
         }
         if !self.view_captures_text() && self.layout_key(key) {
             return Ok(None);
@@ -1050,29 +1034,20 @@ impl App {
         self.dispatch_view_key(key)
     }
 
-    /// The view's component, unless an overlay or the dashboard is shown
+    /// The view's component, unless the dashboard is shown
     fn shown(&self) -> Option<&dyn Component> {
         match self.view {
             View::Cluster | View::Hint | View::KubeSpanMatrix => None,
-            _ if self.view.is_overlay() => None,
             _ => self.component.as_ref().map(ViewComponent::component),
         }
     }
 
-    /// The component that gets the view's keys and actions: the overlay,
-    /// the dashboard, or the view's component
+    /// The component that gets the view's keys and actions: the
+    /// dashboard, or the view's component
     fn active_mut(&mut self) -> Option<&mut dyn Component> {
         match self.view {
             View::Cluster => Some(&mut self.cluster),
             View::Hint | View::KubeSpanMatrix => None,
-            View::NodeOperations => self
-                .node_operations
-                .as_mut()
-                .map(|c| c as &mut dyn Component),
-            View::RollingOperations => self
-                .rolling_operations
-                .as_mut()
-                .map(|c| c as &mut dyn Component),
             _ => self.component.as_mut().map(ViewComponent::component_mut),
         }
     }
@@ -1182,7 +1157,7 @@ impl App {
         }
     }
 
-    /// Route a key press to the component on the right (or the overlay)
+    /// Route a key press to the component on the right
     fn dispatch_view_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if matches!(self.view, View::Hint | View::KubeSpanMatrix) {
             return Ok(match key.code {
@@ -1200,7 +1175,6 @@ impl App {
     /// that pane the keyboard. The tree, the dashboard and the node info view
     /// handle the mouse themselves; other views get the wheel as Up/Down.
     fn dispatch_mouse(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        let overlay = self.view.is_overlay();
         let at = |r: Rect| {
             mouse.column >= r.x
                 && mouse.column < r.x + r.width
@@ -1208,7 +1182,7 @@ impl App {
                 && mouse.row < r.y + r.height
         };
         let click = matches!(mouse.kind, MouseEventKind::Down(_));
-        if !overlay && (self.view == View::Cluster || at(self.tree_area)) {
+        if self.view == View::Cluster || at(self.tree_area) {
             // Clicking a node or group row keeps the keyboard where it was
             // (the view follows the selection); a menu entry opens its view
             // with the keyboard in it, like Enter; empty space in the pane
@@ -1229,10 +1203,10 @@ impl App {
             }
             return action;
         }
-        if !overlay && !at(self.view_area) {
+        if !at(self.view_area) {
             return Ok(None);
         }
-        if click && !overlay {
+        if click {
             self.focus_view();
         }
         if self.view == View::NodeInfo
@@ -1240,7 +1214,7 @@ impl App {
         {
             return node_info.handle_mouse_event(mouse);
         }
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && !overlay {
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             // The click selects the row under it; a second click on the same
             // cell opens it, like Enter
             self.view_mouse(mouse)?;
@@ -1290,17 +1264,19 @@ impl App {
     }
 
     /// Header, nodes pane and key line from the cluster component, the
-    /// current view on the right, and an operations overlay on top
+    /// current view on the right
     fn draw_workspace(&mut self, frame: &mut Frame, area: Rect) {
-        let overlay = self.view.is_overlay();
-        let base = if overlay {
-            self.overlay_return.clone()
-        } else {
-            self.view.clone()
-        };
+        self.cluster
+            .set_run_status(crate::operations::header_status(&self.runs));
+        let base = self.view.clone();
         let dashboard = base == View::Cluster;
-        let view_focused = self.view_has_focus && !dashboard && !overlay;
-        let hints = if self.confirm_quit {
+        let view_focused = self.view_has_focus && !dashboard;
+        let refused = self
+            .quit_refused
+            .is_some_and(|t| t.elapsed() < QUIT_REFUSED_SHOWN);
+        let hints = if refused {
+            Some(self.quit_refused_line())
+        } else if self.confirm_quit {
             Some(quit_question())
         } else if view_focused {
             self.view_key_hints()
@@ -1357,9 +1333,6 @@ impl App {
                     let _ = c.component_mut().draw(frame, right);
                 }
             }
-        }
-        if overlay && let Some(c) = self.active_mut() {
-            let _ = c.draw(frame, area);
         }
     }
 
@@ -1450,6 +1423,35 @@ impl App {
     }
 
     /// Name of the selected cluster's talosconfig context
+    /// Whether quitting may go ahead: nothing runs, or this is the second
+    /// Ctrl+C within `QUIT_ANYWAY` (a hung run must never trap the user;
+    /// its file then shows it as interrupted)
+    fn may_quit(&mut self) -> bool {
+        if crate::operations::running_contexts(&self.runs).is_empty() {
+            return true;
+        }
+        if self.quit_refused.is_some_and(|t| t.elapsed() < QUIT_ANYWAY) {
+            return true;
+        }
+        self.quit_refused = Some(std::time::Instant::now());
+        false
+    }
+
+    fn quit_refused_line(&self) -> Line<'static> {
+        let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
+        let what = crate::operations::header_status(&self.runs).unwrap_or_default();
+        Line::from(vec![
+            Span::styled(format!("{what}: "), Style::default().fg(Color::Yellow)),
+            Span::raw("cancel it in Operations ("),
+            key("<o>"),
+            Span::raw(", "),
+            key("<x>"),
+            Span::raw(") first, or "),
+            key("<Ctrl+C>"),
+            Span::raw(" again to quit"),
+        ])
+    }
+
     fn context(&self) -> Option<String> {
         self.cluster.current_context_name().map(str::to_string)
     }
@@ -1494,10 +1496,7 @@ impl App {
     /// Show the view for the current selection once it has rested for
     /// `FOLLOW_DELAY`
     async fn follow_selection(&mut self) -> Result<()> {
-        if matches!(
-            self.view,
-            View::Cluster | View::NodeOperations | View::RollingOperations
-        ) {
+        if self.view == View::Cluster {
             return Ok(());
         }
         let key = self.scope_key(self.pane);
@@ -1584,29 +1583,20 @@ impl App {
     async fn handle_action(&mut self, action: Action) -> Result<()> {
         match action {
             Action::Quit => {
-                self.should_quit = true;
+                if self.may_quit() {
+                    self.should_quit = true;
+                }
             }
-            Action::Back => match self.view {
-                // An overlay closes onto the view under it
-                View::NodeOperations => {
-                    self.node_operations = None;
-                    self.view = std::mem::replace(&mut self.overlay_return, View::Cluster);
+            // Back to the group view a node was opened from, else the view
+            // hands the keyboard back to the tree and stays shown
+            Action::Back => {
+                if let Some((selection, _)) = self.drill_return.take() {
+                    self.cluster.restore_selection(selection);
+                    self.cluster.set_back_hint(None);
+                    return Box::pin(self.retarget()).await;
                 }
-                View::RollingOperations => {
-                    self.rolling_operations = None;
-                    self.view = std::mem::replace(&mut self.overlay_return, View::Cluster);
-                }
-                // Back to the group view a node was opened from, else the
-                // view hands the keyboard back to the tree and stays shown
-                _ => {
-                    if let Some((selection, _)) = self.drill_return.take() {
-                        self.cluster.restore_selection(selection);
-                        self.cluster.set_back_hint(None);
-                        return Box::pin(self.retarget()).await;
-                    }
-                    self.view_has_focus = false;
-                }
-            },
+                self.view_has_focus = false;
+            }
             Action::ShowKubeSpan(hostname, address) => {
                 self.leave_view();
                 let mut network = NetworkStatsComponent::new_kubespan(hostname, address.clone());
@@ -1683,13 +1673,8 @@ impl App {
                 let started = std::time::Instant::now();
                 match (&self.view, &mut self.component) {
                     (View::Cluster, _) => self.cluster.refresh()?,
-                    (View::NodeOperations, _) => {
-                        if let Some(node_ops) = &mut self.node_operations {
-                            node_ops.refresh();
-                        }
-                    }
                     // Nothing of their own to refresh
-                    (View::RollingOperations | View::Hint | View::KubeSpanMatrix, _) => {}
+                    (View::Hint | View::KubeSpanMatrix, _) => {}
                     // Starts a pending restart / file view / capture and a
                     // stats fetch in the background
                     (_, Some(ViewComponent::Network(network))) => network.refresh(),
@@ -1826,6 +1811,33 @@ impl App {
                     NavMenuItem::Processes,
                     ViewComponent::Processes(Box::new(processes)),
                     load,
+                );
+            }
+            Action::ShowOperations(title, nodes, group) => {
+                self.leave_view();
+                tracing::info!("ShowOperations: '{}' ({} node(s))", title, nodes.len());
+                // Runs are per talosconfig context; the cluster's name when
+                // the config has none
+                let context = self
+                    .context()
+                    .unwrap_or_else(|| self.cluster.target_title(false));
+                let mut operations = OperationsComponent::new(
+                    context,
+                    title,
+                    nodes,
+                    group,
+                    std::sync::Arc::clone(&self.runs),
+                );
+                operations.set_log_wrap(self.settings.log_wrap);
+                if let Some(client) = self.cluster.client() {
+                    operations.set_client(client.clone(), self.cluster.control_plane_ip());
+                } else {
+                    operations.set_error("Not connected to the cluster".to_string());
+                }
+                self.show_component(
+                    NavMenuItem::Operations,
+                    ViewComponent::Operations(Box::new(operations)),
+                    false,
                 );
             }
             Action::ShowContainers(title, nodes) => {
@@ -2060,77 +2072,6 @@ impl App {
                     node_info.set_error("Not connected to the cluster".to_string());
                 }
                 self.show_component(item, ViewComponent::NodeInfo(Box::new(node_info)), load);
-            }
-            Action::ShowNodeOperations(hostname, address, is_controlplane) => {
-                // Show node operations overlay
-                tracing::info!("Viewing node operations for: {} ({})", hostname, address);
-
-                let mut node_ops = NodeOperationsComponent::new(hostname, address, is_controlplane);
-
-                // Set the Talos client
-                if let Some(talos_client) = self.cluster.client() {
-                    node_ops.set_client(talos_client.clone());
-                }
-
-                // Load safety checks (in the background)
-                node_ops.refresh();
-
-                self.node_operations = Some(node_ops);
-                if !self.view.is_overlay() {
-                    self.overlay_return = self.view.clone();
-                }
-                self.view = View::NodeOperations;
-            }
-            Action::ShowRollingOperations(nodes) => {
-                // Show rolling operations overlay
-                tracing::info!("Viewing rolling operations for {} nodes", nodes.len());
-
-                let mut rolling_ops = RollingOperationsComponent::new();
-
-                // Convert node tuples to RollingNodeInfo
-                let node_infos: Vec<RollingNodeInfo> = nodes
-                    .into_iter()
-                    .map(|(hostname, address, is_controlplane)| RollingNodeInfo {
-                        hostname,
-                        address,
-                        is_controlplane,
-                        selection_order: None,
-                    })
-                    .collect();
-
-                rolling_ops.set_nodes(node_infos);
-
-                // Set clients
-                let cp_ip = self.cluster.control_plane_ip();
-                if let Some(talos_client) = self.cluster.client() {
-                    rolling_ops.set_talos_client(talos_client.clone());
-
-                    // Pin the K8s client to a control plane node of the launched
-                    // context. Rolling ops cordon/drain by node name through this
-                    // client — targeting the wrong cluster (an ambient KUBECONFIG)
-                    // would drain the wrong nodes.
-                    //
-                    // Created in the background (see `poll_view_setup`).
-                    let talos_client = talos_client.clone();
-                    if let Some(h) = self.rolling_k8s_fetch.take() {
-                        h.abort();
-                    }
-                    self.rolling_k8s_fetch = Some(tokio::spawn(async move {
-                        crate::components::diagnostics::k8s::connect(
-                            &talos_client,
-                            cp_ip.as_deref(),
-                        )
-                        .await
-                        .ok()
-                        .map(|(k8s, _source)| k8s)
-                    }));
-                }
-
-                self.rolling_operations = Some(rolling_ops);
-                if !self.view.is_overlay() {
-                    self.overlay_return = self.view.clone();
-                }
-                self.view = View::RollingOperations;
             }
             _ => {
                 // Forward to current component

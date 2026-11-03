@@ -940,7 +940,7 @@ fn press(comp: &mut ClusterComponent, code: KeyCode) {
 /// keys or the app's layout keys
 #[test]
 fn menu_hotkeys_are_unique_and_free() {
-    let reserved = ["q", "r", "j", "k", "l", "o", "O", "a", " ", "Z", "[", "]"];
+    let reserved = ["q", "r", "j", "k", "l", "a", " ", "Z", "[", "]"];
     let mut seen = std::collections::HashSet::new();
     for item in NavMenuItem::ALL {
         let key = item.hotkey();

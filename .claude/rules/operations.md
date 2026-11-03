@@ -1,8 +1,9 @@
 ---
 paths:
   - "crates/talos9s-tui/src/audit.rs"
-  - "crates/talos9s-tui/src/components/node_operations.rs"
-  - "crates/talos9s-tui/src/components/rolling_operations.rs"
+  - "crates/talos9s-tui/src/operations.rs"
+  - "crates/talos9s-tui/src/components/operations.rs"
+  - "crates/talos9s-core/src/operations.rs"
   - "crates/talos9s-tui/src/components/lifecycle.rs"
   - "crates/talos9s-tui/src/components/wizard.rs"
   - "crates/talos9s-tui/src/components/network/services.rs"
@@ -31,3 +32,10 @@ What talos9s changes on a cluster, and the guards each change needs.
 - **Fixes are not operations:** diagnostic fixes and storage remedies are
   shown and copied, never run (`CLAUDE.md`).
 - Live tests open these dialogs and cancel with `n`; never confirm one.
+- **One engine** (`crate::operations`, `plans/operations.md`): cordon,
+  uncordon, drain, reboot and shutdown on one node or node by node, run in
+  the app's `Runs` registry (one per context) so they outlive the view.
+  Every step is a line in the run file (masked, flushed); a failure after
+  cordoning uncordons again; cancel acts between steps, never inside one.
+- **Quitting** waits for running operations: a second `Ctrl+C` within
+  `QUIT_ANYWAY` quits anyway, and the run shows as interrupted.

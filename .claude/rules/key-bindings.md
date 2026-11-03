@@ -50,15 +50,16 @@ Don't use `c` for copy: it's packet capture in the network views.
 ## Tree
 
 - Menu hotkeys live in `NavMenuItem::hotkey` (`components/cluster/mod.rs`).
-  Uppercase means the across-nodes version of a view (`L` logs merged, `O`
-  rolling operations). `D`, `K` and `C` are uppercase only because the
+  Uppercase means the across-nodes version of a view (`L` logs merged).
+  `D`, `K` and `C` are uppercase only because the
   lowercase letter was taken; don't add more like that.
-- Keys reserved in the tree, not for menu entries: `q r j k l o O a Space Z [ ]`
+- Keys reserved in the tree, not for menu entries: `q r j k l a Space Z [ ]`
   (checked in `cluster/tests.rs`). Free lowercase letters: `f g h i u z`.
 - `q` never quits at once: from a view it returns to the Dashboard, in the
   Dashboard's services list it hands the keyboard back, and on the Dashboard
   it asks "Quit talos9s?" (`App::confirm_quit`; `y`/`Enter` quits, any other
-  key cancels). `Ctrl+C` quits from anywhere.
+  key cancels). `Ctrl+C` quits from anywhere, except while an operation
+  runs: then it says so, and a second `Ctrl+C` within 2 s quits.
 
 ## Keys a view owns
 
@@ -70,7 +71,7 @@ filter of the same kind (`L` listening only next to `A` all in connections).
 ## Actions that change state
 
 - Never on a lowercase key next to a harmless one; use uppercase (`R`
-  restart) or the operations dialog (`o`).
+  restart) or the Operations view (`o`).
 - Always a confirmation (`<y>` / `<n/Esc>`) and `audit_start` /
   `audit_success` / `audit_failure` (`crate::audit`), as drain, reboot and
   service restart do.
