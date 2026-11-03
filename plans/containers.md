@@ -50,15 +50,10 @@ Today (`components/node_info.rs`, the Containers tab):
 ```
 ┌ Containers · bc (containerd, no Kubernetes API needed) ──────────── <W> ──┐
 │ 4 nodes · 212 running · 3 exited · 1 other · bc4: timed out after 10s       │
-│   NODE  NAMESPACE    POD / CONTAINER                 IMAGE          STATUS  │
-│ ▾ bc1   system       apid                            ghcr.io/sidero RUNNING │
-│ ▾ bc1   kube-system  cilium-7xk2p                                   2/2     │
-│           cilium-agent                               quay.io/cil..  RUNNING │
-│           mount-cgroup                               quay.io/cil..  EXITED  │
-│ ▾ bc2   web          gateway-7f9c-x2                                0/1     │
-│           gateway                                    reg/gateway    EXITED  │
-│ ─────────────────────────────────────────────────────────────────────────── │
-│ logs: web/gateway-7f9c-x2 gateway on bc2 (talosctl -n bc2 logs -k …)        │
+│   NODE  NAMESPACE    POD             CONTAINER     IMAGE          PID STATUS│
+│ ● bc1   system                       apid          ghcr.io/sidero 1203 RUNN.│
+│ ● bc1   kube-system  cilium-7xk2p    cilium-agent  quay.io/cil..  2210 RUNN.│
+│ ● bc2   web          gateway-7f9c-x2 gateway       reg/gateway    3301 RUNN.│
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,50 +61,50 @@ Today (`components/node_info.rs`, the Containers tab):
 
 Nodes read, running / exited / other counts, and each failed node's error
 ("bc4: timed out after 10s"). Kubernetes containers missing on a node
-without kubelet only notes it, as today. The warp hint at the right end.
+without kubelet only notes it. The warp hint at the right end.
 
 ### The list
 
-- Rows: pods (from the CRI sandboxes) with their containers indented, and
-  system services under a `system` namespace. One row per pod keeps a
-  DaemonSet on four nodes as four short entries.
-- Columns: NODE (off a single node), NAMESPACE, POD / CONTAINER, IMAGE,
-  PID, STATUS. A pod row's STATUS is `running/total`.
+- One row per container, flat: no pod rows, sandboxes left out. System
+  services are under a `system` namespace with an empty POD.
+- Columns: NODE (off a single node), NAMESPACE, POD, CONTAINER, IMAGE,
+  PID, STATUS.
 - Health color: running green; exited dimmed (finished init containers and
-  jobs exit normally, "no false positives"); other states yellow. A pod
-  whose containers have all exited and that isn't a job is still dimmed:
-  the API doesn't tell us why it exited, Workloads does.
-- `1`-`6` sort by column (NODE first) and header clicks, as in the pod list;
-  default NAMESPACE, then pod. Saved.
-- `A` shows exited containers too (default: hidden, an exited container
+  jobs exit normally, "no false positives"); other states yellow.
+- `1`-`7` sort by column (NODE first; without it the keys shift by one)
+  and header clicks; default NAMESPACE, then pod and container. Saved.
+- `A` shows exited containers too (default hidden: an exited container
   next to its running successor is noise). Saved.
 - `/` filters on node, namespace, pod, container and image.
 - `W` warps by namespace with the shared picker and the same per-context
   warp as Workloads and Volumes. `system` is offered as a namespace.
-- Enter on a pod folds or unfolds its containers.
+- `y` copies `talosctl -n ADDR logs --namespace cri ID`, or
+  `talosctl -n ADDR logs SERVICE` for a system service.
+- Enter focuses the container.
 
-### Logs pane
+### Focused container (Enter)
 
-The lower pane shows the selected row's logs, like the focused workload:
+The container's logs fill the view; Esc or `q` goes back to the list with
+the selection, filter and warp where they were.
 
-- A container: its logs; a pod: its containers merged by time; a system
-  service: its logs (as in the Logs view).
 - Read with the Talos Logs API: namespace `k8s.io`, driver CRI, the
   container id for pod containers; `system`, containerd for services.
-  Bounded by the same `POD_LOG_SOURCES_MAX`, `POD_LOG_TOTAL_LINES` and a
+  CRI lines lose their `stdout F` (`strip_cri`), service lines get an
+  RFC 3339 time (`service_time`). Bounded by `POD_LOG_TOTAL_LINES` and a
   timeout; read again while following the end.
-- Previous run: CRI keeps the last exited container of a pod, listed with
-  `A`; selecting it shows that run's logs. No `p` key needed.
-- Level filters, `/` search with `n`/`N`, `w` wrap (the shared setting),
-  `y` copy, `v` external viewer: the `LogPane` from Workloads, given a
-  second kind of source.
-- `y` on a row (outside the logs) copies `talosctl -n NODE logs -k ID` or
-  `talosctl -n NODE logs SERVICE`.
+- Exited containers' logs are readable (with `A`): that is the previous run.
+- The `LogPane` from Workloads: level filters `1`-`5`/`0`, `/` search with
+  `n`/`N`, `w` wrap (the shared setting, rows continue under the message),
+  `v` external viewer, wheel and `PgUp`/`PgDn` scroll, `V` selects lines
+  and `y` copies them. A bare `y` copies the talosctl command.
+- Time as `HH:MM:SS`, with the date (`MM-DD`) when the lines span days;
+  ANSI colour codes stripped.
 
 ### From Workloads
 
-When the Kubernetes API can't be reached, the Workloads error says "the
-Containers view (`C`) reads containerd directly".
+When the Kubernetes API can't be reached, the Workloads error says "The
+Containers view (C) reads containerd on the nodes directly, without the
+Kubernetes API".
 
 ## Data
 
