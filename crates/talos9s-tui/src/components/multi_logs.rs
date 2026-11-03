@@ -43,6 +43,9 @@ pub struct LogNode {
     pub ip: String,
     /// Services it runs; `None` when not known yet (every service is tried)
     pub services: Option<Vec<String>>,
+    /// The node's colour in the tree (`node_color`), so a node looks the
+    /// same in both; `None` picks by position in this list
+    pub color: Option<Color>,
 }
 
 /// Where one (node, service) stream is
@@ -103,6 +106,13 @@ const SERVICE_COLORS: &[Color] = &[
     Color::LightMagenta,
     Color::LightCyan,
 ];
+
+/// The colour of the `i`th node of a cluster (tree order), the same in the
+/// tree and in merged logs. Offset from the services' colours so a node
+/// and the first services differ
+pub fn node_color(i: usize) -> Color {
+    service_color(i + 3)
+}
 
 /// The palette color for the `i`th service or node, cycling
 fn service_color(i: usize) -> Color {
@@ -350,7 +360,7 @@ impl MultiLogsComponent {
                 name: n.name,
                 ip: n.ip,
                 services: n.services.map(|s| s.into_iter().collect()),
-                color: service_color(i + 3),
+                color: n.color.unwrap_or_else(|| node_color(i)),
                 active: true,
                 entry_count: 0,
             })
@@ -1161,12 +1171,10 @@ impl MultiLogsComponent {
         let items: Vec<ListItem> = filtered_services
             .iter()
             .map(|(_, s)| {
-                let indicator = if s.active { "●" } else { "○" };
-                let style = Style::default().fg(s.color);
+                let style = picked_style(Style::default().fg(s.color), s.active);
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(indicator, style),
-                    Span::raw(" "),
+                    crate::ui_ext::check_box(s.active),
                     Span::styled(&s.id, style),
                 ]))
             })
@@ -1182,7 +1190,8 @@ impl MultiLogsComponent {
                     .borders(Borders::ALL)
                     .border_style(border_style),
             )
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .highlight_symbol(crate::ui_ext::PICK_POINTER)
+            .highlight_style(crate::ui_ext::PICK_CURSOR);
 
         // Adjust selected index if filtering
         let mut adjusted_state = ListState::default();
@@ -1225,13 +1234,11 @@ impl MultiLogsComponent {
             .iter()
             .enumerate()
             .map(|(i, l)| {
-                let indicator = if l.active { "●" } else { "○" };
-                let style = Style::default().fg(level_color(l.level));
+                let style = picked_style(Style::default().fg(level_color(l.level)), l.active);
 
                 ListItem::new(Line::from(vec![
-                    Span::raw(format!("{} ", i + 1)).dim(),
-                    Span::styled(indicator, style),
-                    Span::raw(" "),
+                    Span::styled(format!("{} ", i + 1), crate::ui_ext::KEY),
+                    crate::ui_ext::check_box(l.active),
                     Span::styled(l.level.name(), style),
                     Span::raw(format!(" ({})", l.entry_count)).dim(),
                 ]))
@@ -1248,7 +1255,8 @@ impl MultiLogsComponent {
                     .borders(Borders::ALL)
                     .border_style(border_style),
             )
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .highlight_symbol(crate::ui_ext::PICK_POINTER)
+            .highlight_style(crate::ui_ext::PICK_CURSOR);
 
         frame.render_stateful_widget(list, panel_area, &mut self.levels_state);
         self.panel_lines = panel_lines(panel_area, self.levels_state.offset(), self.levels.len());
@@ -1261,11 +1269,9 @@ impl MultiLogsComponent {
             .iter()
             .enumerate()
             .map(|(ni, n)| {
-                let indicator = if n.active { "●" } else { "○" };
-                let style = Style::default().fg(n.color);
+                let style = picked_style(Style::default().fg(n.color), n.active);
                 let mut spans = vec![
-                    Span::styled(indicator, style),
-                    Span::raw(" "),
+                    crate::ui_ext::check_box(n.active),
                     Span::styled(n.name.clone(), style),
                     Span::raw(format!(" ({})", n.entry_count)).dim(),
                 ];
@@ -1295,7 +1301,8 @@ impl MultiLogsComponent {
                     .borders(Borders::ALL)
                     .border_style(border_style),
             )
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .highlight_symbol(crate::ui_ext::PICK_POINTER)
+            .highlight_style(crate::ui_ext::PICK_CURSOR);
         frame.render_stateful_widget(list, panel_area, &mut self.nodes_state);
         self.panel_lines = panel_lines(panel_area, self.nodes_state.offset(), self.nodes.len());
     }
@@ -2182,6 +2189,15 @@ impl Component for MultiLogsComponent {
     }
 }
 
+/// A pick list row's colour: its own when picked, dimmed when left out
+fn picked_style(style: Style, on: bool) -> Style {
+    if on {
+        style
+    } else {
+        style.patch(crate::ui_ext::PICK_DIM)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2195,6 +2211,7 @@ mod tests {
             name: name.to_string(),
             ip: format!("10.0.0.{}", name.len()),
             services: Some(vec!["etcd".to_string()]),
+            color: None,
         }
     }
 
@@ -2312,6 +2329,7 @@ mod tests {
                 name: ip.clone(),
                 ip: ip.clone(),
                 services: None,
+                color: None,
             })
             .collect();
         let services = vec!["etcd".to_string(), KERNEL_SERVICE.to_string()];

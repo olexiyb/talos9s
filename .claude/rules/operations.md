@@ -36,6 +36,12 @@ What talos9s changes on a cluster, and the guards each change needs.
   uncordon, drain, reboot and shutdown on one node or node by node, run in
   the app's `Runs` registry (one per context) so they outlive the view.
   Every step is a line in the run file (masked, flushed); a failure after
-  cordoning uncordons again; cancel acts between steps, never inside one.
+  cordoning uncordons again, but only a node this run cordoned (one
+  cordoned before stays so, a reboot's end too); cancel acts between
+  steps, never inside one.
+- **Which nodes can run what:** `operations::blocked` from `NodeFacts`
+  (Talos probe, Kubernetes node, pods). Unknown never blocks (no false
+  positives); cordon and drain go through Kubernetes, so a dead node can
+  be cordoned and drained.
 - **Quitting** waits for running operations: a second `Ctrl+C` within
   `QUIT_ANYWAY` quits anyway, and the run shows as interrupted.

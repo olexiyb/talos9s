@@ -69,6 +69,7 @@ impl NetworkStatsComponent {
                 name: self.hostname.clone(),
                 ip: self.address.clone(),
                 services: Some(service_vec.clone()),
+                color: None,
             }],
             service_vec.clone(),
             service_vec, // from network view we only know about this service

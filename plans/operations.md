@@ -87,15 +87,17 @@ Shelling out to `talosctl reboot` would lose them. So:
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Top:** the operations for the target, named the same on a node and
-  a group: Cordon, Uncordon, Drain, Reboot, Shutdown (node only), Service
-  restart (node only, pick the service). On a group or cluster an
+- **Top:** an Operation drop list and the target's nodes as check boxes
+  (a group starts with none checked, "all nodes" checks every one; a
+  single node is checked already). Operations, named the same on a node
+  and a group: Cordon, Uncordon, Drain, Reboot, Shutdown (node only),
+  Service restart (node only, pick the service). On a group or cluster an
   operation runs node by node (see "Operations on a group"). Unavailable ones are dimmed with the
   reason (`needs the Kubernetes API`).
 - **History:** newest first; NODE is a node, `3 nodes` for a rolling run.
   Status colors: running cyan, ok green, failed red, cancelled dim.
-- **Starting:** Enter on an operation → its options (drain options as
-  today) → the confirmation dialog naming the target and showing the
+- **Starting:** Enter on a node row → the confirmation dialog naming
+  the checked nodes (the group when all are) and showing the
   command(s) → `y` starts it and opens the run; `n`/`Esc` cancels.
 - **A run (Enter on a history row or a started run):** header (operation,
   target, context, started, took, status, command) and the output in the

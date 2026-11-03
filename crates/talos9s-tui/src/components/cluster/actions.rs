@@ -233,6 +233,7 @@ impl ClusterComponent {
                 services: self
                     .get_node_services_for(cluster_idx, name)
                     .map(|services| services.iter().map(|s| s.id.clone()).collect()),
+                color: Some(self.node_color(cluster_idx, name)),
             })
             .collect();
         // Services of the nodes, in first-seen order

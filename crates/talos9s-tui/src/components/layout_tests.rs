@@ -101,6 +101,7 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
                         name: n.into(),
                         ip: a.clone(),
                         services: Some(vec!["apid".into()]),
+                        color: None,
                     })
                     .to_vec(),
                 &["apid".into()],

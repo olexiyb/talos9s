@@ -126,15 +126,25 @@ pub fn title_with_refresh(
     refreshing: bool,
     color: Color,
 ) -> ratatui::text::Line<'static> {
+    title_with_activity(title, refreshing.then_some("refreshing"), color)
+}
+
+/// A window title with a spinner and what goes on (`refreshing`,
+/// `running Reboot`) appended, when something does
+pub fn title_with_activity(
+    title: &str,
+    activity: Option<&str>,
+    color: Color,
+) -> ratatui::text::Line<'static> {
     use ratatui::style::Style;
     use ratatui::text::Span;
     let mut spans = vec![Span::styled(
         format!(" {title} "),
         Style::default().fg(color),
     )];
-    if refreshing {
+    if let Some(activity) = activity {
         spans.push(Span::styled(
-            format!("{} refreshing ", spinner()),
+            format!("{} {activity} ", spinner()),
             Style::default().dim(),
         ));
     }
@@ -563,6 +573,25 @@ pub const KEY: Style = Style::new().fg(Color::Cyan);
 /// The answer keys of a confirmation dialog: `<y>` goes ahead, `<n>` backs out
 pub const KEY_YES: Style = Style::new().fg(Color::Green);
 pub const KEY_NO: Style = Style::new().fg(Color::Red);
+
+/// The row under the cursor in a list of things to pick (log levels, nodes,
+/// namespaces): bold cyan with `PICK_POINTER` in front. Reverse video is
+/// unreadable on a dimmed row, and a dimmed row is what "not picked" is
+pub const PICK_CURSOR: Style = Style::new()
+    .fg(Color::Cyan)
+    .add_modifier(ratatui::style::Modifier::BOLD);
+pub const PICK_POINTER: &str = "▶";
+
+/// A pick list's box: a green `[✓]` when picked, a dim `[ ]` when not.
+/// Put `PICK_DIM` on the rest of an unpicked row
+pub fn check_box(on: bool) -> Span<'static> {
+    if on {
+        Span::styled("[✓] ", Style::new().fg(Color::Green))
+    } else {
+        Span::styled("[ ] ", PICK_DIM)
+    }
+}
+pub const PICK_DIM: Style = Style::new().add_modifier(ratatui::style::Modifier::DIM);
 
 /// `line` cut to `width` columns with `…` at the end when it is wider, so a
 /// narrow pane shows that something was cut ("Control Pl…")

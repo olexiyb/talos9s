@@ -173,12 +173,12 @@ impl ClusterComponent {
                         } else {
                             " "
                         };
+                        // The node's colour, as in merged logs
+                        let color = self.node_color(cluster_idx, &v.node);
                         let name_style = if is_node_selected {
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD)
+                            Style::default().fg(color).add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::White)
+                            Style::default().fg(color)
                         };
 
                         lines.push(Line::from(vec![
@@ -242,12 +242,12 @@ impl ClusterComponent {
                         } else {
                             " "
                         };
+                        // The node's colour, as in merged logs
+                        let color = self.node_color(cluster_idx, &v.node);
                         let name_style = if is_node_selected {
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD)
+                            Style::default().fg(color).add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::White)
+                            Style::default().fg(color)
                         };
 
                         lines.push(Line::from(vec![

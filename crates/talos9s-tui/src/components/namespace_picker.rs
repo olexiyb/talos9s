@@ -170,8 +170,8 @@ impl NamespacePicker {
             .border_style(Style::default().fg(Color::Cyan))
             .title(Line::from(title))
             .title_bottom(Line::from(filter));
-        // Borders, the digit and the marks take 7; the count 12
-        let name_width = usize::from(width.saturating_sub(19));
+        // Borders, the pointer, the digit and the box take 9; the count 12
+        let name_width = usize::from(width.saturating_sub(21));
         let singular = self.what.strip_suffix('s').unwrap_or(self.what);
         let items: Vec<ListItem> = entries
             .iter()
@@ -185,10 +185,12 @@ impl NamespacePicker {
                     .single()
                     .is_some_and(|ns| self.marked.iter().any(|m| m == ns));
                 let current = e.warp == self.current;
-                let mark = match (marked, current) {
-                    (true, _) => Span::styled("■ ", Style::default().fg(Color::Magenta)),
-                    (false, true) => Span::styled("● ", Style::default().fg(Color::Green)),
-                    (false, false) => Span::raw("  "),
+                // Only single namespaces can be marked; the current warp
+                // shows by its name in green
+                let mark = if e.single().is_some() {
+                    crate::ui_ext::check_box(marked)
+                } else {
+                    Span::raw("    ")
                 };
                 let name = if e.warp.is_empty() {
                     "all namespaces".to_string()
@@ -204,6 +206,11 @@ impl NamespacePicker {
                 } else {
                     Style::default()
                 };
+                let style = if current {
+                    style.fg(Color::Green)
+                } else {
+                    style
+                };
                 ListItem::new(Line::from(vec![
                     digit,
                     mark,
@@ -213,11 +220,10 @@ impl NamespacePicker {
             })
             .collect();
         let mut state = ListState::default().with_selected(Some(self.selected));
-        let list = List::new(items).block(block).highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        );
+        let list = List::new(items)
+            .block(block)
+            .highlight_symbol(crate::ui_ext::PICK_POINTER)
+            .highlight_style(crate::ui_ext::PICK_CURSOR);
         frame.render_stateful_widget(list, popup, &mut state);
     }
 }

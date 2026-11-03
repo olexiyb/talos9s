@@ -23,6 +23,39 @@ than replacing it:
 | **k9s** | Kubernetes (`:6443`) | "Why won't my pod start?" |
 | **talos9s** | Talos OS (`:50000`) and the cluster around it | "Why won't my node join?", "Is it safe to reboot this node?" |
 
+## How it compares
+
+Checked against each project's source and README in November 2026
+(talos-pilot 0.1.11, its last release; t9s at its latest commit, October 2025).
+
+| | talos9s | [k9s](https://github.com/derailed/k9s) | [talos-pilot](https://github.com/Handfish/talos-pilot) | [t9s](https://github.com/alongwill/t9s) |
+|---|---|---|---|---|
+| Layer | Talos OS and the cluster around it | Kubernetes | Talos OS | Talos OS |
+| State | Released, active | Mature, very active | Released, upstream of talos9s | A 105-line prototype ("aspirational"); prints versions, disks and members, no UI |
+| Language, UI library | Rust, ratatui | Go, tview | Rust, ratatui | Go |
+| License | MIT | Apache-2.0 | MIT | MPL-2.0 |
+| Multi-cluster, all nodes at once | yes | one context at a time | yes | – |
+| Views across a node group (logs, network, disks, diagnostics) | yes | – | node by node | – |
+| Logs, processes, network, etcd | yes | pod logs | yes | – |
+| Packet capture | yes | – | yes | – |
+| KubeSpan | yes | – | peers in Network | – |
+| Disks and Talos partitions | yes | – | disks | – |
+| LINSTOR/DRBD and ZFS LocalPV checks | yes | – | – | – |
+| Machine config viewer (secrets masked) | yes | – | – | – |
+| Diagnostics with suggested fixes | yes, copied, never run | Popeye sanitizer | yes | – |
+| Drain, reboot, shutdown, rolling | yes | cordon, drain, delete, edit, shell, port-forward | drain, reboot, rolling | – |
+| Operation confirmation and audit log | yes | confirmation; `--readonly` flag | yes | – |
+| Mouse | clicks, double-clicks, wheel | optional, off by default | – | – |
+| Remembers where you left off | yes | per-context config | – | – |
+| Skins, plugins, custom hotkeys | – | yes | – | – |
+| Needs a kubeconfig | no, fetched from a node | yes | no | no |
+
+k9s answers questions about workloads, so use it next to the Talos tools, not
+instead of them. Compared with talos-pilot, talos9s adds the storage checks,
+the group and cluster views, the machine config viewer, the mouse and the
+remembered state, and tightens safety (suggested fixes are never applied,
+reboots check etcd members that are already down).
+
 ## Install
 
 Prebuilt binaries (macOS, Linux):
@@ -162,9 +195,22 @@ node and stops at the first failure.
 | Reboot | Drain, reboot, wait for Ready with a new boot ID, uncordon; on a group, one node at a time with etcd quorum checked before each control plane node |
 | Shutdown | Drain, power off; stays cordoned until you uncordon it (one node only) |
 
-- **Starting:** `Enter` on an operation opens a dialog with the nodes (on a group
-  none is picked: `Space` picks one, `a` all), the equivalent `kubectl`/`talosctl` commands, etcd
-  quorum and blocking PDBs; `y` starts it, `n`/`Esc` cancels.
+- **Starting:** pick the operation: `o` (or `Enter` or a click on it)
+  opens the drop list, `1`-`5` pick one directly; the cursor then moves to
+  the nodes. Check them with `Space` or a click (on a group none is checked,
+  "all nodes" checks every one; a single node is checked already). `Enter` opens
+  the confirmation: the checked nodes, the equivalent `kubectl`/`talosctl`
+  commands, etcd quorum and blocking PDBs; `y` starts it, `n`/`Esc` cancels.
+  The history's TARGET is the group when all its nodes ran, else the nodes.
+- **Node state:** each node row shows TALOS (up and its uptime, or
+  offline), K8S (Ready), SCHEDULE (cordoned or not), PODS (what a drain
+  evicts) and its last run, read every 15 s and when a run ends. A node the
+  operation can't run on shows `[-]` and why: Cordon needs an uncordoned
+  node, Uncordon a cordoned one, Reboot and Shutdown a node answering the
+  Talos API (Cordon and Drain also work on a node that is down). A state
+  that can't be read blocks nothing.
+- A node cordoned before a Drain, Reboot or Shutdown stays cordoned: a run
+  uncordons only what it cordoned itself.
 - **Runs in the background:** switch views or nodes freely; the header shows
   the run and its step on every view. One run at a time per cluster context.
   `x` cancels after the current step (a failed or cancelled node is uncordoned

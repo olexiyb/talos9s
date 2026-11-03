@@ -66,6 +66,18 @@ impl ClusterComponent {
         }
     }
 
+    /// The node's colour: its place in the cluster's tree (control plane,
+    /// then workers), so it stays the same whichever group is selected
+    pub(crate) fn node_color(&self, cluster_idx: usize, node: &str) -> Color {
+        let position = self
+            .controlplane_nodes_for(cluster_idx)
+            .into_iter()
+            .chain(self.worker_nodes_for(cluster_idx))
+            .position(|(_, v)| v.node == node)
+            .unwrap_or(0);
+        crate::components::multi_logs::node_color(position)
+    }
+
     /// Get control plane nodes for a cluster (discovery machineType, else etcd service)
     pub(super) fn controlplane_nodes_for(&self, cluster_idx: usize) -> Vec<(usize, &VersionInfo)> {
         let Some(cluster) = self.clusters.get(cluster_idx) else {

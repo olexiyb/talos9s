@@ -1301,12 +1301,18 @@ impl App {
             // The title says when a refresh is in flight (streams aside)
             let refreshing = self.refresh_job.is_some()
                 || matches!(&self.component, Some(ViewComponent::Network(n)) if n.refreshing());
+            // Operations: a run going in this cluster, as a refresh is shown
+            let running = match &self.component {
+                Some(ViewComponent::Operations(o)) => o.running_here(),
+                _ => None,
+            };
+            let activity = running.or_else(|| refreshing.then(|| "refreshing".to_string()));
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(accent))
-                .title(crate::ui_ext::title_with_refresh(
+                .title(crate::ui_ext::title_with_activity(
                     &self.pane_title,
-                    refreshing,
+                    activity.as_deref(),
                     if view_focused {
                         Color::Cyan
                     } else {
