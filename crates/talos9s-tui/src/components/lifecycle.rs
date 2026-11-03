@@ -977,6 +977,7 @@ impl LifecycleComponent {
         // K8s source info (show where kubeconfig came from)
         let k8s_source_text = match &self.k8s_source {
             Some(KubeconfigSource::Environment(_)) => "via KUBECONFIG".to_string(),
+            Some(KubeconfigSource::File { context, .. }) => format!("via --kubeconfig ({context})"),
             Some(KubeconfigSource::TalosNode(node)) => format!("via node {node}"),
             Some(KubeconfigSource::Unavailable(err)) => {
                 // Truncate long error messages
@@ -987,7 +988,11 @@ impl LifecycleComponent {
         };
 
         let k8s_color = match &self.k8s_source {
-            Some(KubeconfigSource::Environment(_) | KubeconfigSource::TalosNode(_)) => Color::Green,
+            Some(
+                KubeconfigSource::Environment(_)
+                | KubeconfigSource::TalosNode(_)
+                | KubeconfigSource::File { .. },
+            ) => Color::Green,
             _ => Color::DarkGray,
         };
 

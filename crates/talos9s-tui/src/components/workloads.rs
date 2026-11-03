@@ -561,7 +561,7 @@ impl WorkloadHealthComponent {
                 }
             }
             Err(e) => {
-                errors.push(format!("Deployments: {e}"));
+                errors.push(format!("Deployments: {}", crate::kube_list::error_text(&e)));
                 unavailable.push(WorkloadKind::Deployment);
             }
         }
@@ -587,7 +587,10 @@ impl WorkloadHealthComponent {
                 }
             }
             Err(e) => {
-                errors.push(format!("StatefulSets: {e}"));
+                errors.push(format!(
+                    "StatefulSets: {}",
+                    crate::kube_list::error_text(&e)
+                ));
                 unavailable.push(WorkloadKind::StatefulSet);
             }
         }
@@ -610,7 +613,7 @@ impl WorkloadHealthComponent {
                 }
             }
             Err(e) => {
-                errors.push(format!("DaemonSets: {e}"));
+                errors.push(format!("DaemonSets: {}", crate::kube_list::error_text(&e)));
                 unavailable.push(WorkloadKind::DaemonSet);
             }
         }
@@ -629,14 +632,17 @@ impl WorkloadHealthComponent {
                     .collect(),
             ),
             Err(e) => {
-                errors.push(format!("Pods: {e}"));
+                errors.push(format!("Pods: {}", crate::kube_list::error_text(&e)));
                 None
             }
         };
         let rs_owners: Option<ReplicaSetOwners> = match replicasets {
             Ok(list) => Some(replicaset_owners(list.items)),
             Err(e) => {
-                errors.push(format!("ReplicaSets: {e} (Deployments' pods unknown)"));
+                errors.push(format!(
+                    "ReplicaSets: {} (Deployments' pods unknown)",
+                    crate::kube_list::error_text(&e)
+                ));
                 None
             }
         };

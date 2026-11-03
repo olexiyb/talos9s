@@ -37,6 +37,13 @@ struct Cli {
     #[arg(long)]
     config: Option<String>,
 
+    /// Use only this kubeconfig for Kubernetes, as its identity (e.g. your
+    /// OIDC user), instead of the admin kubeconfig fetched from a control
+    /// plane node. The context whose CA matches the cluster is used; with
+    /// none, the Kubernetes views show the error
+    #[arg(long, env = "TALOS9S_KUBECONFIG")]
+    kubeconfig: Option<std::path::PathBuf>,
+
     /// Enable debug logging
     #[arg(short, long)]
     debug: bool,
@@ -116,6 +123,16 @@ async fn main() -> Result<()> {
         if let Some(cfg) = &cli.config {
             tracing::info!("Using config: {}", cfg);
         }
+    }
+
+    if let Some(path) = cli.kubeconfig {
+        // Fail before the TUI starts: a typo would otherwise show up as an
+        // error in every Kubernetes view
+        if let Err(e) = std::fs::metadata(&path) {
+            color_eyre::eyre::bail!("--kubeconfig {}: {e}", path.display());
+        }
+        tracing::info!("Using kubeconfig: {}", path.display());
+        talos9s_tui::components::diagnostics::k8s::set_kubeconfig_override(path);
     }
 
     // Run the TUI

@@ -90,12 +90,20 @@ nix shell github:olexiyb/talos9s         # put it on PATH
 
 You need a talosconfig (`~/.talos/config` or `$TALOSCONFIG`) and network
 access to your nodes on port 50000. The Kubernetes views fetch a kubeconfig
-through the Talos API, so no separate kubeconfig is needed.
+through the Talos API, so no separate kubeconfig is needed. A context in your
+`KUBECONFIG` with the same cluster CA is used instead when it works.
+
+To see and act on Kubernetes as your own identity (an OIDC user, a
+read-only role) instead of the admin one, pass `--kubeconfig` (or set
+`TALOS9S_KUBECONFIG`). Only that file is used, with the context whose CA
+matches the cluster; when it has none, or its user may not list something,
+the views say so rather than fall back to admin.
 
 ```bash
 talos9s                         # every context in the talosconfig
 talos9s --context homelab       # one context
 talos9s --tail 1000             # lines of log history to load
+talos9s --kubeconfig ~/.kube/oidc.yaml   # Kubernetes as that kubeconfig's user
 talos9s --debug --log-file ~/talos9s.log
 ```
 

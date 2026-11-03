@@ -33,8 +33,80 @@ pub enum KubeconfigSource {
     Environment(Option<String>),
     /// Fetched from a specific Talos control plane node
     TalosNode(String),
+    /// The file `--kubeconfig` names, and the context in it for this cluster
+    File { path: String, context: String },
     /// Source unknown or unavailable
     Unavailable(String),
+}
+
+/// The kubeconfig `--kubeconfig` names. When set, every Kubernetes client
+/// uses only it: the user asked to act as that identity, so falling back to
+/// the node's admin kubeconfig would hide exactly what they want to see
+static KUBECONFIG_OVERRIDE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Use only the kubeconfig at `path` for Kubernetes (`--kubeconfig`). Set
+/// once at startup; later calls are ignored
+pub fn set_kubeconfig_override(path: std::path::PathBuf) {
+    let _ = KUBECONFIG_OVERRIDE.set(path);
+}
+
+fn kubeconfig_override() -> Option<&'static std::path::Path> {
+    KUBECONFIG_OVERRIDE.get().map(std::path::PathBuf::as_path)
+}
+
+/// A client from the `--kubeconfig` file, with the context in it whose CA
+/// is this cluster's (`cp_node_ip`'s served kubeconfig gives the CA). Errors
+/// rather than guess: a context for another cluster could drain the wrong
+/// nodes, and a fallback to admin credentials would hide what this identity
+/// may do. Without a node to pin to, the file's current context is used, as
+/// the ambient KUBECONFIG is.
+async fn client_from_override(
+    path: &std::path::Path,
+    talos_client: &TalosClient,
+    cp_node_ip: Option<&str>,
+) -> Result<(Client, KubeconfigSource), K8sError> {
+    let shown = path.display().to_string();
+    let mut kubeconfig = kube::config::Kubeconfig::read_from(path)
+        .map_err(|e| K8sError::KubeconfigParse(format!("{shown}: {e}")))?;
+    let (talos, context) = match cp_node_ip {
+        Some(node_ip) => {
+            let node_client = talos_client.with_node(node_ip);
+            let ca = fetch_node_kubeconfig(&node_client)
+                .await
+                .ok()
+                .as_ref()
+                .and_then(current_context_cluster_ca)
+                .ok_or_else(|| {
+                    K8sError::ClientCreate(format!(
+                        "can't check that {shown} is this cluster: node {node_ip} \
+                         didn't give its CA"
+                    ))
+                })?;
+            let context = context_for_ca(&kubeconfig, &ca).ok_or_else(|| {
+                K8sError::ClientCreate(format!(
+                    "{shown} has no context for this cluster (none with \
+                     certificate-authority-data matching node {node_ip}'s)"
+                ))
+            })?;
+            (node_client, context)
+        }
+        None => {
+            let context = kubeconfig
+                .current_context
+                .clone()
+                .ok_or_else(|| K8sError::ClientCreate(format!("{shown} has no current context")))?;
+            (talos_client.clone(), context)
+        }
+    };
+    kubeconfig.current_context = Some(context.clone());
+    let client = client_from_kubeconfig(kubeconfig, &talos).await?;
+    Ok((
+        client,
+        KubeconfigSource::File {
+            path: shown,
+            context,
+        },
+    ))
 }
 
 /// How long fetching a kubeconfig and building a client may take
@@ -104,6 +176,9 @@ pub async fn create_k8s_client_with_source(
     cp_node_ip: Option<&str>,
     kubeconfig_client: Option<&TalosClient>,
 ) -> Result<(Client, KubeconfigSource), K8sError> {
+    if let Some(path) = kubeconfig_override() {
+        return client_from_override(path, talos_client, cp_node_ip).await;
+    }
     if let Some(node_ip) = cp_node_ip {
         tracing::debug!("Targeting control plane node {} for kubeconfig", node_ip);
         let node_client = talos_client.with_node(node_ip);
@@ -198,6 +273,12 @@ pub async fn create_k8s_client_from_node(
     talos_client: &TalosClient,
     cp_node_ip: &str,
 ) -> Result<Client, K8sError> {
+    // `--kubeconfig` holds here too, still pinned to this node's cluster
+    if let Some(path) = kubeconfig_override() {
+        return Ok(client_from_override(path, talos_client, Some(cp_node_ip))
+            .await?
+            .0);
+    }
     let node_client = talos_client.with_node(cp_node_ip);
     fetch_kubeconfig_from_client(&node_client).await
 }
@@ -347,18 +428,24 @@ fn context_cluster_ca(kubeconfig: &kube::config::Kubeconfig, ctx_name: &str) -> 
     cluster.cluster.as_ref()?.certificate_authority_data.clone()
 }
 
+/// The context of `kubeconfig` whose cluster has CA `ca`: the current one
+/// when it matches, else the first that does
+fn context_for_ca(kubeconfig: &kube::config::Kubeconfig, ca: &str) -> Option<String> {
+    kubeconfig
+        .current_context
+        .iter()
+        .chain(kubeconfig.contexts.iter().map(|c| &c.name))
+        .find(|name| context_cluster_ca(kubeconfig, name).as_deref() == Some(ca))
+        .cloned()
+}
+
 /// The ambient `KUBECONFIG` (env var or default `~/.kube/config`) switched to a
 /// context whose cluster has CA `ca`, plus that context's name. The current
 /// context wins when it matches; otherwise the first matching context is used.
 /// `None` when no kubeconfig is present/readable or no context matches.
 fn ambient_context_for_ca(ca: &str) -> Option<(kube::config::Kubeconfig, String)> {
     let mut kubeconfig = kube::config::Kubeconfig::read().ok()?;
-    let context = kubeconfig
-        .current_context
-        .iter()
-        .chain(kubeconfig.contexts.iter().map(|c| &c.name))
-        .find(|name| context_cluster_ca(&kubeconfig, name).as_deref() == Some(ca))?
-        .clone();
+    let context = context_for_ca(&kubeconfig, ca)?;
     kubeconfig.current_context = Some(context.clone());
     Some((kubeconfig, context))
 }
@@ -2311,6 +2398,40 @@ users:
         let empty: kube::config::Kubeconfig =
             serde_saphyr::from_str("apiVersion: v1\nkind: Config\n").unwrap();
         assert_eq!(current_context_cluster_ca(&empty), None);
+    }
+
+    /// `--kubeconfig` and the ambient KUBECONFIG pick the context naming
+    /// this cluster by CA: the current one when it matches, else the first
+    /// that does, none when no context has it
+    #[test]
+    fn context_for_ca_prefers_current_then_any_match() {
+        let kubeconfig: kube::config::Kubeconfig = serde_saphyr::from_str(
+            "apiVersion: v1\nkind: Config\n\
+             current-context: other\n\
+             clusters:\n\
+             - name: a\n  cluster: {server: 'https://10.0.0.1:6443', certificate-authority-data: CA_A}\n\
+             - name: b\n  cluster: {server: 'https://10.0.0.2:6443', certificate-authority-data: CA_B}\n\
+             contexts:\n\
+             - name: admin\n  context: {cluster: a, user: u}\n\
+             - name: viewer\n  context: {cluster: a, user: u}\n\
+             - name: other\n  context: {cluster: b, user: u}\n\
+             users:\n- name: u\n  user: {token: t}\n",
+        )
+        .unwrap();
+        // Current context names another cluster: the first matching one
+        assert_eq!(
+            context_for_ca(&kubeconfig, "CA_A").as_deref(),
+            Some("admin")
+        );
+        assert_eq!(
+            context_for_ca(&kubeconfig, "CA_B").as_deref(),
+            Some("other")
+        );
+        assert_eq!(context_for_ca(&kubeconfig, "CA_C"), None);
+        // The current one wins when it matches
+        let mut current = kubeconfig;
+        current.current_context = Some("viewer".into());
+        assert_eq!(context_for_ca(&current, "CA_A").as_deref(), Some("viewer"));
     }
 
     /// Kubernetes roster entries map onto discovery members, dropping IP-less

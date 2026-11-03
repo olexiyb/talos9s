@@ -226,9 +226,10 @@ Each step is usable on its own; 1–3 already answer "where".
     (Unreachable API done, 2026-11-03: the view said "Loading the cluster's
     nodes…" for good; fixed, it now shows the connection error and opens
     once the cluster answers. The StatefulSets check is a render test,
-    `forbidden_list_degrades_to_unknown`: talos9s always fetches the admin
-    kubeconfig from a control plane node, so a restricted one can't be used
-    live without a new option.)
+    `forbidden_list_degrades_to_unknown`. Live with `--kubeconfig` and the
+    bc-oidc user, 2026-11-03, which may list none of them: the view shows
+    each list's 403 (the API server's message, no longer kube-rs's `Status`
+    dump), nothing falls back to admin.)
   - **Stale events:** a pod that failed and recovered shows no event and no
     issue.
     (Done in the bad-image test: the recovered Deployment's new pods show
@@ -253,5 +254,5 @@ Each step is usable on its own; 1–3 already answer "where".
 
 ## Still open
 
-- A live forbidden-list test needs a way to give talos9s a restricted
-  kubeconfig (e.g. a `--kubeconfig` option); none exists today.
+- Live, only StatefulSets forbidden (the rest readable) needs a role
+  without them on a test cluster; bc-oidc forbids every list.

@@ -173,6 +173,9 @@ fn kubectl_for(source: Option<&KubeconfigSource>, talos_context: Option<&str>) -
         Some(KubeconfigSource::Environment(Some(context))) => {
             format!("kubectl --context {context}")
         }
+        Some(KubeconfigSource::File { path, context }) => {
+            format!("kubectl --kubeconfig {path} --context {context}")
+        }
         _ => format!(
             "kubectl --context <context for {}>",
             talos_context.unwrap_or("this cluster")
