@@ -526,10 +526,12 @@ impl DeploymentReplicas {
 
 pub async fn list_cluster_nodes(client: &Client) -> Result<Vec<K8sNodeInfo>, K8sError> {
     let nodes: Api<Node> = Api::all(client.clone());
-    let list = nodes
-        .list(&ListParams::default())
-        .await
-        .map_err(|e| K8sError::ApiError(format!("Failed to list nodes: {e}")))?;
+    let list = nodes.list(&ListParams::default()).await.map_err(|e| {
+        K8sError::ApiError(format!(
+            "Failed to list nodes: {}",
+            crate::kube_list::error_text(&e)
+        ))
+    })?;
     Ok(list.items.iter().map(node_info_from).collect())
 }
 
@@ -587,7 +589,7 @@ pub async fn detect_cni_from_k8s(client: &Client) -> Result<CniInfo, K8sError> {
     let pod_list = pods
         .list(&ListParams::default())
         .await
-        .map_err(|e| K8sError::ApiError(e.to_string()))?;
+        .map_err(|e| K8sError::ApiError(crate::kube_list::error_text(&e)))?;
 
     Ok(cni_info_from(pod_list.items))
 }
@@ -726,7 +728,7 @@ pub async fn check_pod_health(
     let pod_list = pods
         .list(&params)
         .await
-        .map_err(|e| K8sError::ApiError(e.to_string()))?;
+        .map_err(|e| K8sError::ApiError(crate::kube_list::error_text(&e)))?;
 
     Ok(pod_health_from(
         &pod_list.items,
@@ -907,7 +909,7 @@ pub async fn check_pdb_health(client: &Client) -> Result<PdbHealthInfo, K8sError
     let pdb_list = pdbs
         .list(&ListParams::default())
         .await
-        .map_err(|e| K8sError::ApiError(e.to_string()))?;
+        .map_err(|e| K8sError::ApiError(crate::kube_list::error_text(&e)))?;
 
     let mut info = PdbHealthInfo::default();
 
@@ -1041,7 +1043,7 @@ pub async fn cordon_node(client: &Client, node_name: &str) -> Result<CordonResul
         Err(e) => Ok(CordonResult {
             node: node_name.to_string(),
             success: false,
-            error: Some(e.to_string()),
+            error: Some(crate::kube_list::error_text(&e)),
         }),
     }
 }
@@ -1069,7 +1071,7 @@ pub async fn uncordon_node(client: &Client, node_name: &str) -> Result<CordonRes
         Err(e) => Ok(CordonResult {
             node: node_name.to_string(),
             success: false,
-            error: Some(e.to_string()),
+            error: Some(crate::kube_list::error_text(&e)),
         }),
     }
 }
@@ -1195,7 +1197,12 @@ async fn pods_on_node(client: &Client, node_name: &str) -> Result<Vec<Pod>, K8sE
     crate::kube_list::list(&pods, &list_params)
         .await
         .map(|list| list.items)
-        .map_err(|e| K8sError::ApiError(format!("Failed to list pods: {e}")))
+        .map_err(|e| {
+            K8sError::ApiError(format!(
+                "Failed to list pods: {}",
+                crate::kube_list::error_text(&e)
+            ))
+        })
 }
 
 /// What would stop a drain of `node_name` with `options`, checked before
@@ -1526,7 +1533,10 @@ pub async fn drain_node_with_progress(
                             "timed out, a PodDisruptionBudget still blocks {namespace}/{pod_name}"
                         )
                     } else {
-                        format!("could not evict {namespace}/{pod_name}: {err}")
+                        format!(
+                            "could not evict {namespace}/{pod_name}: {}",
+                            crate::kube_list::error_text(&err)
+                        )
                     };
                     say(&why);
                     // Stop here, like kubectl: the rest would be evicted
@@ -1590,7 +1600,12 @@ pub async fn get_node_state(client: &Client, node_name: &str) -> Result<NodeStat
     let node = tokio::time::timeout(NODE_LOOKUP_TIMEOUT, nodes.get(node_name))
         .await
         .map_err(|_| K8sError::ApiError("Timed out getting node".to_string()))?
-        .map_err(|e| K8sError::ApiError(format!("Failed to get node: {e}")))?;
+        .map_err(|e| {
+            K8sError::ApiError(format!(
+                "Failed to get node: {}",
+                crate::kube_list::error_text(&e)
+            ))
+        })?;
 
     let status = node.status.as_ref();
     let ready = status

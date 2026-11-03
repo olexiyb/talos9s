@@ -129,7 +129,7 @@ pub(crate) async fn get_json(client: &Client, path: &str) -> Result<Value, Strin
         .map_err(|e| e.to_string())?;
     let body = crate::kube_list::bounded(client.request_text(request))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::kube_list::error_text(&e))?;
     serde_json::from_str(&body).map_err(|e| format!("unexpected LINSTOR response: {e}"))
 }
 

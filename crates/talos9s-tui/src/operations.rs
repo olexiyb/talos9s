@@ -246,7 +246,12 @@ pub async fn fetch_node_facts(
                 }
             }
         }
-        Ok(Err(e)) => result.k8s_error = Some(format!("listing nodes: {e}")),
+        Ok(Err(e)) => {
+            result.k8s_error = Some(format!(
+                "listing nodes: {}",
+                crate::kube_list::error_text(&e)
+            ));
+        }
         Err(_) => result.k8s_error = Some("listing nodes timed out".to_string()),
     }
     if let Ok(Ok(pods)) = tokio::time::timeout(

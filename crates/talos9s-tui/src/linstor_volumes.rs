@@ -331,7 +331,10 @@ pub async fn fetch_satellites(client: &kube::Client) -> HashMap<String, Satellit
 /// LINSTOR volumes of the cluster, `None` when it doesn't run Piraeus.
 /// `Err` when the Kubernetes or LINSTOR API can't be queried.
 pub async fn fetch_volumes(client: &kube::Client) -> Result<Option<Vec<LinstorVolume>>, String> {
-    let base = match controller_base(client).await.map_err(|e| e.to_string())? {
+    let base = match controller_base(client)
+        .await
+        .map_err(|e| crate::kube_list::error_text(&e))?
+    {
         None => return Ok(None),
         Some(base) => base?,
     };

@@ -500,7 +500,10 @@ impl VolumesComponent {
         let pvs = match pvs {
             Ok(Ok(pvs)) => Some(pvs),
             Ok(Err(e)) => {
-                source_errors.push(format!("PersistentVolumes (orphan check): {e}"));
+                source_errors.push(format!(
+                    "PersistentVolumes (orphan check): {}",
+                    crate::kube_list::error_text(&e)
+                ));
                 None
             }
             Err(_) => {
@@ -522,7 +525,7 @@ impl VolumesComponent {
         let zfs = match zfs {
             Ok(Ok(volumes)) => volumes,
             Ok(Err(e)) => {
-                source_errors.push(format!("ZFS LocalPV: {e}"));
+                source_errors.push(format!("ZFS LocalPV: {}", crate::kube_list::error_text(&e)));
                 None
             }
             Err(_) => {

@@ -405,7 +405,9 @@ impl LogPane {
                         timestamps: true,
                         ..Default::default()
                     };
-                    api.logs(&s.pod, &params).await.map_err(|e| e.to_string())
+                    api.logs(&s.pod, &params)
+                        .await
+                        .map_err(|e| crate::kube_list::error_text(&e))
                 }
             });
             let results =

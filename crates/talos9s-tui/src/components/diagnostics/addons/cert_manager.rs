@@ -24,10 +24,12 @@ pub async fn run_checks(client: &Client) -> Vec<DiagnosticCheck> {
     match pods.list(&ListParams::default().labels(&selector)).await {
         Ok(list) => assess(&list.items),
         Err(e) => vec![
-            DiagnosticCheck::unknown("cert_manager_pods", "cert-manager Pods")
-                .with_details(&format!("Failed to list pods: {e}")),
-            DiagnosticCheck::unknown("cert_manager_webhook", "cert-manager Webhook")
-                .with_details(&format!("Failed to list pods: {e}")),
+            DiagnosticCheck::unknown("cert_manager_pods", "cert-manager Pods").with_details(
+                &format!("Failed to list pods: {}", crate::kube_list::error_text(&e)),
+            ),
+            DiagnosticCheck::unknown("cert_manager_webhook", "cert-manager Webhook").with_details(
+                &format!("Failed to list pods: {}", crate::kube_list::error_text(&e)),
+            ),
         ],
     }
 }
