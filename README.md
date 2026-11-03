@@ -42,7 +42,7 @@ Checked against each project's source and README in November 2026
 | Disks and Talos partitions | yes | – | disks | disks |
 | LINSTOR/DRBD and ZFS LocalPV checks | yes | – | – | – |
 | Machine config viewer (secrets masked) | yes | – | – | yes |
-| Diagnostics with suggested fixes | yes, copied, never run | Popeye sanitizer | yes | `talosctl health`, streamed |
+| Diagnostics with suggested fixes | yes, with the fix command for you to run | Popeye sanitizer | yes | `talosctl health`, streamed |
 | Drain, reboot, shutdown, rolling | yes | cordon, drain, delete, edit, shell, port-forward | drain, reboot, rolling | reboot, shutdown |
 | Talos and Kubernetes upgrades | – (planned) | – | – | yes, with the extension catalog |
 | Operation confirmation and audit log | yes | confirmation; `--readonly` flag | yes | confirmation for upgrades |
