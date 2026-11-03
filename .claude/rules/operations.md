@@ -34,6 +34,12 @@ What talos9s changes on a cluster, and the guards each change needs.
   again in the drain. The grace period goes into the eviction; the timeout
   is for the whole drain of a node, PDB refusals retry until it, then the
   drain fails naming the pods left.
+- **Drain options** are picked in the start dialog
+  (`components/drain_options.rs`), a confirmation over the whole view with
+  a table of every pod's `Fate` (`PodImpact::fate`, from `SafetyInfo::drain`:
+  `drain_preview` on every checked node; unknown when unread, never "none").
+  `fate` and `select_pods_to_evict` must agree (`fate_agrees_with_the_drain`). Saved per context in `state.yaml` (`DrainState`),
+  never `force`.
 - **Fixes are not operations:** diagnostic fixes and storage remedies are
   shown and copied, never run (`CLAUDE.md`).
 - Live tests open these dialogs and cancel with `n`; never confirm one.

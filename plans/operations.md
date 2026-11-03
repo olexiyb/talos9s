@@ -207,7 +207,7 @@ group.
 
 ## Drain options
 
-Status: proposed · 2026-11-03
+Status: built · 2026-11-03
 
 Drain, Reboot and Shutdown all drain first. Today they always use
 fixed options (ignore DaemonSets, delete emptyDir data, pod default grace
@@ -309,17 +309,26 @@ The start dialog gets an options block when the operation drains:
 2. Done in part: `DrainOptions` has `timeout_secs` (5 min) and `force`;
    `drain_command` prints `--force` and `--timeout`. `between_nodes` comes
    with the dialog.
-3. The dialog's options block, the pod preview, keys, mouse; TestBackend
-   at 70-120 columns, key line fits.
-4. Saved choice per context (`state.rs`, readable when missing).
-5. README, `.claude/rules/operations.md`, this plan.
-6. Live: open the dialog on bc, toggle, check the preview and the command,
+3. Done. The dialog's options block (`components/drain_options.rs`), the
+   pod preview (`SafetyInfo::drain`), keys, mouse. The summary under the
+   options gives counts only (`stops at 57 emptyDir pod(s)`): listing every
+   pod flooded the dialog.
+   Then replaced by a confirmation over the whole view: the options, a
+   table of every pod and its fate (`PodImpact`, worst first, `PgUp`/`PgDn`),
+   the commands and safety checks. Rows count, the table names.
+   It covers the tree too (`Component::modal`): a click on the tree or menu
+   used to close it. Pods a blocking PDB covers (its label selector matched
+   against the pod) show `waits: PDB … allows 0`: the drain would wait for
+   them until its timeout. On bc every CloudNativePG primary is such a pod,
+   so draining a node with primaries needs a switchover first.
+4. Done. Saved choice per context (`state.yaml` `drain`), force never.
+5. Done. README, `.claude/rules/operations.md`, this plan.
+6. Done (live on bc, cancelled with `n`): open the dialog on bc, toggle, check the preview and the command,
    cancel with `n`. A real drain only on `test-clusters/`, with an
    unmanaged pod, an emptyDir pod and a PDB to see each one stop it.
 
 ## Not done yet
 
-- **Drain options**: proposed below, in "Drain options".
 - **A real run** was not tested against a live cluster (only dialogs opened
   and cancelled, per the live-test rule); try it on `test-clusters/` first.
 

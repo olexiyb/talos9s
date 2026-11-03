@@ -145,7 +145,9 @@ impl ClusterComponent {
         // Only what acts on the focused window now: the keys that always work
         // there first, then the ones for the selected row and the view shown.
         // (q is listed with Esc: some terminals, IDEA's, never deliver Esc.)
-        let spans = if view_focused {
+        let spans = if self.view_modal {
+            Vec::new()
+        } else if view_focused {
             match &self.back_hint {
                 Some(hint) => vec![
                     key(" <Esc/q>"),

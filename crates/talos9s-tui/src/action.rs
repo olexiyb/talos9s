@@ -69,6 +69,8 @@ pub enum Action {
     /// A view warped into namespaces and prefixes (empty: all), to remember
     /// per cluster
     WarpNamespace(Vec<String>),
+    /// A run started with these drain options: remember them per cluster
+    SaveDrain(crate::state::DrainState),
     /// Suspend the TUI and open this file in the log viewer (`v`)
     OpenInViewer(std::path::PathBuf),
     /// Operations view for a node, a group or a cluster: its title, its

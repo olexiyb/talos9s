@@ -564,6 +564,10 @@ impl ClusterComponent {
 
     /// What Esc in the view returns to, shown in the key line (a group view
     /// a node was opened from)
+    pub fn set_view_modal(&mut self, modal: bool) {
+        self.view_modal = modal;
+    }
+
     pub fn set_back_hint(&mut self, hint: Option<String>) {
         self.back_hint = hint;
     }

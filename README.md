@@ -210,6 +210,21 @@ node and stops at the first failure.
   node, Uncordon a cordoned one, Reboot and Shutdown a node answering the
   Talos API (Cordon and Drain also work on a node that is down). A state
   that can't be read blocks nothing.
+- **Drain options** (Drain, Reboot, Shutdown): the confirmation fills the
+  screen, tree included (a click elsewhere can't lose it), with the options
+  on top and a table of every pod on the checked nodes and what happens to
+  it (stops the drain, waits for a PodDisruptionBudget that allows no
+  disruption now, gone for good, emptyDir data lost, evicted, stays), worst
+  first; `PgUp`/`PgDn` and the mouse wheel scroll it, and the
+  pods the option under the cursor decides about are bold. Ignore
+  DaemonSets, Delete emptyDir data and Force check boxes, grace period,
+  timeout (5 min per node) and, for a reboot of several nodes, the wait
+  between them. `j`/`k` move, `Space` toggles, `←`/`→` change a value, a
+  click toggles. Each counts what it hits on the checked nodes (`15 pods
+  stay`, `stops the drain: 1 pod`). As with kubectl, a pod an
+  option doesn't allow (a DaemonSet pod, one no controller recreates, one
+  with emptyDir data) stops the drain before the node is cordoned. The
+  choice is kept per cluster, except Force, which starts off every time.
 - A node cordoned before a Drain, Reboot or Shutdown stays cordoned: a run
   uncordons only what it cordoned itself.
 - **Runs in the background:** switch views or nodes freely; the header shows

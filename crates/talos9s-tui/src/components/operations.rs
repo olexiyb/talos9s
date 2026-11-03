@@ -10,11 +10,12 @@
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::components::diagnostics::k8s::DrainOptions;
+use crate::components::diagnostics::k8s::{Fate, PodImpact};
+use crate::components::drain_options::{DrainChoice, Opt, Preview};
 use crate::components::pod_logs::LogPane;
 use crate::operations::{
-    ActiveRun, DELAY_BETWEEN_NODES, K8sNode, NodeFacts, NodeFactsResult, OpKind, OpNode, OpRequest,
-    Runs, SafetyInfo, TalosState, fetch_node_facts, fetch_safety,
+    ActiveRun, K8sNode, NodeFacts, NodeFactsResult, OpKind, OpNode, OpRequest, Runs, SafetyInfo,
+    TalosState, fetch_node_facts, fetch_safety,
 };
 use crate::ui_ext::{KEY, KEY_NO, KEY_YES, Move, RowHits};
 use color_eyre::Result;
@@ -44,6 +45,10 @@ const RUN_FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
 /// Read the nodes' state (Talos, Kubernetes, pods) again this often, and
 /// whenever a run in this cluster ends
 const FACTS_EVERY: Duration = Duration::from_secs(15);
+/// Pod rows `PgUp`/`PgDn` move in the drain confirmation
+const IMPACT_PAGE: usize = 10;
+/// Pod rows one wheel step moves
+const IMPACT_WHEEL: usize = 3;
 
 /// A dialog over the view
 enum Dialog {
@@ -53,6 +58,8 @@ enum Dialog {
         nodes: Vec<OpNode>,
         safety: Option<SafetyInfo>,
         task: Option<JoinHandle<SafetyInfo>>,
+        /// The drain option row the cursor is on (`Opt::shown`)
+        cursor: usize,
     },
     /// Delete these run files
     Delete(Vec<PathBuf>),
@@ -96,6 +103,13 @@ pub struct OperationsComponent {
     /// there) or this cluster's (a group); wide is every run
     this_context: bool,
     dialog: Option<Dialog>,
+    /// The drain options the start dialog shows and the run gets
+    drain: DrainChoice,
+    /// Where the dialog's option rows were drawn: the first row's area, for
+    /// clicks
+    option_rows: Rect,
+    /// The first pod row shown in the drain confirmation (`PgUp`/`PgDn`)
+    impact_scroll: usize,
     /// The run shown (Enter), and its output
     focus: Option<PathBuf>,
     /// Whether the run shown was running at the last tick, for the read
@@ -144,6 +158,9 @@ impl OperationsComponent {
             // A node shows its own runs first; a group every run
             this_context: !group,
             dialog: None,
+            drain: DrainChoice::default(),
+            option_rows: Rect::default(),
+            impact_scroll: 0,
             focus: None,
             focus_was_running: false,
             logs: LogPane::default(),
@@ -160,6 +177,11 @@ impl OperationsComponent {
 
     pub fn set_error(&mut self, error: String) {
         self.message = Some(error);
+    }
+
+    /// The drain options last started with in this cluster
+    pub fn set_drain(&mut self, choice: &DrainChoice) {
+        self.drain = choice.clone();
     }
 
     pub fn set_log_wrap(&mut self, wrap: bool) {
@@ -465,7 +487,9 @@ impl OperationsComponent {
             nodes,
             safety: None,
             task,
+            cursor: 0,
         });
+        self.impact_scroll = 0;
     }
 
     /// What the run is on: the group when all its nodes are checked, else
@@ -522,8 +546,8 @@ impl OperationsComponent {
             target: self.run_target(&nodes),
             kind,
             nodes,
-            options: DrainOptions::default(),
-            delay: DELAY_BETWEEN_NODES,
+            options: self.drain.options.clone(),
+            delay: self.drain.between,
         };
         match crate::operations::start(&self.runs, &dir, request, talos, self.cp_ip.clone()) {
             Ok(path) => {
@@ -567,10 +591,8 @@ impl OperationsComponent {
         }
     }
 
-    fn handle_dialog_key(&mut self, key: KeyEvent) {
-        let Some(dialog) = self.dialog.take() else {
-            return;
-        };
+    fn handle_dialog_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let dialog = self.dialog.take()?;
         let yes = matches!(key.code, KeyCode::Char('y' | 'Y'));
         let no = matches!(key.code, KeyCode::Char('n' | 'N' | 'q') | KeyCode::Esc);
         match dialog {
@@ -579,17 +601,47 @@ impl OperationsComponent {
                 nodes,
                 safety,
                 task,
+                mut cursor,
             } => {
                 if yes {
+                    let drains = kind.drains();
                     self.start(kind, nodes);
-                } else if !no {
-                    self.dialog = Some(Dialog::Start {
-                        kind,
-                        nodes,
-                        safety,
-                        task,
-                    });
+                    return drains.then(|| Action::SaveDrain(self.drain.to_state(&self.context)));
                 }
+                if no {
+                    return None;
+                }
+                let opts = Opt::shown(kind, nodes.len());
+                let opt = opts.get(cursor).copied();
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => cursor = cursor.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        cursor = (cursor + 1).min(opts.len().saturating_sub(1));
+                    }
+                    KeyCode::PageDown => self.impact_scroll += IMPACT_PAGE,
+                    KeyCode::PageUp => {
+                        self.impact_scroll = self.impact_scroll.saturating_sub(IMPACT_PAGE);
+                    }
+                    KeyCode::Char(' ') => {
+                        if let Some(opt) = opt {
+                            self.drain.toggle(opt);
+                        }
+                    }
+                    KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') => {
+                        let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
+                        if let Some(opt) = opt {
+                            self.drain.step(opt, forward);
+                        }
+                    }
+                    _ => {}
+                }
+                self.dialog = Some(Dialog::Start {
+                    kind,
+                    nodes,
+                    safety,
+                    task,
+                    cursor,
+                });
             }
             Dialog::Delete(paths) => {
                 if yes {
@@ -617,6 +669,7 @@ impl OperationsComponent {
                 }
             }
         }
+        None
     }
 
     fn poll_safety(&mut self) {
@@ -693,6 +746,24 @@ impl OperationsComponent {
     fn key_hints_line(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, KEY);
         let label = |l: &'static str| Span::raw(l);
+        if let Some(Dialog::Start { kind, nodes, .. }) = &self.dialog
+            && !Opt::shown(*kind, nodes.len()).is_empty()
+        {
+            return Line::from(vec![
+                key("<j/k>"),
+                label(" move  "),
+                key("<Space>"),
+                label(" toggle  "),
+                key("<←/→>"),
+                label(" value  "),
+                key("<PgUp/PgDn>"),
+                label(" pods  "),
+                Span::styled("<y>", KEY_YES),
+                label(" start  "),
+                Span::styled("<n/Esc>", KEY_NO),
+                label(" cancel"),
+            ]);
+        }
         if self.dialog.is_some() {
             return Line::from(vec![
                 Span::styled("<y>", KEY_YES),
@@ -1131,9 +1202,24 @@ impl OperationsComponent {
         self.logs.draw(frame, body);
     }
 
-    fn draw_dialog(&self, frame: &mut Frame, area: Rect) {
+    fn draw_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        self.option_rows = Rect::default();
         let Some(dialog) = &self.dialog else {
             return;
+        };
+        // A drain gets the whole view: its options and what happens to
+        // every pod don't fit a popup
+        if let Dialog::Start { kind, nodes, .. } = dialog
+            && !Opt::shown(*kind, nodes.len()).is_empty()
+        {
+            self.draw_drain_start(frame, area);
+            return;
+        }
+        let width = 76.min(area.width);
+        // Rows lines take once wrapped, so the answer line stays inside
+        let inner = usize::from(width.saturating_sub(2)).max(1);
+        let rows_of = |lines: &[Line]| -> usize {
+            lines.iter().map(|l| l.width().max(1).div_ceil(inner)).sum()
         };
         let mut lines: Vec<Line> = Vec::new();
         let title;
@@ -1164,7 +1250,7 @@ impl OperationsComponent {
                         &self.context,
                         *kind,
                         node,
-                        &DrainOptions::default(),
+                        &self.drain.options,
                     ) {
                         lines.push(Line::from(Span::styled(
                             format!("   $ {c}"),
@@ -1211,11 +1297,7 @@ impl OperationsComponent {
             Span::raw(" no"),
         ];
         lines.push(Line::from(answer));
-        let width = 76.min(area.width);
-        // Rows the lines take once wrapped, so the answer line stays inside
-        let inner = usize::from(width.saturating_sub(2)).max(1);
-        let rows: usize = lines.iter().map(|l| l.width().max(1).div_ceil(inner)).sum();
-        let height = talos9s_core::convert::to_u16(rows + 2).min(area.height);
+        let height = talos9s_core::convert::to_u16(rows_of(&lines) + 2).min(area.height);
         let popup = crate::ui_ext::centered(area, width, height);
         frame.render_widget(Clear, popup);
         frame.render_widget(
@@ -1231,6 +1313,200 @@ impl OperationsComponent {
 }
 
 impl OperationsComponent {
+    /// Whether the drain confirmation is open (it takes the whole screen)
+    fn drain_start_open(&self) -> bool {
+        matches!(&self.dialog, Some(Dialog::Start { kind, nodes, .. })
+            if !Opt::shown(*kind, nodes.len()).is_empty())
+    }
+
+    /// The confirmation of a drain, reboot or shutdown, over the whole
+    /// view: options, every pod on the checked nodes and what happens to
+    /// it, the commands and the safety checks. `y` starts, `n` cancels
+    fn draw_drain_start(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(Dialog::Start {
+            kind,
+            nodes,
+            safety,
+            cursor,
+            ..
+        }) = &self.dialog
+        else {
+            return;
+        };
+        let (kind, cursor) = (*kind, *cursor);
+        let opts = Opt::shown(kind, nodes.len());
+        let preview = match safety {
+            None => Preview::Reading,
+            Some(SafetyInfo {
+                drain: Some(pods), ..
+            }) => Preview::Pods(pods),
+            Some(_) => Preview::Unknown,
+        };
+        let options = &self.drain.options;
+        let dim = Style::default().dim();
+
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(Span::styled(
+                format!(" {} on {}? ", kind.name(), self.run_target(nodes)),
+                Style::default().bold(),
+            ));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let width = usize::from(inner.width).max(1);
+        let wrapped = |lines: &[Line]| -> u16 {
+            talos9s_core::convert::to_u16(
+                lines
+                    .iter()
+                    .map(|l| l.width().max(1).div_ceil(width))
+                    .sum::<usize>(),
+            )
+        };
+
+        // Commands: the node name once, every command under it
+        let name_w = nodes.iter().map(|n| n.hostname.len()).max().unwrap_or(0);
+        let mut commands = Vec::new();
+        for node in nodes {
+            let cmds = crate::operations::commands_for(&self.context, kind, node, options);
+            for (i, c) in cmds.into_iter().enumerate() {
+                let head = if i == 0 { node.hostname.as_str() } else { "" };
+                commands.push(Line::from(vec![
+                    Span::styled(format!(" {head:<name_w$} "), Style::default().bold()),
+                    Span::styled(format!("$ {c}"), dim),
+                ]));
+            }
+        }
+        let safety_text = match safety {
+            None => vec![Line::from(Span::styled(" Checking etcd and PDBs…", dim))],
+            Some(info) => safety_lines(info),
+        };
+
+        let [
+            about,
+            opts_area,
+            summary,
+            _,
+            table_area,
+            _,
+            cmd_area,
+            safety_area,
+        ] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(talos9s_core::convert::to_u16(opts.len())),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(4),
+            Constraint::Length(1),
+            Constraint::Length(wrapped(&commands).min(8)),
+            Constraint::Length(wrapped(&safety_text).min(6)),
+        ])
+        .areas(inner);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {}", kind.about(nodes.len() > 1)),
+                dim,
+            )),
+            about,
+        );
+        let option_lines: Vec<Line> = self
+            .drain
+            .lines(&opts, cursor, preview)
+            .into_iter()
+            .map(|l| crate::ui_ext::ellipsize(l, width))
+            .collect();
+        frame.render_widget(Paragraph::new(option_lines), opts_area);
+
+        // Every pod and its fate, worst first
+        let mut pods: Vec<(&PodImpact, Fate)> = match preview {
+            Preview::Pods(pods) => pods.iter().map(|p| (p, p.fate(options))).collect(),
+            _ => Vec::new(),
+        };
+        pods.sort_by(|a, b| (&a.1, &a.0.node, &a.0.pod).cmp(&(&b.1, &b.0.node, &b.0.pod)));
+        frame.render_widget(Paragraph::new(impact_summary(preview, &pods)), summary);
+
+        let visible = usize::from(table_area.height.saturating_sub(1));
+        self.impact_scroll = self.impact_scroll.min(pods.len().saturating_sub(visible));
+        let focused = opts.get(cursor).copied();
+        let rows: Vec<Row> = pods
+            .iter()
+            .skip(self.impact_scroll)
+            .take(visible)
+            .map(|(p, fate)| {
+                let (what, style) = fate_cell(fate, p.owner.as_deref());
+                // The pods the option under the cursor decides about stand out
+                let row_style = match focused {
+                    Some(o) if o.hits(p) => Style::default().bold(),
+                    _ => Style::default(),
+                };
+                Row::new(vec![
+                    Cell::from(p.node.clone()),
+                    Cell::from(p.pod.clone()),
+                    Cell::from(Span::styled(
+                        p.owner.clone().unwrap_or_else(|| "none".to_string()),
+                        dim,
+                    )),
+                    Cell::from(Span::styled(what, style)),
+                ])
+                .style(row_style)
+            })
+            .collect();
+        let more = pods.len().saturating_sub(self.impact_scroll + visible);
+        let header = Row::new(vec![
+            "NODE".to_string(),
+            "POD".to_string(),
+            "OWNER".to_string(),
+            if more > 0 {
+                format!("WHAT HAPPENS  (+{more} below, PgDn)")
+            } else {
+                "WHAT HAPPENS".to_string()
+            },
+        ])
+        .style(Style::default().bold());
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(talos9s_core::convert::to_u16(name_w.max(4)) + 1),
+                    Constraint::Fill(1),
+                    Constraint::Length(12),
+                    Constraint::Fill(1),
+                ],
+            )
+            .header(header),
+            table_area.inner(ratatui::layout::Margin::new(1, 0)),
+        );
+
+        // A scroll bar when the pods don't fit, beside the rows
+        if pods.len() > visible {
+            let mut bar = ratatui::widgets::ScrollbarState::new(pods.len().saturating_sub(visible))
+                .position(self.impact_scroll)
+                .viewport_content_length(visible);
+            frame.render_stateful_widget(
+                ratatui::widgets::Scrollbar::new(
+                    ratatui::widgets::ScrollbarOrientation::VerticalRight,
+                ),
+                Rect {
+                    y: table_area.y + 1,
+                    height: table_area.height.saturating_sub(1),
+                    ..table_area
+                },
+                &mut bar,
+            );
+        }
+        frame.render_widget(
+            Paragraph::new(commands).wrap(Wrap { trim: false }),
+            cmd_area,
+        );
+        frame.render_widget(
+            Paragraph::new(safety_text).wrap(Wrap { trim: false }),
+            safety_area,
+        );
+        self.option_rows = opts_area;
+    }
+
     /// The operation drop list, under the operation row
     fn draw_dropdown(&mut self, frame: &mut Frame, cursor: usize) {
         let ops = self.ops();
@@ -1290,6 +1566,86 @@ enum TopRow {
 
 /// TALOS, K8S, SCHEDULE and PODS for a node; `…` while the first read
 /// goes, `?` when a source couldn't be read
+/// One line over the pod table: how many pods meet which fate
+fn impact_summary(preview: Preview, pods: &[(&PodImpact, Fate)]) -> Line<'static> {
+    match preview {
+        Preview::Reading => {
+            return Line::from(Span::styled(" Reading the pods…", Style::default().dim()));
+        }
+        Preview::Unknown => {
+            return Line::from(Span::styled(
+                " Pods unknown: the drain checks them itself",
+                Style::default().dim(),
+            ));
+        }
+        Preview::Pods(_) => {}
+    }
+    let count = |f: fn(&Fate) -> bool| pods.iter().filter(|(_, fate)| f(fate)).count();
+    let stops = count(|f| matches!(f, Fate::Stops(_)));
+    let waits = count(|f| matches!(f, Fate::WaitsForPdb(_)));
+    let parts: Vec<String> = [
+        (count(|f| *f == Fate::Evicted), "evicted"),
+        (count(|f| *f == Fate::DataLost), "lose emptyDir data"),
+        (count(|f| *f == Fate::Gone), "gone for good"),
+        (count(|f| *f == Fate::Stays), "stay"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    let mut spans = vec![Span::raw(format!(
+        " {}: {}",
+        talos9s_core::pluralize(pods.len(), "pod", "pods"),
+        parts.join(", ")
+    ))];
+    if waits > 0 {
+        spans.push(Span::styled(
+            format!(
+                " · {} wait for a PDB (fails at the timeout)",
+                talos9s_core::pluralize(waits, "pod", "pods")
+            ),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if stops > 0 {
+        spans.push(Span::styled(
+            format!(
+                " · the drain stops at {} (<y> still starts it)",
+                talos9s_core::pluralize(stops, "pod", "pods")
+            ),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// A pod's WHAT HAPPENS cell
+fn fate_cell(fate: &Fate, owner: Option<&str>) -> (String, Style) {
+    match fate {
+        Fate::Stops(needs) => (
+            format!("stops the drain (needs {})", needs.join(", ")),
+            Style::default().fg(Color::Red),
+        ),
+        Fate::WaitsForPdb(pdb) => (
+            format!("waits: PDB {pdb} allows 0"),
+            Style::default().fg(Color::Red),
+        ),
+        Fate::Gone => (
+            "evicted, nothing recreates it".to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
+        Fate::DataLost => (
+            "evicted, emptyDir data lost".to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
+        Fate::Evicted => (
+            format!("evicted, {} restarts it", owner.unwrap_or("its controller")),
+            Style::default(),
+        ),
+        Fate::Stays => ("stays (DaemonSet)".to_string(), Style::default().dim()),
+    }
+}
+
 fn fact_cells(facts: Option<&NodeFacts>, loading: bool) -> Vec<Span<'static>> {
     let unknown = if loading && facts.is_none() {
         "…"
@@ -1430,6 +1786,35 @@ impl Component for OperationsComponent {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
         let click = mouse.kind
             == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left);
+        if let Some(Dialog::Start {
+            kind,
+            nodes,
+            cursor,
+            ..
+        }) = &mut self.dialog
+        {
+            // The wheel scrolls the pod table, wherever the pointer is
+            match mouse.kind {
+                crossterm::event::MouseEventKind::ScrollDown => {
+                    self.impact_scroll += IMPACT_WHEEL;
+                    return Ok(None);
+                }
+                crossterm::event::MouseEventKind::ScrollUp => {
+                    self.impact_scroll = self.impact_scroll.saturating_sub(IMPACT_WHEEL);
+                    return Ok(None);
+                }
+                _ => {}
+            }
+            let a = self.option_rows;
+            if click && a.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+                let row = usize::from(mouse.row - a.y);
+                if let Some(&opt) = Opt::shown(*kind, nodes.len()).get(row) {
+                    *cursor = row;
+                    self.drain.toggle(opt);
+                }
+            }
+            return Ok(None);
+        }
         if self.dialog.is_some() {
             return Ok(None);
         }
@@ -1484,6 +1869,10 @@ impl Component for OperationsComponent {
         Some(self.key_hints_line())
     }
 
+    fn modal(&self) -> bool {
+        self.drain_start_open()
+    }
+
     fn captures_text(&self) -> bool {
         self.filtering
             || self.dialog.is_some()
@@ -1493,8 +1882,7 @@ impl Component for OperationsComponent {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.dialog.is_some() {
-            self.handle_dialog_key(key);
-            return Ok(None);
+            return Ok(self.handle_dialog_key(key));
         }
         if let Some(cursor) = self.dropdown {
             self.handle_dropdown_key(key, cursor);
@@ -1844,5 +2232,72 @@ mod tests {
         press(&mut c, KeyCode::Char('g'));
         press(&mut c, KeyCode::Enter);
         assert!(c.key_hints_line().width() <= 85, "{}", c.key_hints_line());
+    }
+
+    /// Drain's dialog has the options: keys move, toggle and step them,
+    /// the command follows, and the choice outlives the dialog
+    #[test]
+    fn drain_dialog_options() {
+        let dir = std::env::temp_dir().join(format!("talos9s-opsdrain-{}", std::process::id()));
+        let mut c = component(&dir, false);
+        press(&mut c, KeyCode::Char('3'));
+        assert_eq!(c.kind(), OpKind::Drain);
+        press(&mut c, KeyCode::Enter);
+        assert!(matches!(c.dialog, Some(Dialog::Start { .. })));
+        assert!(c.key_hints_line().width() <= 85, "{}", c.key_hints_line());
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char(' '));
+        assert!(!c.drain.options.delete_emptydir_data);
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Right);
+        assert_eq!(c.drain.options.grace_period_secs, Some(0));
+        // `Enter` never confirms
+        press(&mut c, KeyCode::Enter);
+        assert!(c.dialog.is_some());
+
+        let backend = ratatui::backend::TestBackend::new(80, 40);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                c.draw(f, f.area()).unwrap();
+            })
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(text.contains("WHAT HAPPENS"));
+        assert!(text.contains("[ ] Delete emptyDir data"));
+        assert!(text.contains("--grace-period=0"));
+
+        // It covers the screen and takes the wheel
+        assert!(c.modal());
+        let wheel = |kind| MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        c.handle_mouse_event(wheel(crossterm::event::MouseEventKind::ScrollDown))
+            .unwrap();
+        assert_eq!(c.impact_scroll, IMPACT_WHEEL);
+        c.handle_mouse_event(wheel(crossterm::event::MouseEventKind::ScrollUp))
+            .unwrap();
+        assert_eq!(c.impact_scroll, 0);
+
+        press(&mut c, KeyCode::Char('n'));
+        assert!(c.dialog.is_none());
+        assert!(!c.modal());
+        assert_eq!(c.drain.options.grace_period_secs, Some(0));
+        // Cordon has no options
+        press(&mut c, KeyCode::Char('1'));
+        press(&mut c, KeyCode::Enter);
+        if let Some(Dialog::Start { kind, nodes, .. }) = &c.dialog {
+            assert!(Opt::shown(*kind, nodes.len()).is_empty());
+        }
     }
 }

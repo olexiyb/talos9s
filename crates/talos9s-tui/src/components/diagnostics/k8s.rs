@@ -734,6 +734,50 @@ pub struct PdbInfo {
     pub expected_pods: i32,
     /// Whether this PDB would block a drain
     pub would_block_drain: bool,
+    /// The pods it covers; `None` (no selector) covers none
+    pub selector: Option<k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector>,
+}
+
+impl PdbInfo {
+    /// Whether it covers a pod in `namespace` with `labels`. An empty
+    /// selector covers every pod of its namespace (policy/v1)
+    pub fn covers(
+        &self,
+        namespace: &str,
+        labels: &std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        namespace == self.namespace
+            && self
+                .selector
+                .as_ref()
+                .is_some_and(|s| selector_matches(s, labels))
+    }
+}
+
+/// A label selector against a pod's labels: matchLabels and every
+/// matchExpressions term (In, NotIn, Exists, DoesNotExist) must hold;
+/// an unknown operator matches nothing
+fn selector_matches(
+    selector: &k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector,
+    labels: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let plain = selector
+        .match_labels
+        .iter()
+        .flatten()
+        .all(|(k, v)| labels.get(k) == Some(v));
+    let exprs = selector.match_expressions.iter().flatten().all(|e| {
+        let value = labels.get(&e.key);
+        let values = e.values.as_deref().unwrap_or_default();
+        match e.operator.as_str() {
+            "In" => value.is_some_and(|v| values.contains(v)),
+            "NotIn" => value.is_none_or(|v| !values.contains(v)),
+            "Exists" => value.is_some(),
+            "DoesNotExist" => value.is_none(),
+            _ => false,
+        }
+    });
+    plain && exprs
 }
 
 /// PDB health summary
@@ -794,6 +838,7 @@ pub async fn check_pdb_health(client: &Client) -> Result<PdbHealthInfo, K8sError
         let would_block_drain = disruptions_allowed == 0 && expected_pods > 0;
 
         let pdb_info = PdbInfo {
+            selector: pdb.spec.as_ref().and_then(|s| s.selector.clone()),
             name,
             namespace,
             current_healthy,
@@ -1069,6 +1114,140 @@ pub async fn drain_blockers(
     Ok(select_pods_to_evict(&pods, options)
         .err()
         .unwrap_or_default())
+}
+
+/// What a drain does to one pod, decided by the options (`fate`)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodImpact {
+    pub node: String,
+    /// `namespace/name`
+    pub pod: String,
+    /// The controller's kind (`ReplicaSet`, `StatefulSet`, an operator's);
+    /// `None` when nothing recreates it
+    pub owner: Option<String>,
+    pub daemonset: bool,
+    /// Holds emptyDir volumes, and still runs
+    pub emptydir: bool,
+    /// Succeeded or Failed: holds nothing
+    pub finished: bool,
+    pub labels: std::collections::BTreeMap<String, String>,
+    /// A PodDisruptionBudget covering it that allows no disruption now:
+    /// its eviction waits (`with_pdbs`)
+    pub pdb: Option<String>,
+}
+
+/// What happens to a pod, worst first
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Fate {
+    /// It stops the drain; the options that would let it go
+    Stops(Vec<&'static str>),
+    /// Its eviction waits for this PodDisruptionBudget, which allows no
+    /// disruption now: the drain fails at its timeout unless that changes
+    WaitsForPdb(String),
+    /// Evicted, and nothing recreates it
+    Gone,
+    /// Evicted, its emptyDir data lost
+    DataLost,
+    /// Evicted; its controller starts it elsewhere
+    Evicted,
+    /// A DaemonSet pod, left where it is
+    Stays,
+}
+
+impl PodImpact {
+    /// The same rules as `select_pods_to_evict` (a test keeps them equal)
+    pub fn fate(&self, options: &DrainOptions) -> Fate {
+        if self.daemonset {
+            return if options.ignore_daemonsets {
+                Fate::Stays
+            } else {
+                Fate::Stops(vec!["ignore DaemonSets"])
+            };
+        }
+        let unmanaged = self.owner.is_none() && !self.finished;
+        let mut stops = Vec::new();
+        if unmanaged && !options.force {
+            stops.push("force");
+        }
+        if self.emptydir && !options.delete_emptydir_data {
+            stops.push("delete emptyDir data");
+        }
+        if !stops.is_empty() {
+            Fate::Stops(stops)
+        } else if let Some(pdb) = &self.pdb {
+            Fate::WaitsForPdb(pdb.clone())
+        } else if unmanaged {
+            Fate::Gone
+        } else if self.emptydir {
+            Fate::DataLost
+        } else {
+            Fate::Evicted
+        }
+    }
+}
+
+/// Every pod a drain of the node meets (mirror pods aside), for the
+/// confirmation to show what happens to each
+fn pod_impacts(node: &str, pods: &[Pod]) -> Vec<PodImpact> {
+    pods.iter()
+        .filter(|pod| {
+            !pod.metadata
+                .annotations
+                .as_ref()
+                .is_some_and(|a| a.contains_key("kubernetes.io/config.mirror"))
+        })
+        .map(|pod| {
+            let finished = pod
+                .status
+                .as_ref()
+                .and_then(|s| s.phase.as_deref())
+                .is_some_and(|p| p == "Succeeded" || p == "Failed");
+            let owner = pod
+                .metadata
+                .owner_references
+                .as_ref()
+                .and_then(|refs| refs.iter().find(|r| r.controller == Some(true)))
+                .map(|r| r.kind.clone());
+            let emptydir = !finished
+                && pod.spec.as_ref().is_some_and(|spec| {
+                    spec.volumes
+                        .as_ref()
+                        .is_some_and(|v| v.iter().any(|v| v.empty_dir.is_some()))
+                });
+            PodImpact {
+                node: node.to_string(),
+                pod: format!(
+                    "{}/{}",
+                    pod.metadata.namespace.as_deref().unwrap_or_default(),
+                    pod.metadata.name.as_deref().unwrap_or_default()
+                ),
+                daemonset: owner.as_deref() == Some("DaemonSet"),
+                owner,
+                emptydir,
+                finished,
+                labels: pod.metadata.labels.clone().unwrap_or_default(),
+                pdb: None,
+            }
+        })
+        .collect()
+}
+
+/// Mark the pods a blocking PDB covers (finished pods aren't evicted)
+pub fn with_pdbs(pods: &mut [PodImpact], pdbs: &PdbHealthInfo) {
+    for pod in pods.iter_mut().filter(|p| !p.finished && !p.daemonset) {
+        let namespace = pod.pod.split('/').next().unwrap_or_default();
+        pod.pdb = pdbs
+            .blocking_pdbs
+            .iter()
+            .find(|b| b.covers(namespace, &pod.labels))
+            .map(|b| b.name.clone());
+    }
+}
+
+/// `pod_impacts` of the pods on `node_name`, read now
+pub async fn drain_preview(client: &Client, node_name: &str) -> Result<Vec<PodImpact>, K8sError> {
+    let pods = pods_on_node(client, node_name).await?;
+    Ok(pod_impacts(node_name, &pods))
 }
 
 /// Drain a node with progress callback
@@ -1635,6 +1814,119 @@ mod tests {
         };
         let blockers = select_pods_to_evict(&pods, &options).unwrap_err();
         assert_eq!(blockers.emptydir, ["ns/cache"]);
+    }
+
+    /// The confirmation's per-pod fate stops a drain exactly when the
+    /// drain refuses, for every option combination
+    #[test]
+    fn fate_agrees_with_the_drain() {
+        let mut done = pod("done", None, false, true);
+        done.status = Some(k8s_openapi::api::core::v1::PodStatus {
+            phase: Some("Failed".into()),
+            ..Default::default()
+        });
+        let pods = [
+            pod("ds", Some("DaemonSet"), false, false),
+            pod("app", Some("ReplicaSet"), false, false),
+            pod("bare", None, false, false),
+            pod("cache", Some("StatefulSet"), false, true),
+            pod("bare-cache", None, false, true),
+            pod("mirror", None, true, false),
+            done,
+        ];
+        let impacts = pod_impacts("n1", &pods);
+        assert_eq!(impacts.len(), 6);
+        for bits in 0..8u8 {
+            let options = DrainOptions {
+                ignore_daemonsets: bits & 1 != 0,
+                force: bits & 2 != 0,
+                delete_emptydir_data: bits & 4 != 0,
+                ..Default::default()
+            };
+            let stops = impacts
+                .iter()
+                .any(|i| matches!(i.fate(&options), Fate::Stops(_)));
+            assert_eq!(
+                stops,
+                select_pods_to_evict(&pods, &options).is_err(),
+                "{bits}"
+            );
+        }
+        let all = DrainOptions {
+            force: true,
+            ..Default::default()
+        };
+        let fates: Vec<Fate> = impacts.iter().map(|i| i.fate(&all)).collect();
+        assert_eq!(
+            fates,
+            [
+                Fate::Stays,
+                Fate::Evicted,
+                Fate::Gone,
+                Fate::DataLost,
+                Fate::Gone,
+                Fate::Evicted
+            ]
+        );
+    }
+
+    /// Label selectors as Kubernetes reads them; an empty one covers its
+    /// namespace, none covers nothing
+    #[test]
+    fn pdb_selectors() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
+            LabelSelector, LabelSelectorRequirement,
+        };
+        let labels: std::collections::BTreeMap<String, String> = [
+            ("app".to_string(), "pg".to_string()),
+            ("role".to_string(), "primary".to_string()),
+        ]
+        .into();
+        let pdb = |selector| PdbInfo {
+            name: "p".into(),
+            namespace: "db".into(),
+            current_healthy: 1,
+            desired_healthy: 1,
+            disruptions_allowed: 0,
+            expected_pods: 1,
+            would_block_drain: true,
+            selector,
+        };
+        let req = |op: &str, values: &[&str]| LabelSelectorRequirement {
+            key: "role".into(),
+            operator: op.into(),
+            values: Some(values.iter().map(|v| (*v).to_string()).collect()),
+        };
+        let by = |match_labels: Option<Vec<(&str, &str)>>,
+                  exprs: Option<Vec<LabelSelectorRequirement>>| {
+            Some(LabelSelector {
+                match_labels: match_labels
+                    .map(|l| l.into_iter().map(|(k, v)| (k.into(), v.into())).collect()),
+                match_expressions: exprs,
+            })
+        };
+        assert!(pdb(by(Some(vec![("app", "pg")]), None)).covers("db", &labels));
+        assert!(!pdb(by(Some(vec![("app", "pg")]), None)).covers("web", &labels));
+        assert!(!pdb(by(Some(vec![("app", "redis")]), None)).covers("db", &labels));
+        assert!(pdb(by(None, Some(vec![req("In", &["primary"])]))).covers("db", &labels));
+        assert!(!pdb(by(None, Some(vec![req("NotIn", &["primary"])]))).covers("db", &labels));
+        assert!(pdb(by(None, Some(vec![req("Exists", &[])]))).covers("db", &labels));
+        assert!(!pdb(by(None, Some(vec![req("DoesNotExist", &[])]))).covers("db", &labels));
+        assert!(pdb(by(None, None)).covers("db", &labels));
+        assert!(!pdb(None).covers("db", &labels));
+
+        let mut pods = pod_impacts("n1", &[pod("app", Some("ReplicaSet"), false, false)]);
+        pods[0].labels = labels;
+        pods[0].pod = "db/app".into();
+        let info = PdbHealthInfo {
+            pdbs: vec![],
+            blocking_pdbs: vec![pdb(by(Some(vec![("app", "pg")]), None))],
+        };
+        with_pdbs(&mut pods, &info);
+        assert_eq!(
+            pods[0].fate(&DrainOptions::default()),
+            Fate::WaitsForPdb("p".into())
+        );
     }
 
     /// Every reason is named, with its pods

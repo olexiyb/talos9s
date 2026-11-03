@@ -45,6 +45,23 @@ pub struct UiState {
     pub update: UpdateCheck,
     /// Namespace warp (`W`) and recent namespaces, per talosconfig context
     pub namespaces: Vec<NamespaceState>,
+    /// The drain options last started with, per talosconfig context
+    pub drain: Vec<DrainState>,
+}
+
+/// Drain options (Operations), as last started in a context. Force is
+/// never kept: it starts off every time
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DrainState {
+    pub context: String,
+    pub ignore_daemonsets: Option<bool>,
+    pub delete_emptydir_data: Option<bool>,
+    /// Missing: the pod's own
+    pub grace_period_secs: Option<i64>,
+    /// 0: no limit; missing: the default
+    pub timeout_secs: Option<u64>,
+    pub between_nodes_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

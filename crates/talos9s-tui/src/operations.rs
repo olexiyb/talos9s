@@ -10,8 +10,8 @@
 
 use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::diagnostics::k8s::{
-    DrainOptions, PdbHealthInfo, check_pdb_health, cordon_node, drain_blockers,
-    drain_node_with_progress, get_node_boot_id, uncordon_node, wait_for_node_ready,
+    DrainOptions, PdbHealthInfo, PodImpact, check_pdb_health, cordon_node, drain_blockers,
+    drain_node_with_progress, drain_preview, get_node_boot_id, uncordon_node, wait_for_node_ready,
 };
 use chrono::Utc;
 use kube::Client;
@@ -385,11 +385,11 @@ fn drain_command(h: &str, options: &DrainOptions) -> String {
     }
     // kubectl waits for ever without one; ours always has a limit unless None
     if let Some(secs) = options.timeout_secs {
-        if secs % 60 == 0 {
-            let _ = write!(drain, " --timeout={}m", secs / 60);
-        } else {
-            let _ = write!(drain, " --timeout={secs}s");
-        }
+        let _ = write!(
+            drain,
+            " --timeout={}",
+            crate::components::drain_options::secs(secs)
+        );
     }
     drain
 }
@@ -1138,8 +1138,24 @@ pub struct SafetyInfo {
     pub etcd: Vec<(String, Option<NodeEtcdInfo>)>,
     /// PDBs that would block a drain; `None` when unknown
     pub pdb: Option<PdbHealthInfo>,
+    /// The pods the drain options decide about, on all the nodes; `None`
+    /// when they couldn't be read
+    pub drain: Option<Vec<PodImpact>>,
     /// Why there is no Kubernetes client, if there isn't
     pub k8s_error: Option<String>,
+}
+
+/// `drain_preview` over every node; one node unread makes it unknown
+async fn drain_preview_all(k8s: &kube::Client, nodes: &[OpNode]) -> Option<Vec<PodImpact>> {
+    let mut all = Vec::new();
+    for node in nodes {
+        let one = tokio::time::timeout(SAFETY_CHECK_TIMEOUT, drain_preview(k8s, &node.hostname))
+            .await
+            .ok()?
+            .ok()?;
+        all.extend(one);
+    }
+    Some(all)
 }
 
 /// Read the safety checks for `kind` on `nodes`, bounded
@@ -1168,6 +1184,10 @@ pub async fn fetch_safety(
                     .await
                     .ok()
                     .and_then(Result::ok);
+                info.drain = drain_preview_all(&k8s, &nodes).await;
+                if let (Some(pods), Some(pdbs)) = (&mut info.drain, &info.pdb) {
+                    crate::components::diagnostics::k8s::with_pdbs(pods, pdbs);
+                }
             }
             Ok(Err(e)) => info.k8s_error = Some(e),
             Err(_) => info.k8s_error = Some("timed out connecting".to_string()),

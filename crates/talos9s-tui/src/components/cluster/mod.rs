@@ -339,6 +339,9 @@ pub struct ClusterComponent {
     tree_pane: FocusedPane,
     /// Where Esc in the view goes back to, when not just the tree
     back_hint: Option<String>,
+    /// The view shows a window over the whole screen: no way back to the
+    /// tree until it closes, so no tree hint
+    view_modal: bool,
     /// Group or node remembered from the last run, selected once the
     /// cluster lists its nodes (unless the user moved first)
     pending_selection: Option<crate::state::Selection>,
@@ -411,6 +414,7 @@ impl ClusterComponent {
             view_focused: false,
             tree_pane: FocusedPane::Nodes,
             back_hint: None,
+            view_modal: false,
             pending_selection: None,
             newer_version: None,
             run_status: None,

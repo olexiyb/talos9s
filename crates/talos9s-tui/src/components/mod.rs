@@ -5,6 +5,7 @@
 pub mod cluster;
 pub mod containers;
 pub mod diagnostics;
+pub mod drain_options;
 pub mod etcd;
 pub mod group;
 pub mod lifecycle;
@@ -61,6 +62,14 @@ pub trait Component {
     /// Handle mouse events and optionally produce actions
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {
         Ok(None)
+    }
+
+    /// Whether the component shows a window that takes the whole screen
+    /// below the header (the drain confirmation): the app draws it over the
+    /// tree too and gives it every key and mouse event, so a click elsewhere
+    /// can't lose it
+    fn modal(&self) -> bool {
+        false
     }
 
     /// Whether the component is taking typed text (a filter or search box),

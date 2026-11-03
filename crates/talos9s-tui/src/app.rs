@@ -91,6 +91,8 @@ pub struct App {
     open_in_viewer: Option<std::path::PathBuf>,
     /// Namespace warp and recent namespaces per context (`W`)
     namespaces: std::collections::BTreeMap<String, crate::state::NamespaceState>,
+    /// Drain options last started with, per context (Operations)
+    drain: std::collections::BTreeMap<String, crate::state::DrainState>,
     /// Why the menu view has nothing to show (`View::Hint`)
     hint: Option<String>,
     /// Nodes of the KubeSpan matrix (`View::KubeSpanMatrix`)
@@ -182,6 +184,7 @@ impl App {
             pending_target: None,
             open_in_viewer: None,
             namespaces: Default::default(),
+            drain: Default::default(),
             hint: None,
             kubespan_nodes: Vec::new(),
             last_click: None,
@@ -699,6 +702,11 @@ impl App {
             .iter()
             .map(|n| (n.context.clone(), n.clone()))
             .collect();
+        self.drain = state
+            .drain
+            .iter()
+            .map(|d| (d.context.clone(), d.clone()))
+            .collect();
         self.cluster
             .set_newer_version(self.update.newer().map(str::to_string));
         self.saved_state = state;
@@ -778,6 +786,7 @@ impl App {
             },
             update: self.update.clone(),
             namespaces: self.namespaces.values().cloned().collect(),
+            drain: self.drain.values().cloned().collect(),
         }
     }
 
@@ -1025,6 +1034,10 @@ impl App {
             self.help = Some(0);
             return Ok(None);
         }
+        // A window over the whole screen takes every key (Left, Tab too)
+        if self.view_modal() {
+            return self.dispatch_view_key(key);
+        }
         if !self.view_captures_text() && self.layout_key(key) {
             return Ok(None);
         }
@@ -1091,6 +1104,12 @@ impl App {
             View::Hint | View::KubeSpanMatrix => None,
             _ => self.component.as_mut().map(ViewComponent::component_mut),
         }
+    }
+
+    /// Whether the view shows a window over the whole screen (`Component::modal`)
+    fn view_modal(&self) -> bool {
+        self.shown()
+            .is_some_and(super::components::Component::modal)
     }
 
     fn view_uses_tab_key(&self) -> bool {
@@ -1223,6 +1242,10 @@ impl App {
                 && mouse.row < r.y + r.height
         };
         let click = matches!(mouse.kind, MouseEventKind::Down(_));
+        // A window over the whole screen gets every event, wheel included
+        if self.view_modal() {
+            return self.view_mouse(mouse);
+        }
         if self.view == View::Cluster || at(self.tree_area) {
             // Clicking a node or group row keeps the keyboard where it was
             // (the view follows the selection); a menu entry opens its view
@@ -1324,6 +1347,8 @@ impl App {
         } else {
             None
         };
+        let modal = self.view_modal();
+        self.cluster.set_view_modal(modal);
         let (tree, view_area) =
             self.cluster
                 .draw_frame(frame, area, self.pane_width, view_focused, dashboard, hints);
@@ -1380,6 +1405,13 @@ impl App {
                     let _ = c.component_mut().draw(frame, right);
                 }
             }
+        }
+        // A modal window covers the tree and the view: draw the view again
+        // over both (it clears what it covers)
+        if self.view_modal()
+            && let Some(c) = &mut self.component
+        {
+            let _ = c.component_mut().draw(frame, tree.union(view_area));
         }
     }
 
@@ -1679,6 +1711,9 @@ impl App {
             }
             Action::FocusView => self.focus_view(),
             Action::OpenInViewer(path) => self.open_in_viewer = Some(path),
+            Action::SaveDrain(drain) => {
+                self.drain.insert(drain.context.clone(), drain);
+            }
             Action::WarpNamespace(namespace) => {
                 let here = self.namespaces_here();
                 talos9s_core::namespaces::push_recent(&mut here.recent, &namespace);
@@ -1876,6 +1911,11 @@ impl App {
                     std::sync::Arc::clone(&self.runs),
                 );
                 operations.set_log_wrap(self.settings.log_wrap);
+                if let Some(saved) = self.context().and_then(|c| self.drain.get(&c)) {
+                    operations.set_drain(
+                        &crate::components::drain_options::DrainChoice::from_state(saved),
+                    );
+                }
                 if let Some(client) = self.cluster.client() {
                     operations.set_client(client.clone(), self.cluster.control_plane_ip());
                 } else {

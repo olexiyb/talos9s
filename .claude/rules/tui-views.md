@@ -58,7 +58,9 @@ node, `View::Group` on a group).
   14-22 columns), Hidden. `[` narrows, `]` widens, `Z` toggles Hidden.
   Default is Full when the view keeps at least 100 columns.
 - **Dialogs** (confirmations, the Operations view's start dialog) draw over
-  the view; nothing draws over the whole screen. Work that must outlive a
+  the view. The one exception is a component's `modal()` window (the drain
+  confirmation): the app draws it over the tree and the view and gives it
+  every key and mouse event, so a click on the tree can't lose it. Work that must outlive a
   view (operations) lives in the app (`App::runs`), not in the component.
 - A picker that belongs to one view (the namespace
   picker, `components/namespace_picker.rs`) is the view's: it draws over
