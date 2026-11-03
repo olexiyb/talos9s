@@ -111,6 +111,8 @@ pub(super) struct ViewSettings {
     pub(super) storage_show_all: bool,
     pub(super) workloads: workloads::WorkloadsSettings,
     pub(super) containers: ContainersSettings,
+    /// The operation picked in Operations: moving to another node keeps it
+    pub(super) operation: Option<crate::operations::OpKind>,
 }
 
 impl Default for ViewSettings {
@@ -124,6 +126,7 @@ impl Default for ViewSettings {
             storage_show_all: false,
             workloads: Default::default(),
             containers: Default::default(),
+            operation: None,
         }
     }
 }
@@ -143,7 +146,10 @@ impl ViewComponent {
                 settings.log_wrap = c.log_wrap();
             }
             ViewComponent::Network(n) => settings.network = n.settings(),
-            ViewComponent::Operations(o) => settings.log_wrap = o.log_wrap(),
+            ViewComponent::Operations(o) => {
+                settings.log_wrap = o.log_wrap();
+                settings.operation = Some(o.operation());
+            }
             ViewComponent::Storage(s) => settings.storage_show_all = s.show_all(),
             ViewComponent::Workloads(w) => {
                 settings.workloads = w.settings();

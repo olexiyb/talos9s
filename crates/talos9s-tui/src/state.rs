@@ -62,6 +62,9 @@ pub struct DrainState {
     /// 0: no limit; missing: the default
     pub timeout_secs: Option<u64>,
     pub between_nodes_secs: Option<u64>,
+    /// 0: no wait; missing: the default
+    pub wait_to_finish_secs: Option<u64>,
+    pub wait_for_jobs: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

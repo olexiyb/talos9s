@@ -15,6 +15,7 @@ use std::time::Duration;
 const GRACE_STEPS: [Option<i64>; 6] = [None, Some(0), Some(10), Some(30), Some(60), Some(120)];
 const TIMEOUT_STEPS: [Option<u64>; 5] = [Some(60), Some(300), Some(600), Some(1800), None];
 const BETWEEN_STEPS: [u64; 5] = [0, 30, 60, 120, 300];
+const WAIT_STEPS: [Option<u64>; 5] = [None, Some(300), Some(900), Some(1800), Some(3600)];
 
 /// Label column
 const LABEL: usize = 22;
@@ -41,6 +42,10 @@ pub enum Opt {
     IgnoreDaemonsets,
     DeleteEmptydir,
     Force,
+    /// Wait for unmanaged pods to finish after cordoning
+    WaitToFinish,
+    /// The wait covers Job pods
+    WaitJobs,
     Grace,
     Timeout,
     Between,
@@ -57,6 +62,8 @@ impl Opt {
             Opt::IgnoreDaemonsets,
             Opt::DeleteEmptydir,
             Opt::Force,
+            Opt::WaitToFinish,
+            Opt::WaitJobs,
             Opt::Grace,
             Opt::Timeout,
         ];
@@ -71,6 +78,8 @@ impl Opt {
             Opt::IgnoreDaemonsets => "Ignore DaemonSets",
             Opt::DeleteEmptydir => "Delete emptyDir data",
             Opt::Force => "Force",
+            Opt::WaitToFinish => "Wait to finish",
+            Opt::WaitJobs => "  also Job pods",
             Opt::Grace => "Grace period",
             Opt::Timeout => "Timeout",
             Opt::Between => "Between nodes",
@@ -97,6 +106,10 @@ impl DrainChoice {
         if let Some(t) = state.timeout_secs {
             o.timeout_secs = (t > 0).then_some(t);
         }
+        if let Some(w) = state.wait_to_finish_secs {
+            o.wait_to_finish_secs = (w > 0).then_some(w);
+        }
+        o.wait_for_jobs = state.wait_for_jobs.unwrap_or(o.wait_for_jobs);
         if let Some(b) = state.between_nodes_secs {
             c.between = Duration::from_secs(b);
         }
@@ -112,6 +125,8 @@ impl DrainChoice {
             grace_period_secs: self.options.grace_period_secs,
             timeout_secs: Some(self.options.timeout_secs.unwrap_or(0)),
             between_nodes_secs: Some(self.between.as_secs()),
+            wait_to_finish_secs: Some(self.options.wait_to_finish_secs.unwrap_or(0)),
+            wait_for_jobs: Some(self.options.wait_for_jobs),
         }
     }
 
@@ -121,6 +136,7 @@ impl DrainChoice {
             Opt::IgnoreDaemonsets => Some(self.options.ignore_daemonsets),
             Opt::DeleteEmptydir => Some(self.options.delete_emptydir_data),
             Opt::Force => Some(self.options.force),
+            Opt::WaitJobs => Some(self.options.wait_for_jobs),
             _ => None,
         }
     }
@@ -137,6 +153,10 @@ impl DrainChoice {
             Opt::IgnoreDaemonsets => o.ignore_daemonsets = !o.ignore_daemonsets,
             Opt::DeleteEmptydir => o.delete_emptydir_data = !o.delete_emptydir_data,
             Opt::Force => o.force = !o.force,
+            Opt::WaitJobs => o.wait_for_jobs = !o.wait_for_jobs,
+            Opt::WaitToFinish => {
+                o.wait_to_finish_secs = next(&WAIT_STEPS, o.wait_to_finish_secs, forward);
+            }
             Opt::Grace => o.grace_period_secs = next(&GRACE_STEPS, o.grace_period_secs, forward),
             Opt::Timeout => o.timeout_secs = next(&TIMEOUT_STEPS, o.timeout_secs, forward),
             Opt::Between => {
@@ -155,6 +175,10 @@ impl DrainChoice {
                     secs(talos9s_core::convert::non_negative(g))
                 }),
             Opt::Timeout => self.options.timeout_secs.map_or("none".to_string(), secs),
+            Opt::WaitToFinish => self
+                .options
+                .wait_to_finish_secs
+                .map_or("off".to_string(), |s| format!("up to {}", secs(s))),
             Opt::Between => secs(self.between.as_secs()),
             _ => String::new(),
         }
@@ -196,6 +220,20 @@ impl DrainChoice {
                         if here {
                             spans.push(Span::styled("  ←/→", PICK_DIM));
                         }
+                        if opt == Opt::WaitToFinish
+                            && let Preview::Pods(pods) = preview
+                        {
+                            let n = pods
+                                .iter()
+                                .filter(|p| p.waits_to_finish(self.options.wait_for_jobs))
+                                .count();
+                            if n > 0 {
+                                spans.push(Span::styled(
+                                    format!("  {} could end by themselves", pods_word(n)),
+                                    PICK_DIM,
+                                ));
+                            }
+                        }
                     }
                 }
                 Line::from(spans)
@@ -211,6 +249,8 @@ impl Opt {
             Opt::IgnoreDaemonsets => pod.daemonset,
             Opt::DeleteEmptydir => pod.emptydir && !pod.daemonset,
             Opt::Force => pod.owner.is_none() && !pod.finished,
+            Opt::WaitToFinish => pod.waits_to_finish(true),
+            Opt::WaitJobs => pod.waits_to_finish(true) && pod.owner.is_some(),
             _ => false,
         }
     }
@@ -230,6 +270,14 @@ fn note(opt: Opt, on: bool, preview: Preview) -> Span<'static> {
     }
     let pods = pods_word(n);
     match (opt, on) {
+        (Opt::WaitJobs, true) => Span::styled(
+            format!("{pods} of Jobs wait to finish"),
+            Style::default().fg(Color::Yellow),
+        ),
+        (Opt::WaitJobs, false) => Span::styled(
+            format!("{pods} of Jobs evicted, their runs restart"),
+            PICK_DIM,
+        ),
         (_, false) => Span::styled(
             format!("stops the drain: {pods}"),
             Style::default().fg(Color::Red),
@@ -276,8 +324,8 @@ mod tests {
     #[test]
     fn rows_follow_the_operation() {
         assert!(Opt::shown(OpKind::Cordon, 1).is_empty());
-        assert_eq!(Opt::shown(OpKind::Drain, 3).len(), 5);
-        assert_eq!(Opt::shown(OpKind::Reboot, 1).len(), 5);
+        assert_eq!(Opt::shown(OpKind::Drain, 3).len(), 7);
+        assert_eq!(Opt::shown(OpKind::Reboot, 1).len(), 7);
         assert_eq!(Opt::shown(OpKind::Reboot, 2).last(), Some(&Opt::Between));
     }
 

@@ -736,6 +736,8 @@ impl App {
             storage_show_all,
             workloads,
             containers,
+            // Only for this session: a restart starts at Cordon again
+            operation: _,
         } = settings;
         crate::state::UiState {
             // Nothing listed yet (no talosconfig): keep the remembered one
@@ -1911,6 +1913,9 @@ impl App {
                     std::sync::Arc::clone(&self.runs),
                 );
                 operations.set_log_wrap(self.settings.log_wrap);
+                if let Some(kind) = self.settings.operation {
+                    operations.set_operation(kind);
+                }
                 if let Some(saved) = self.context().and_then(|c| self.drain.get(&c)) {
                     operations.set_drain(
                         &crate::components::drain_options::DrainChoice::from_state(saved),

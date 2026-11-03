@@ -213,12 +213,18 @@ node and stops at the first failure.
 - **Drain options** (Drain, Reboot, Shutdown): the confirmation fills the
   screen, tree included (a click elsewhere can't lose it), with the options
   on top and a table of every pod on the checked nodes and what happens to
-  it (stops the drain, waits for a PodDisruptionBudget that allows no
-  disruption now, gone for good, emptyDir data lost, evicted, stays), worst
+  it (stops the drain, blocked by a one-instance CloudNativePG cluster,
+  waits for a PodDisruptionBudget that allows no disruption now, gone for
+  good, emptyDir data lost, a CloudNativePG primary that switches over
+  first, evicted, stays), worst
   first; `PgUp`/`PgDn` and the mouse wheel scroll it, and the
-  pods the option under the cursor decides about are bold. Ignore
+  pods the option under the cursor decides about are bold. `r` reads
+  the pods again, and they are read every 10 s (`a` toggles). Ignore
   DaemonSets, Delete emptyDir data and Force check boxes, grace period,
-  timeout (5 min per node) and, for a reboot of several nodes, the wait
+  timeout (5 min per node), Wait to finish (off, 5 min to 1 h: after
+  cordoning, wait for pods no controller recreates, such as CI agents, and
+  with "also Job pods" for Jobs, to end by themselves before draining; what
+  is left then follows Force) and, for a reboot of several nodes, the wait
   between them. `j`/`k` move, `Space` toggles, `←`/`→` change a value, a
   click toggles. Each counts what it hits on the checked nodes (`15 pods
   stay`, `stops the drain: 1 pod`). As with kubectl, a pod an

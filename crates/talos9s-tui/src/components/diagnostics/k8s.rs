@@ -900,6 +900,12 @@ pub struct DrainOptions {
     pub ignore_daemonsets: bool,
     /// Evict pods with emptyDir volumes, losing that data (`--delete-emptydir-data`)
     pub delete_emptydir_data: bool,
+    /// After cordoning, wait up to this long for pods no controller
+    /// recreates (a CI agent, a debug pod) to finish by themselves before
+    /// draining; `None` doesn't wait. Not a kubectl flag
+    pub wait_to_finish_secs: Option<u64>,
+    /// The wait covers Job pods too: evicting one restarts its run
+    pub wait_for_jobs: bool,
     /// Wait for node to become Ready after reboot
     pub wait_for_node_ready: bool,
     /// Timeout for waiting for node to become Ready (seconds)
@@ -916,6 +922,8 @@ impl Default for DrainOptions {
             force: false,
             ignore_daemonsets: true,
             delete_emptydir_data: true,
+            wait_to_finish_secs: None,
+            wait_for_jobs: false,
             wait_for_node_ready: true,     // Safe default for production
             post_reboot_timeout_secs: 300, // 5 minutes
             uncordon_after_reboot: true,   // Auto-uncordon when healthy
@@ -1131,9 +1139,22 @@ pub struct PodImpact {
     /// Succeeded or Failed: holds nothing
     pub finished: bool,
     pub labels: std::collections::BTreeMap<String, String>,
-    /// A PodDisruptionBudget covering it that allows no disruption now:
-    /// its eviction waits (`with_pdbs`)
-    pub pdb: Option<String>,
+    /// A PodDisruptionBudget covering it that allows no disruption now
+    /// (`with_pdbs`)
+    pub pdb: Option<PdbHold>,
+}
+
+/// Why a PDB that allows no disruption holds a pod, and what follows
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PdbHold {
+    /// A CloudNativePG primary with replicas: the operator switches over
+    /// once the node is cordoned, then the eviction goes through
+    Switchover(String),
+    /// A CloudNativePG cluster of one instance: nothing to switch over to,
+    /// so the drain can't go on (CNPG suggests `enablePDB: false` for these)
+    SingleInstance(String),
+    /// Any other PDB: eviction is retried until the drain's timeout
+    Pdb(String),
 }
 
 /// What happens to a pod, worst first
@@ -1141,13 +1162,20 @@ pub struct PodImpact {
 pub enum Fate {
     /// It stops the drain; the options that would let it go
     Stops(Vec<&'static str>),
+    /// A one-instance CloudNativePG cluster: its PDB never lets it go
+    SingleInstance(String),
     /// Its eviction waits for this PodDisruptionBudget, which allows no
-    /// disruption now: the drain fails at its timeout unless that changes
+    /// disruption now, up to the drain's timeout
     WaitsForPdb(String),
     /// Evicted, and nothing recreates it
     Gone,
     /// Evicted, its emptyDir data lost
     DataLost,
+    /// Waited for to finish by itself (`wait_to_finish_secs`); whether
+    /// still being there then stops the drain
+    WaitsToFinish { then_stops: bool },
+    /// A CloudNativePG primary: switched over to a replica, then evicted
+    Switchover(String),
     /// Evicted; its controller starts it elsewhere
     Evicted,
     /// A DaemonSet pod, left where it is
@@ -1155,6 +1183,14 @@ pub enum Fate {
 }
 
 impl PodImpact {
+    /// A pod the wait before draining is for: one no controller recreates,
+    /// or a Job's with `jobs`, still running
+    pub fn waits_to_finish(&self, jobs: bool) -> bool {
+        !self.finished
+            && !self.daemonset
+            && (self.owner.is_none() || (jobs && self.owner.as_deref() == Some("Job")))
+    }
+
     /// The same rules as `select_pods_to_evict` (a test keeps them equal)
     pub fn fate(&self, options: &DrainOptions) -> Fate {
         if self.daemonset {
@@ -1172,10 +1208,20 @@ impl PodImpact {
         if self.emptydir && !options.delete_emptydir_data {
             stops.push("delete emptyDir data");
         }
+        // Waited for after cordoning: CI agents and Jobs end by themselves
+        if options.wait_to_finish_secs.is_some() && self.waits_to_finish(options.wait_for_jobs) {
+            return Fate::WaitsToFinish {
+                then_stops: !stops.is_empty(),
+            };
+        }
         if !stops.is_empty() {
             Fate::Stops(stops)
-        } else if let Some(pdb) = &self.pdb {
-            Fate::WaitsForPdb(pdb.clone())
+        } else if let Some(hold) = &self.pdb {
+            match hold {
+                PdbHold::Switchover(c) => Fate::Switchover(c.clone()),
+                PdbHold::SingleInstance(c) => Fate::SingleInstance(c.clone()),
+                PdbHold::Pdb(p) => Fate::WaitsForPdb(p.clone()),
+            }
         } else if unmanaged {
             Fate::Gone
         } else if self.emptydir {
@@ -1236,12 +1282,51 @@ fn pod_impacts(node: &str, pods: &[Pod]) -> Vec<PodImpact> {
 pub fn with_pdbs(pods: &mut [PodImpact], pdbs: &PdbHealthInfo) {
     for pod in pods.iter_mut().filter(|p| !p.finished && !p.daemonset) {
         let namespace = pod.pod.split('/').next().unwrap_or_default();
-        pod.pdb = pdbs
+        let Some(blocking) = pdbs
             .blocking_pdbs
             .iter()
             .find(|b| b.covers(namespace, &pod.labels))
-            .map(|b| b.name.clone());
+        else {
+            pod.pdb = None;
+            continue;
+        };
+        // CloudNativePG gives each cluster a `<cluster>-primary` PDB (allows
+        // 0) and a `<cluster>` PDB over the replicas: with replicas there,
+        // a drain makes the operator switch over first (its docs, "Kubernetes
+        // upgrade and maintenance")
+        let cnpg = pod
+            .labels
+            .get("cnpg.io/cluster")
+            .filter(|c| blocking.name == format!("{c}-primary"));
+        pod.pdb = Some(match cnpg {
+            Some(cluster) => {
+                let replicas = pdbs
+                    .pdbs
+                    .iter()
+                    .any(|p| p.namespace == namespace && p.name == *cluster && p.expected_pods > 0);
+                if replicas {
+                    PdbHold::Switchover(cluster.clone())
+                } else {
+                    PdbHold::SingleInstance(cluster.clone())
+                }
+            }
+            None => PdbHold::Pdb(blocking.name.clone()),
+        });
     }
+}
+
+/// The pods on `node_name` the wait before draining is for, as `ns/name`
+pub async fn pods_to_wait_for(
+    client: &Client,
+    node_name: &str,
+    jobs: bool,
+) -> Result<Vec<String>, K8sError> {
+    let pods = pods_on_node(client, node_name).await?;
+    Ok(pod_impacts(node_name, &pods)
+        .into_iter()
+        .filter(|p| p.waits_to_finish(jobs))
+        .map(|p| p.pod)
+        .collect())
 }
 
 /// `pod_impacts` of the pods on `node_name`, read now
@@ -1856,6 +1941,17 @@ mod tests {
             force: true,
             ..Default::default()
         };
+        // Waiting: the unmanaged pods are waited for, and still stop the
+        // drain after it without force
+        let wait = DrainOptions {
+            wait_to_finish_secs: Some(60),
+            ..Default::default()
+        };
+        assert_eq!(
+            impacts[2].fate(&wait),
+            Fate::WaitsToFinish { then_stops: true }
+        );
+        assert_eq!(impacts[1].fate(&wait), Fate::Evicted);
         let fates: Vec<Fate> = impacts.iter().map(|i| i.fate(&all)).collect();
         assert_eq!(
             fates,
@@ -1926,6 +2022,29 @@ mod tests {
         assert_eq!(
             pods[0].fate(&DrainOptions::default()),
             Fate::WaitsForPdb("p".into())
+        );
+
+        // A CloudNativePG primary: switchover with replicas, blocked alone
+        let mut primary = pdb(by(Some(vec![("app", "pg")]), None));
+        primary.name = "pg-primary".into();
+        let mut replicas = pdb(None);
+        replicas.name = "pg".into();
+        replicas.expected_pods = 2;
+        pods[0].labels.insert("cnpg.io/cluster".into(), "pg".into());
+        let mut info = PdbHealthInfo {
+            pdbs: vec![replicas],
+            blocking_pdbs: vec![primary],
+        };
+        with_pdbs(&mut pods, &info);
+        assert_eq!(
+            pods[0].fate(&DrainOptions::default()),
+            Fate::Switchover("pg".into())
+        );
+        info.pdbs[0].expected_pods = 0;
+        with_pdbs(&mut pods, &info);
+        assert_eq!(
+            pods[0].fate(&DrainOptions::default()),
+            Fate::SingleInstance("pg".into())
         );
     }
 

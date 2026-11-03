@@ -47,6 +47,8 @@ const RUN_FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
 const FACTS_EVERY: Duration = Duration::from_secs(15);
 /// Pod rows `PgUp`/`PgDn` move in the drain confirmation
 const IMPACT_PAGE: usize = 10;
+/// How often the open drain confirmation reads its checks again
+const SAFETY_EVERY: Duration = Duration::from_secs(10);
 /// Pod rows one wheel step moves
 const IMPACT_WHEEL: usize = 3;
 
@@ -110,6 +112,11 @@ pub struct OperationsComponent {
     option_rows: Rect,
     /// The first pod row shown in the drain confirmation (`PgUp`/`PgDn`)
     impact_scroll: usize,
+    /// The drain confirmation reads its checks again every `SAFETY_EVERY`
+    /// (`a` toggles), so pods that end show as gone
+    safety_auto: bool,
+    /// When the confirmation's checks were last read
+    safety_at: Option<Instant>,
     /// The run shown (Enter), and its output
     focus: Option<PathBuf>,
     /// Whether the run shown was running at the last tick, for the read
@@ -161,6 +168,8 @@ impl OperationsComponent {
             drain: DrainChoice::default(),
             option_rows: Rect::default(),
             impact_scroll: 0,
+            safety_auto: true,
+            safety_at: None,
             focus: None,
             focus_was_running: false,
             logs: LogPane::default(),
@@ -182,6 +191,19 @@ impl OperationsComponent {
     /// The drain options last started with in this cluster
     pub fn set_drain(&mut self, choice: &DrainChoice) {
         self.drain = choice.clone();
+    }
+
+    /// The operation picked, to carry to the next target
+    pub fn operation(&self) -> OpKind {
+        self.kind()
+    }
+
+    /// Pick `kind` as the last target had it; one not offered here (Shutdown
+    /// on a group) leaves the first
+    pub fn set_operation(&mut self, kind: OpKind) {
+        if let Some(i) = self.ops().iter().position(|k| *k == kind) {
+            self.kind = i;
+        }
     }
 
     pub fn set_log_wrap(&mut self, wrap: bool) {
@@ -478,10 +500,7 @@ impl OperationsComponent {
             return;
         }
         let kind = self.kind();
-        let task = self.talos.clone().map(|talos| {
-            let nodes = nodes.clone();
-            tokio::spawn(fetch_safety(talos, self.cp_ip.clone(), kind, nodes))
-        });
+        let task = self.spawn_safety(kind, &nodes);
         self.dialog = Some(Dialog::Start {
             kind,
             nodes,
@@ -490,6 +509,37 @@ impl OperationsComponent {
             cursor: 0,
         });
         self.impact_scroll = 0;
+        self.safety_at = None;
+    }
+
+    /// Read the checks the confirmation shows (etcd, PDBs, the pods)
+    fn spawn_safety(&self, kind: OpKind, nodes: &[OpNode]) -> Option<JoinHandle<SafetyInfo>> {
+        self.talos.clone().map(|talos| {
+            tokio::spawn(fetch_safety(
+                talos,
+                self.cp_ip.clone(),
+                kind,
+                nodes.to_vec(),
+            ))
+        })
+    }
+
+    /// `r` in the drain confirmation, or its auto-refresh: read the checks
+    /// again, the old ones staying on screen until the new arrive
+    fn refresh_safety(&mut self) {
+        let Some(Dialog::Start {
+            kind, nodes, task, ..
+        }) = &self.dialog
+        else {
+            return;
+        };
+        if task.is_some() {
+            return;
+        }
+        let new = self.spawn_safety(*kind, nodes);
+        if let Some(Dialog::Start { task, .. }) = &mut self.dialog {
+            *task = new;
+        }
     }
 
     /// What the run is on: the group when all its nodes are checked, else
@@ -618,6 +668,18 @@ impl OperationsComponent {
                     KeyCode::Down | KeyCode::Char('j') => {
                         cursor = (cursor + 1).min(opts.len().saturating_sub(1));
                     }
+                    KeyCode::Char('r') => {
+                        self.dialog = Some(Dialog::Start {
+                            kind,
+                            nodes,
+                            safety,
+                            task,
+                            cursor,
+                        });
+                        self.refresh_safety();
+                        return None;
+                    }
+                    KeyCode::Char('a') => self.safety_auto = !self.safety_auto,
                     KeyCode::PageDown => self.impact_scroll += IMPACT_PAGE,
                     KeyCode::PageUp => {
                         self.impact_scroll = self.impact_scroll.saturating_sub(IMPACT_PAGE);
@@ -678,6 +740,7 @@ impl OperationsComponent {
             && let Some(Some(Ok(info))) = task.take().map(crate::task::poll_finished)
         {
             *safety = Some(info);
+            self.safety_at = Some(Instant::now());
         }
     }
 
@@ -750,14 +813,12 @@ impl OperationsComponent {
             && !Opt::shown(*kind, nodes.len()).is_empty()
         {
             return Line::from(vec![
-                key("<j/k>"),
-                label(" move  "),
-                key("<Space>"),
-                label(" toggle  "),
-                key("<←/→>"),
-                label(" value  "),
+                key("<j/k/Space/←/→>"),
+                label(" edit  "),
                 key("<PgUp/PgDn>"),
-                label(" pods  "),
+                label(" scroll  "),
+                key("<r/a>"),
+                label(" refresh  "),
                 Span::styled("<y>", KEY_YES),
                 label(" start  "),
                 Span::styled("<n/Esc>", KEY_NO),
@@ -1328,11 +1389,12 @@ impl OperationsComponent {
             nodes,
             safety,
             cursor,
-            ..
+            task,
         }) = &self.dialog
         else {
             return;
         };
+        let refreshing = task.is_some() && safety.is_some();
         let (kind, cursor) = (*kind, *cursor);
         let opts = Opt::shown(kind, nodes.len());
         let preview = match safety {
@@ -1352,6 +1414,22 @@ impl OperationsComponent {
             .title(Span::styled(
                 format!(" {} on {}? ", kind.name(), self.run_target(nodes)),
                 Style::default().bold(),
+            ))
+            .title(Span::styled(
+                format!(
+                    " {}{} ",
+                    if refreshing { "refreshing · " } else { "" },
+                    if self.safety_auto {
+                        "[AUTO:ON 10s]"
+                    } else {
+                        "[AUTO:OFF]"
+                    }
+                ),
+                Style::default().fg(if self.safety_auto {
+                    Color::Green
+                } else {
+                    Color::DarkGray
+                }),
             ));
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1583,10 +1661,17 @@ fn impact_summary(preview: Preview, pods: &[(&PodImpact, Fate)]) -> Line<'static
     let count = |f: fn(&Fate) -> bool| pods.iter().filter(|(_, fate)| f(fate)).count();
     let stops = count(|f| matches!(f, Fate::Stops(_)));
     let waits = count(|f| matches!(f, Fate::WaitsForPdb(_)));
+    let single = count(|f| matches!(f, Fate::SingleInstance(_)));
+    let switchover = count(|f| matches!(f, Fate::Switchover(_)));
     let parts: Vec<String> = [
         (count(|f| *f == Fate::Evicted), "evicted"),
         (count(|f| *f == Fate::DataLost), "lose emptyDir data"),
         (count(|f| *f == Fate::Gone), "gone for good"),
+        (switchover, "switch over first (CloudNativePG)"),
+        (
+            count(|f| matches!(f, Fate::WaitsToFinish { .. })),
+            "waited for to finish",
+        ),
         (count(|f| *f == Fate::Stays), "stay"),
     ]
     .into_iter()
@@ -1601,8 +1686,18 @@ fn impact_summary(preview: Preview, pods: &[(&PodImpact, Fate)]) -> Line<'static
     if waits > 0 {
         spans.push(Span::styled(
             format!(
-                " · {} wait for a PDB (fails at the timeout)",
+                " · {} wait for a PDB, up to the timeout",
                 talos9s_core::pluralize(waits, "pod", "pods")
+            ),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    if single > 0 {
+        spans.push(Span::styled(
+            format!(
+                " · {} single-instance CloudNativePG {} block it",
+                single,
+                if single == 1 { "cluster" } else { "clusters" }
             ),
             Style::default().fg(Color::Red),
         ));
@@ -1626,9 +1721,25 @@ fn fate_cell(fate: &Fate, owner: Option<&str>) -> (String, Style) {
             format!("stops the drain (needs {})", needs.join(", ")),
             Style::default().fg(Color::Red),
         ),
-        Fate::WaitsForPdb(pdb) => (
-            format!("waits: PDB {pdb} allows 0"),
+        Fate::WaitsToFinish { then_stops } => (
+            if *then_stops {
+                "waits to finish; still there, stops the drain".to_string()
+            } else {
+                "waits to finish, then evicted".to_string()
+            },
+            Style::default().fg(Color::Yellow),
+        ),
+        Fate::SingleInstance(cluster) => (
+            format!("blocks: CNPG {cluster} has one instance, no switchover"),
             Style::default().fg(Color::Red),
+        ),
+        Fate::WaitsForPdb(pdb) => (
+            format!("waits: PDB {pdb} allows 0, up to the timeout"),
+            Style::default().fg(Color::Yellow),
+        ),
+        Fate::Switchover(cluster) => (
+            format!("CNPG {cluster} switches over, then evicted"),
+            Style::default().fg(Color::Cyan),
         ),
         Fate::Gone => (
             "evicted, nothing recreates it".to_string(),
@@ -1939,6 +2050,12 @@ impl Component for OperationsComponent {
         match action {
             Action::Tick => {
                 self.poll_safety();
+                if self.safety_auto
+                    && self.drain_start_open()
+                    && self.safety_at.is_some_and(|t| t.elapsed() >= SAFETY_EVERY)
+                {
+                    self.refresh_safety();
+                }
                 self.poll_facts();
                 self.load_facts();
                 let every = if self.running().is_empty() {
@@ -2149,6 +2266,18 @@ mod tests {
     }
 
     /// A single node is checked from the start and stays checked
+    /// The operation carries to the next target when it is offered there
+    #[test]
+    fn operation_carries_over() {
+        let dir = std::env::temp_dir().join(format!("talos9s-opscarry-{}", std::process::id()));
+        let mut c = component(&dir, false);
+        c.set_operation(OpKind::Drain);
+        assert_eq!(c.operation(), OpKind::Drain);
+        let mut group = component(&dir, true);
+        group.set_operation(OpKind::Shutdown);
+        assert_eq!(group.operation(), OpKind::Cordon);
+    }
+
     #[test]
     fn single_node_is_checked() {
         let dir = std::env::temp_dir().join(format!("talos9s-opsone-{}", std::process::id()));
@@ -2251,6 +2380,10 @@ mod tests {
         press(&mut c, KeyCode::Char('j'));
         press(&mut c, KeyCode::Char('j'));
         press(&mut c, KeyCode::Right);
+        assert_eq!(c.drain.options.wait_to_finish_secs, Some(300));
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Right);
         assert_eq!(c.drain.options.grace_period_secs, Some(0));
         // `Enter` never confirms
         press(&mut c, KeyCode::Enter);
@@ -2274,6 +2407,12 @@ mod tests {
         assert!(text.contains("[ ] Delete emptyDir data"));
         assert!(text.contains("--grace-period=0"));
 
+        // `a` toggles auto-refresh; `r` with no client reads nothing
+        assert!(c.safety_auto);
+        press(&mut c, KeyCode::Char('a'));
+        assert!(!c.safety_auto);
+        press(&mut c, KeyCode::Char('r'));
+        assert!(c.dialog.is_some());
         // It covers the screen and takes the wheel
         assert!(c.modal());
         let wheel = |kind| MouseEvent {

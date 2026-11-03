@@ -319,13 +319,26 @@ The start dialog gets an options block when the operation drains:
    It covers the tree too (`Component::modal`): a click on the tree or menu
    used to close it. Pods a blocking PDB covers (its label selector matched
    against the pod) show `waits: PDB … allows 0`: the drain would wait for
-   them until its timeout. On bc every CloudNativePG primary is such a pod,
-   so draining a node with primaries needs a switchover first.
+   them until its timeout. CloudNativePG primaries are the exception: their
+   `<cluster>-primary` PDB allows 0 on purpose, and the operator switches
+   over once the node is cordoned (CNPG docs, "Kubernetes upgrade and
+   maintenance"), so they show "switches over, then evicted"; only a
+   one-instance cluster (no replicas under its `<cluster>` PDB) blocks.
 4. Done. Saved choice per context (`state.yaml` `drain`), force never.
 5. Done. README, `.claude/rules/operations.md`, this plan.
 6. Done (live on bc, cancelled with `n`): open the dialog on bc, toggle, check the preview and the command,
    cancel with `n`. A real drain only on `test-clusters/`, with an
    unmanaged pod, an emptyDir pod and a PDB to see each one stop it.
+
+### Waiting for pods to finish
+
+A pod with no controller (a Jenkins agent from the Kubernetes plugin) stops
+a drain without Force, and Force kills the build. "Wait to finish" (off,
+5 min to 1 h; not a kubectl flag) cordons, then waits for those pods, and
+Job pods with "also Job pods", to end by themselves, polling every 10 s;
+cancel (`x`) works during the wait. What is left then follows the options.
+The confirmation reads its pods again every 10 s (`a` toggles, `r` now), so
+pods that end leave the table.
 
 ## Not done yet
 

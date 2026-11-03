@@ -11,7 +11,8 @@
 use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::diagnostics::k8s::{
     DrainOptions, PdbHealthInfo, PodImpact, check_pdb_health, cordon_node, drain_blockers,
-    drain_node_with_progress, drain_preview, get_node_boot_id, uncordon_node, wait_for_node_ready,
+    drain_node_with_progress, drain_preview, get_node_boot_id, pods_to_wait_for, uncordon_node,
+    wait_for_node_ready,
 };
 use chrono::Utc;
 use kube::Client;
@@ -342,7 +343,19 @@ pub fn commands_for(
     options: &DrainOptions,
 ) -> Vec<String> {
     let h = &node.hostname;
-    let drain = drain_command(h, options);
+    let mut drain = drain_command(h, options);
+    if let Some(secs) = options.wait_to_finish_secs {
+        // No kubectl flag waits for pods to end: say what talos9s does
+        drain = format!(
+            "{drain}  # after waiting up to {} for pods without a controller{} to finish",
+            crate::components::drain_options::secs(secs),
+            if options.wait_for_jobs {
+                " and Job pods"
+            } else {
+                ""
+            }
+        );
+    }
     let commands = match kind {
         OpKind::Cordon => vec![format!("kubectl cordon {h}")],
         OpKind::Uncordon => vec![format!("kubectl uncordon {h}")],
@@ -820,6 +833,60 @@ fn cancelled(rec: &Recorder, tag: &str, target: &str, done: usize, total: usize)
 }
 
 /// Sleep, waking early on cancel; true if cancelled
+/// How often the wait before draining looks at the node's pods again
+const WAIT_POLL: Duration = Duration::from_secs(10);
+
+/// Wait up to `secs` for the pods with no controller (and Job pods with
+/// `jobs`) on the cordoned node to finish by themselves; true when
+/// cancelled. Whatever is left is the drain's to decide
+async fn wait_to_finish(
+    k8s: &Client,
+    h: &str,
+    jobs: bool,
+    secs: u64,
+    rec: &Recorder,
+    cancel: &AtomicBool,
+) -> bool {
+    use crate::components::drain_options::secs as fmt;
+    let limit = Duration::from_secs(secs);
+    let start = std::time::Instant::now();
+    rec.line(&format!(
+        "# wait up to {} for pods without a controller{} to finish",
+        fmt(secs),
+        if jobs { " and Job pods" } else { "" }
+    ));
+    let mut last = Vec::new();
+    loop {
+        match pods_to_wait_for(k8s, h, jobs).await {
+            Ok(pods) if pods.is_empty() => {
+                rec.line("nothing left to wait for");
+                return false;
+            }
+            Ok(pods) => {
+                if pods != last {
+                    rec.line(&format!(
+                        "waiting for {} ({} of {})",
+                        pods.join(", "),
+                        fmt(start.elapsed().as_secs()),
+                        fmt(secs)
+                    ));
+                    last = pods;
+                }
+            }
+            // Unknown isn't "done": keep waiting, the drain checks again
+            Err(e) => rec.line(&format!("could not list pods: {e}")),
+        }
+        let left = limit.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            rec.line(&format!("waited {}; draining", fmt(secs)));
+            return false;
+        }
+        if sleep_or_cancel(WAIT_POLL.min(left), cancel).await {
+            return true;
+        }
+    }
+}
+
 async fn sleep_or_cancel(duration: Duration, cancel: &AtomicBool) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < duration {
@@ -873,8 +940,13 @@ async fn run_node(
 
     // A node cordoned before the run stays cordoned after it: a failure or
     // the reboot's end uncordons only what this run cordoned
-    // Pods the options don't let go stop the drain before anything changes
-    match drain_blockers(k8s, h, options).await {
+    // Pods the options don't let go stop the drain before anything changes;
+    // with a wait, unmanaged pods may still end by themselves first
+    let check = DrainOptions {
+        force: options.force || options.wait_to_finish_secs.is_some(),
+        ..options.clone()
+    };
+    match drain_blockers(k8s, h, &check).await {
         Ok(b) if !b.is_empty() => return Err(b.message()),
         Ok(_) => {}
         Err(e) => return Err(format!("drain failed: {e}")),
@@ -885,6 +957,19 @@ async fn run_node(
     } else {
         shell(rec, &format!("kubectl cordon {h}"));
         set_schedulable(k8s, h, false).await?;
+    }
+    if let Some(secs) = options.wait_to_finish_secs
+        && wait_to_finish(k8s, h, options.wait_for_jobs, secs, rec, cancel).await
+    {
+        let msg = undo_cordon(
+            k8s,
+            h,
+            rec,
+            was_cordoned,
+            "cancelled while waiting".to_string(),
+        )
+        .await;
+        return Ok(Step::Cancelled(msg));
     }
     shell(rec, &drain_command(h, options));
     let r = rec.clone();
