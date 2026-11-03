@@ -2235,6 +2235,40 @@ mod tests {
         assert_eq!(c.selected, 1);
     }
 
+    /// A list the kubeconfig may not read (StatefulSets forbidden) is `?`
+    /// with its error in the summary; the other kinds and their rows stay
+    #[test]
+    fn forbidden_list_degrades_to_unknown() {
+        let mut c = WorkloadHealthComponent::new(None);
+        with_data(&mut c);
+        if let Some(data) = c.state.data_mut() {
+            data.errors.push(
+                "StatefulSets: statefulsets.apps is forbidden: User \"viewer\" cannot list".into(),
+            );
+            data.unavailable.push(WorkloadKind::StatefulSet);
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 10)).unwrap();
+        terminal.draw(|f| c.draw(f, f.area()).unwrap()).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(text.contains("Deployments 1/2"), "{text}");
+        assert!(text.contains("StatefulSets ?"), "{text}");
+        assert!(
+            text.contains("Couldn't read StatefulSets: statefulsets.apps is forbidden"),
+            "{text}"
+        );
+        // The unhealthy Deployment is still listed
+        assert!(text.contains("api"), "{text}");
+    }
+
     /// Without the Kubernetes API the error points to the Containers view
     #[test]
     fn api_error_points_to_containers() {

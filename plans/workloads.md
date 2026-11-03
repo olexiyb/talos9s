@@ -225,7 +225,10 @@ Each step is usable on its own; 1–3 already answer "where".
     an unreachable API (the view shows the error, nothing hangs).
     (Unreachable API done, 2026-11-03: the view said "Loading the cluster's
     nodes…" for good; fixed, it now shows the connection error and opens
-    once the cluster answers. The StatefulSets permission check is not done.)
+    once the cluster answers. The StatefulSets check is a render test,
+    `forbidden_list_degrades_to_unknown`: talos9s always fetches the admin
+    kubeconfig from a control plane node, so a restricted one can't be used
+    live without a new option.)
   - **Stale events:** a pod that failed and recovered shows no event and no
     issue.
     (Done in the bad-image test: the recovered Deployment's new pods show
@@ -250,5 +253,5 @@ Each step is usable on its own; 1–3 already answer "where".
 
 ## Still open
 
-- The degradation test with a kubeconfig that can't list StatefulSets
-  (needs a restricted kubeconfig).
+- A live forbidden-list test needs a way to give talos9s a restricted
+  kubeconfig (e.g. a `--kubeconfig` option); none exists today.
