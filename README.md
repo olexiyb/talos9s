@@ -26,25 +26,26 @@ than replacing it:
 ## How it compares
 
 Checked against each project's source and README in November 2026
-(talos-pilot 0.1.11, its last release; t9s at its latest commit, October 2025).
+(talos-pilot 0.1.11, its last release; t9s 0.2.0, its Homebrew cask).
 
-| | talos9s | [k9s](https://github.com/derailed/k9s) | [talos-pilot](https://github.com/Handfish/talos-pilot) | [t9s](https://github.com/alongwill/t9s) |
+| | talos9s | [k9s](https://github.com/derailed/k9s) | [talos-pilot](https://github.com/Handfish/talos-pilot) | [t9s](https://github.com/florianspk/t9s) |
 |---|---|---|---|---|
 | Layer | Talos OS and the cluster around it | Kubernetes | Talos OS | Talos OS |
-| State | Released, active | Mature, very active | Released, upstream of talos9s | A 105-line prototype ("aspirational"); prints versions, disks and members, no UI |
-| Language, UI library | Rust, ratatui | Go, tview | Rust, ratatui | Go |
-| License | MIT | Apache-2.0 | MIT | MPL-2.0 |
-| Multi-cluster, all nodes at once | yes | one context at a time | yes | – |
+| State | Released, active | Mature, very active | Released, upstream of talos9s | Young (22 stars, no tagged release) |
+| Language, UI library | Rust, ratatui | Go, tview | Rust, ratatui | Go, Bubble Tea; wraps `talosctl` |
+| License | MIT | Apache-2.0 | MIT | Source-available, non-commercial |
+| Multi-cluster, all nodes at once | yes | one context at a time | yes | one context, switched with `x` |
 | Views across a node group (logs, network, disks, diagnostics) | yes | – | node by node | – |
-| Logs, processes, network, etcd | yes | pod logs | yes | – |
+| Logs, processes, network, etcd | yes | pod logs | yes | logs, dmesg, processes, containers, addresses; no etcd |
 | Packet capture | yes | – | yes | – |
 | KubeSpan | yes | – | peers in Network | – |
-| Disks and Talos partitions | yes | – | disks | – |
+| Disks and Talos partitions | yes | – | disks | disks |
 | LINSTOR/DRBD and ZFS LocalPV checks | yes | – | – | – |
-| Machine config viewer (secrets masked) | yes | – | – | – |
-| Diagnostics with suggested fixes | yes, copied, never run | Popeye sanitizer | yes | – |
-| Drain, reboot, shutdown, rolling | yes | cordon, drain, delete, edit, shell, port-forward | drain, reboot, rolling | – |
-| Operation confirmation and audit log | yes | confirmation; `--readonly` flag | yes | – |
+| Machine config viewer (secrets masked) | yes | – | – | yes |
+| Diagnostics with suggested fixes | yes, copied, never run | Popeye sanitizer | yes | `talosctl health`, streamed |
+| Drain, reboot, shutdown, rolling | yes | cordon, drain, delete, edit, shell, port-forward | drain, reboot, rolling | reboot, shutdown |
+| Talos and Kubernetes upgrades | – (planned) | – | – | yes, with the extension catalog |
+| Operation confirmation and audit log | yes | confirmation; `--readonly` flag | yes | confirmation for upgrades |
 | Mouse | clicks, double-clicks, wheel | optional, off by default | – | – |
 | Remembers where you left off | yes | per-context config | – | – |
 | Skins, plugins, custom hotkeys | – | yes | – | – |
