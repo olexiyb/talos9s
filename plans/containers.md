@@ -1,6 +1,6 @@
 # Design: Containers view rework
 
-Status: built (steps 1–5); step 6 open · Author: Olexiy Buyanskyy · 2026-11-02
+Status: built · Author: Olexiy Buyanskyy · 2026-11-02
 
 ## Summary
 
@@ -152,7 +152,7 @@ Containers view (`C`) reads containerd directly".
    is turned into RFC 3339. `l` gives the pane the keys, since the digits
    and `/` belong to the list.)
 6. Workloads' hint when the Kubernetes API is down; README rows and keys;
-   rules (`tui-views.md` table: Containers on group and cluster).
+   rules (`tui-views.md` table: Containers on group and cluster). (Done)
 
 Each step works on its own; 1–2 already answer "where does it run".
 
@@ -169,5 +169,10 @@ Each step works on its own; 1–2 already answer "where does it run".
 ## Decided
 
 1. Exited containers are hidden by default; `A` shows them.
-2. Pods start folded: one row per pod, Enter unfolds.
-3. The logs pane is always visible and follows the selection.
+2. ~~Pods folded, one row per pod~~ and ~~the logs pane always visible~~:
+   built that way first, then changed after trying it: the list is one row
+   per container (POD and CONTAINER columns, `1`-`7`), and Enter focuses a
+   container, its row and its logs (Esc back), as Workloads does. A pod's
+   merged logs stay in Workloads.
+3. Logs show the date (`MM-DD`) when the lines read span more than one day
+   (both views).

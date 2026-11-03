@@ -41,7 +41,10 @@ struct Shown {
 }
 
 impl Shown {
-    fn of(line: LogLine) -> Self {
+    fn of(mut line: LogLine) -> Self {
+        if let std::borrow::Cow::Owned(clean) = talos9s_core::logparse::strip_ansi(&line.text) {
+            line.text = clean;
+        }
         let json = JsonLine::parse(&line.text);
         let level = json
             .as_ref()
@@ -123,6 +126,10 @@ pub struct LogPane {
     current_match: Option<usize>,
     /// Why the external viewer (`v`) failed
     viewer_problem: Option<String>,
+    /// Selecting lines to copy (`V`): the cursor, a position among the
+    /// visible lines, and where the selection started
+    cursor: Option<usize>,
+    visual: talos9s_core::VisualSelection,
     /// For sources read through the Talos API (`LogSource::talos`)
     talos: Option<talos_rs::TalosClient>,
     /// Where the pane was last drawn, for the mouse wheel
@@ -140,6 +147,7 @@ impl LogPane {
             return;
         }
         self.viewer_problem = None;
+        self.stop_selecting();
         self.sources = sources;
         // No earlier run among these: back to the current one
         if !self.has_previous() {
@@ -148,6 +156,85 @@ impl LogPane {
         self.read = None;
         self.scroll = None;
         self.pending = Some(Instant::now());
+    }
+
+    /// Selecting lines (`V`): `j`/`k` extend, `y` copies, Esc stops
+    pub fn selecting(&self) -> bool {
+        self.cursor.is_some()
+    }
+
+    /// `V`: select from the newest line on screen
+    fn start_selecting(&mut self) {
+        let visible = self.visible().len();
+        if visible == 0 {
+            return;
+        }
+        let bottom = match self.scroll {
+            Some(top) => (top + self.height.max(1)).min(visible) - 1,
+            None => visible - 1,
+        };
+        self.cursor = Some(bottom);
+        self.visual.clear();
+        self.visual.toggle(bottom);
+    }
+
+    fn stop_selecting(&mut self) {
+        self.cursor = None;
+        self.visual.clear();
+    }
+
+    /// The selected lines as shown (time, level, message, fields), for `y`
+    fn selected_text(&self) -> Vec<String> {
+        let (Some(cursor), Some(read)) = (self.cursor, self.read.as_ref()) else {
+            return Vec::new();
+        };
+        let visible = self.visible();
+        let with_date = spans_days(read.lines.iter().filter_map(|l| l.line.time));
+        self.visual
+            .rows(cursor)
+            .filter_map(|pos| visible.get(pos).and_then(|&i| read.lines.get(i)))
+            .map(|l| {
+                let (prefix, body) = line_spans(l, "", false, with_date);
+                let mut text = String::new();
+                if !l.line.source.is_empty() {
+                    text.push_str(&l.line.source);
+                    text.push(' ');
+                }
+                for span in prefix.iter().chain(&body) {
+                    text.push_str(&span.content);
+                }
+                text.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    /// Keys while selecting; whether the key was the selection's
+    fn handle_selecting_key(&mut self, key: &KeyEvent) -> bool {
+        use crate::ui_ext::Move;
+        use crossterm::event::KeyCode;
+        let Some(cursor) = self.cursor else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('V' | 'q') => self.stop_selecting(),
+            KeyCode::Char('y') => {
+                crate::clipboard::copy_lines(&self.selected_text());
+                self.stop_selecting();
+            }
+            _ => {
+                let len = self.visible().len();
+                if let Some(step) = Move::from_key(key)
+                    && let Some(moved) = crate::ui_ext::moved(cursor, len, step)
+                {
+                    self.cursor = Some(moved);
+                    // Keep it on screen: the draw scrolls to it
+                    if self.scroll.is_none() && moved + 1 < len {
+                        self.scroll = Some(moved.min(len.saturating_sub(self.height.max(1))));
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// The wheel over the pane scrolls it (3 lines); scrolled back to the
@@ -478,6 +565,13 @@ impl LogPane {
             self.handle_search_key(key);
             return true;
         }
+        if self.selecting() {
+            return self.handle_selecting_key(key);
+        }
+        if key.code == crossterm::event::KeyCode::Char('V') {
+            self.start_selecting();
+            return true;
+        }
         if let Some(hotkey) = LevelHotkey::from_key(key) {
             match hotkey {
                 LevelHotkey::All => self.hidden = [false; 5],
@@ -658,32 +752,94 @@ impl LogPane {
             .map(|l| l.line.source.chars().count())
             .max()
             .unwrap_or(0);
-        let last = visible.len().saturating_sub(self.height.max(1));
-        let top = self.scroll.unwrap_or(last).min(last);
-        let shown: Vec<Line> = visible
-            .iter()
-            .enumerate()
-            .skip(top)
-            .take(self.height)
-            .filter_map(|(pos, &i)| {
-                let l = read.lines.get(i)?;
-                let mut spans = Vec::new();
-                if width > 0 {
-                    spans.push(Span::styled(
-                        format!("{:width$} ", l.line.source),
-                        Style::default().fg(source_color(&l.line.source)),
-                    ));
-                }
-                spans.extend(line_spans(l, &self.query, self.current_match == Some(pos)));
-                Some(Line::from(spans))
-            })
-            .collect();
-        let mut paragraph = Paragraph::new(shown);
-        if self.wrap {
-            paragraph = paragraph.wrap(Wrap { trim: false });
-        }
+        let with_date = spans_days(read.lines.iter().filter_map(|l| l.line.time));
         let [text, bar] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(body);
+        let text_width = usize::from(text.width);
+        let height = self.height.max(1);
+        let selected = |pos: usize| {
+            self.cursor
+                .is_some_and(|cursor| self.visual.contains(pos, cursor))
+        };
+        // The screen rows of the line at `pos` among the visible ones
+        let rows_of = |pos: usize| -> Vec<Line<'static>> {
+            let Some(l) = visible.get(pos).and_then(|&i| read.lines.get(i)) else {
+                return Vec::new();
+            };
+            let mut prefix = Vec::new();
+            if width > 0 {
+                prefix.push(Span::styled(
+                    format!("{:width$} ", l.line.source),
+                    Style::default().fg(source_color(&l.line.source)),
+                ));
+            }
+            let (head, rest) =
+                line_spans(l, &self.query, self.current_match == Some(pos), with_date);
+            prefix.extend(head);
+            let mut rows = layout_line(prefix, rest, text_width, self.wrap);
+            if selected(pos) {
+                let style = if self.cursor == Some(pos) {
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().bg(Color::DarkGray)
+                };
+                for row in &mut rows {
+                    row.style = style;
+                }
+            }
+            rows
+        };
+        // Lines from `top` down until the pane is full
+        let forward = |top: usize| {
+            let mut rows = Vec::new();
+            let mut pos = top;
+            while rows.len() < height && pos < visible.len() {
+                rows.extend(rows_of(pos));
+                pos += 1;
+            }
+            rows.truncate(height);
+            (rows, pos)
+        };
+        // Lines up to `end` (inclusive) from the bottom, the newest last
+        let backward = |end: usize| {
+            let mut rows: Vec<Line> = Vec::new();
+            let mut top = end + 1;
+            while rows.len() < height && top > 0 {
+                top -= 1;
+                let mut above = rows_of(top);
+                above.append(&mut rows);
+                rows = above;
+            }
+            let cut = rows.len().saturating_sub(height);
+            (rows.split_off(cut), top)
+        };
+        let end = visible.len() - 1;
+        // From `top`; near the end, where that leaves rows empty, the last
+        // lines fill the pane instead (unless the cursor is above them)
+        let from = |top: usize, cursor: Option<usize>| {
+            let (rows, next) = forward(top);
+            if cursor.is_some_and(|c| c >= next) {
+                return backward(cursor.unwrap_or(end));
+            }
+            if rows.len() < height && top > 0 {
+                let (last, last_top) = backward(end);
+                if cursor.is_none_or(|c| c >= last_top) {
+                    return (last, last_top);
+                }
+            }
+            (rows, top)
+        };
+        let (shown, top) = match (self.cursor, self.scroll) {
+            (Some(cursor), scroll) => from(scroll.unwrap_or(cursor).min(cursor), Some(cursor)),
+            (None, Some(top)) => from(top.min(end), None),
+            (None, None) => backward(end),
+        };
+        if self.cursor.is_some() {
+            self.scroll = Some(top);
+        }
+        let paragraph = Paragraph::new(shown);
         frame.render_widget(paragraph, text);
         crate::ui_ext::draw_scrollbar(
             frame,
@@ -694,15 +850,35 @@ impl LogPane {
     }
 }
 
-/// A line's time (`HH:MM:SS`, UTC like the Logs view), level badge,
-/// message and its fields dimmed, with the matches of `query` marked (the
-/// current one brighter)
-fn line_spans(line: &Shown, query: &str, current: bool) -> Vec<Span<'static>> {
+/// Times (nanoseconds) on more than one day (UTC): then lines show the date
+fn spans_days(times: impl Iterator<Item = i64>) -> bool {
+    let day = |nanos: i64| nanos.div_euclid(86_400 * 1_000_000_000);
+    let mut days = times.map(day);
+    let Some(first) = days.next() else {
+        return false;
+    };
+    days.any(|d| d != first)
+}
+
+/// A line's time (`HH:MM:SS`, UTC like the Logs view; `MM-DD HH:MM:SS`
+/// when `with_date`), level badge, message and its fields dimmed, with the
+/// matches of `query` marked (the current one brighter)
+fn line_spans(
+    line: &Shown,
+    query: &str,
+    current: bool,
+    with_date: bool,
+) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let (format, blank) = if with_date {
+        ("%m-%d %H:%M:%S", 14)
+    } else {
+        ("%H:%M:%S", 8)
+    };
     let time = line
         .line
         .time
         .and_then(|nanos| chrono::DateTime::from_timestamp(nanos.div_euclid(1_000_000_000), 0))
-        .map_or_else(|| " ".repeat(8), |t| t.format("%H:%M:%S").to_string());
+        .map_or_else(|| " ".repeat(blank), |t| t.format(format).to_string());
     let color = crate::components::multi_logs::level_color(line.level);
     let text_style = match line.level {
         LogLevel::Error => Style::default().fg(Color::Red),
@@ -715,14 +891,14 @@ fn line_spans(line: &Shown, query: &str, current: bool) -> Vec<Span<'static>> {
     } else {
         Style::default().fg(Color::Black).bg(Color::Cyan)
     };
-    let mut spans = vec![
+    let prefix = vec![
         Span::styled(format!("{time} "), Style::default().dim()),
         Span::styled(
             format!("{} ", line.level.badge()),
             Style::default().fg(color),
         ),
     ];
-    spans.extend(highlighted(&line.message, query, text_style, mark));
+    let mut spans = highlighted(&line.message, query, text_style, mark);
     if !line.fields.is_empty() {
         spans.push(Span::raw(" "));
         spans.extend(highlighted(
@@ -732,7 +908,56 @@ fn line_spans(line: &Shown, query: &str, current: bool) -> Vec<Span<'static>> {
             mark,
         ));
     }
-    spans
+    (prefix, spans)
+}
+
+/// A log line as screen rows of `width`: `prefix` (source, time, level),
+/// then `body`; wrapped, the rest goes on rows indented by the prefix, so
+/// the time and level column stays clear. Breaks after a space when one is
+/// in the second half of the row.
+fn layout_line(
+    prefix: Vec<Span<'static>>,
+    body: Vec<Span<'static>>,
+    width: usize,
+    wrap: bool,
+) -> Vec<Line<'static>> {
+    let indent: usize = prefix.iter().map(|s| s.content.chars().count()).sum();
+    if !wrap || width < indent + 20 {
+        let mut spans = prefix;
+        spans.extend(body);
+        return vec![Line::from(spans)];
+    }
+    let room = width - indent;
+    let mut rows = Vec::new();
+    let mut row = prefix;
+    let mut used = 0;
+    for span in body {
+        let mut text: &str = &span.content;
+        while !text.is_empty() {
+            let free = room - used;
+            let count = text.chars().count();
+            if count <= free {
+                row.push(Span::styled(text.to_string(), span.style));
+                used += count;
+                break;
+            }
+            let split = text.char_indices().nth(free).map_or(text.len(), |(i, _)| i);
+            // At a space in the second half of the row, when there is one
+            let split = text
+                .get(..split)
+                .and_then(|piece| piece.rfind(' '))
+                .filter(|&at| used + text.get(..at).map_or(0, |p| p.chars().count()) > room / 2)
+                .map_or(split, |at| at + 1);
+            let (piece, rest) = text.split_at(split);
+            row.push(Span::styled(piece.to_string(), span.style));
+            rows.push(Line::from(std::mem::take(&mut row)));
+            row.push(Span::raw(" ".repeat(indent)));
+            used = 0;
+            text = rest;
+        }
+    }
+    rows.push(Line::from(row));
+    rows
 }
 
 /// `text` in `style`, the matches of `query` in `mark`
@@ -793,6 +1018,15 @@ fn source_color(source: &str) -> Color {
 mod tests {
     use super::*;
 
+    /// The text of a line as drawn on one row
+    fn spans_text((prefix, body): (Vec<Span<'static>>, Vec<Span<'static>>)) -> String {
+        prefix
+            .into_iter()
+            .chain(body)
+            .map(|s| s.content.into_owned())
+            .collect()
+    }
+
     fn source(pod: &str) -> LogSource {
         LogSource {
             namespace: "apps".into(),
@@ -830,31 +1064,113 @@ mod tests {
             source: String::new(),
             text: r#"{"level":"error","msg":"db down","retry":3}"#.into(),
         };
-        let text: String = line_spans(&Shown::of(line), "", false)
-            .iter()
-            .map(|s| s.content.to_string())
-            .collect();
+        let text = spans_text(line_spans(&Shown::of(line), "", false, false));
         assert!(text.ends_with("ERR db down retry=3"), "{text}");
         let plain = LogLine {
             time: None,
             source: String::new(),
             text: "level=warn msg=slow took=3s".into(),
         };
-        let text: String = line_spans(&Shown::of(plain), "", false)
-            .iter()
-            .map(|s| s.content.to_string())
-            .collect();
+        let text = spans_text(line_spans(&Shown::of(plain), "", false, false));
         assert!(text.ends_with("WRN slow took=3s"), "{text}");
         let raw = LogLine {
             time: None,
             source: String::new(),
             text: "Error: connection refused".into(),
         };
-        let text: String = line_spans(&Shown::of(raw), "", false)
-            .iter()
-            .map(|s| s.content.to_string())
-            .collect();
+        let text = spans_text(line_spans(&Shown::of(raw), "", false, false));
         assert!(text.ends_with("ERR Error: connection refused"), "{text}");
+    }
+
+    /// The date shows only when the lines span more than one day
+    #[test]
+    fn date_when_lines_span_days() {
+        let day = 86_400 * 1_000_000_000_i64;
+        assert!(!spans_days([5, day - 1].into_iter()));
+        assert!(spans_days([5, day + 1].into_iter()));
+        assert!(!spans_days(std::iter::empty()));
+        let line = LogLine {
+            time: Some(1_793_630_002_000_000_000),
+            source: String::new(),
+            text: "x".into(),
+        };
+        let text = spans_text(line_spans(&Shown::of(line), "", false, true));
+        assert!(text.starts_with("11-02 "), "{text}");
+    }
+
+    /// Wrapped rows go on under the message, the time and level column
+    /// clear; a break falls after a space when there is one
+    #[test]
+    fn wraps_under_the_message() {
+        let prefix = vec![Span::raw("19:41:48 "), Span::raw("INF ")];
+        let body = vec![Span::raw(
+            "GET /harbor/docker/registry/v2/blobs/sha256/e9 done",
+        )];
+        // A space in the second half: the break goes after it
+        let words = vec![Span::raw("one two three four five six seven eight")];
+        let rows: Vec<String> = layout_line(prefix.clone(), words, 40, true)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "19:41:48 INF one two three four five ",
+                "             six seven eight",
+            ]
+        );
+        let rows: Vec<String> = layout_line(prefix.clone(), body.clone(), 40, true)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "19:41:48 INF GET /harbor/docker/registry",
+                "             /v2/blobs/sha256/e9 done",
+            ]
+        );
+        assert!(rows.iter().all(|r| r.chars().count() <= 40));
+        // Unwrapped: one row
+        assert_eq!(layout_line(prefix, body, 40, false).len(), 1);
+    }
+
+    /// `V` selects from the newest line, `k` extends upwards; the lines
+    /// copied read as shown; Esc stops
+    #[test]
+    fn selects_lines_to_copy() {
+        use crossterm::event::KeyCode;
+        let mut pane = LogPane {
+            height: 10,
+            ..Default::default()
+        };
+        pane.read = Some(Read {
+            lines: [
+                "level=info msg=one",
+                "level=warn msg=two",
+                "level=error msg=three",
+            ]
+            .map(|t| {
+                Shown::of(LogLine {
+                    time: None,
+                    source: String::new(),
+                    text: format!("\u{1b}[2m{t}\u{1b}[0m"),
+                })
+            })
+            .to_vec(),
+            failed: Vec::new(),
+            skipped: 0,
+        });
+        let key = |pane: &mut LogPane, code| pane.handle_key(&KeyEvent::from(code), None);
+        key(&mut pane, KeyCode::Char('V'));
+        assert!(pane.selecting());
+        key(&mut pane, KeyCode::Char('k'));
+        let copied = pane.selected_text();
+        assert_eq!(copied.len(), 2);
+        assert!(copied[0].ends_with("WRN two"), "{copied:?}");
+        assert!(copied[1].ends_with("ERR three"), "{copied:?}");
+        key(&mut pane, KeyCode::Esc);
+        assert!(!pane.selecting());
     }
 
     /// The wheel over the pane scrolls it, elsewhere it doesn't; back at
@@ -936,9 +1252,10 @@ mod tests {
         assert_eq!(pane.current_match, Some(2));
         key(&mut pane, KeyCode::Char('n'));
         assert_eq!(pane.current_match, Some(1), "wraps around");
-        let marked = line_spans(&text("level=warn msg=\"slow db\""), "db", true);
+        let marked = line_spans(&text("level=warn msg=\"slow db\""), "db", true, false);
         assert!(
             marked
+                .1
                 .iter()
                 .any(|s| s.content == "db" && s.style.bg == Some(Color::Yellow))
         );

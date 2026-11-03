@@ -1,11 +1,10 @@
 //! Containers on nodes, as containerd reports them through the Talos API
-//! (no Kubernetes API needed): Talos services, and Kubernetes pods with
-//! their containers, grouped, filtered and sorted for the Containers view
+//! (no Kubernetes API needed): Talos services and Kubernetes containers,
+//! filtered and sorted for the Containers view
 //!
 //! The API gives no restart counts or exit codes, so nothing here calls a
 //! container failing: exited is normal for init containers and jobs.
 
-use std::collections::BTreeSet;
 use talos_rs::{ContainerInfo, ContainerKind};
 
 /// A container and the node it runs on
@@ -53,9 +52,9 @@ impl NodeContainer {
         CtrState::of(&self.info.status)
     }
 
-    /// Rows of one pod share it
-    fn pod_key(&self) -> String {
-        format!("{}/{}", self.node, self.info.pod)
+    /// Stable across refreshes, for keeping the selection
+    pub fn key(&self) -> String {
+        format!("{}/{}:{}", self.node, self.info.pod, self.name())
     }
 }
 
@@ -84,13 +83,14 @@ impl CtrState {
     }
 }
 
-/// How the list is sorted (`1`-`6`, in column order)
+/// How the list is sorted (`1`-`7`, in column order)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContainerSort {
     Node,
     #[default]
     Namespace,
-    /// The pod or service name
+    Pod,
+    /// The container (or service) name
     Name,
     Image,
     Pid,
@@ -99,9 +99,10 @@ pub enum ContainerSort {
 }
 
 impl ContainerSort {
-    pub const ALL: [ContainerSort; 6] = [
+    pub const ALL: [ContainerSort; 7] = [
         ContainerSort::Node,
         ContainerSort::Namespace,
+        ContainerSort::Pod,
         ContainerSort::Name,
         ContainerSort::Image,
         ContainerSort::Pid,
@@ -113,6 +114,7 @@ impl ContainerSort {
         match self {
             ContainerSort::Node => "Node",
             ContainerSort::Namespace => "Namespace",
+            ContainerSort::Pod => "Pod",
             ContainerSort::Name => "Name",
             ContainerSort::Image => "Image",
             ContainerSort::Pid => "Pid",
@@ -135,40 +137,6 @@ pub struct ContainerOptions {
     /// Namespaces warped into (`namespaces::matches`); empty for all
     pub warp: Vec<String>,
     pub sort: ContainerSort,
-    /// Unfolded pods (`pod_key`: `node/namespace/pod`)
-    pub expanded: BTreeSet<String>,
-}
-
-/// A row of the list; indices into the containers
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContainerRow {
-    /// A Talos service
-    Service(usize),
-    Pod {
-        /// `node/namespace/pod`, for folding and selection
-        key: String,
-        /// Its sandbox, or its first container
-        first: usize,
-        /// Its containers shown, by name
-        members: Vec<usize>,
-        running: usize,
-        expanded: bool,
-    },
-    /// A container of the pod above
-    Member(usize),
-}
-
-impl ContainerRow {
-    /// Stable across refreshes, for keeping the selection
-    pub fn id(&self, all: &[NodeContainer]) -> String {
-        match self {
-            ContainerRow::Pod { key, .. } => key.clone(),
-            ContainerRow::Service(i) | ContainerRow::Member(i) => all
-                .get(*i)
-                .map(|c| format!("{}/{}:{}", c.node, c.info.pod, c.name()))
-                .unwrap_or_default(),
-        }
-    }
 }
 
 fn hit(c: &NodeContainer, filter: &str) -> bool {
@@ -184,143 +152,40 @@ fn hit(c: &NodeContainer, filter: &str) -> bool {
         .any(|f| f.to_lowercase().contains(filter))
 }
 
-/// The rows: services and pods sorted by `options.sort`, each unfolded
-/// pod followed by its containers. Exited containers are left out unless
-/// `show_exited`, and so is a pod with nothing else left. While filtering,
-/// a pod's matching containers are shown under it.
-pub fn container_rows(all: &[NodeContainer], options: &ContainerOptions) -> Vec<ContainerRow> {
-    let shown = |c: &NodeContainer| options.show_exited || c.state() != CtrState::Exited;
-    let filter = options.filter.as_str();
-    // Per top-level entry: the container whose image sorts it, and the row
-    let mut entries: Vec<(usize, ContainerRow)> = Vec::new();
-    let mut pods: std::collections::BTreeMap<String, (Option<usize>, Vec<usize>)> =
-        std::collections::BTreeMap::new();
-    for (i, c) in all.iter().enumerate() {
-        if !crate::namespaces::matches(&options.warp, c.namespace()) {
-            continue;
-        }
-        match c.info.kind {
-            ContainerKind::System => {
-                if shown(c) && hit(c, filter) {
-                    entries.push((i, ContainerRow::Service(i)));
-                }
-            }
-            ContainerKind::Kubernetes => {
-                let pod = pods.entry(c.pod_key()).or_default();
-                if c.info.sandbox {
-                    pod.0 = Some(i);
-                } else {
-                    pod.1.push(i);
-                }
-            }
-        }
-    }
-    for (key, (sandbox, members)) in pods {
-        let Some(first) = sandbox.or_else(|| members.first().copied()) else {
-            continue;
+/// The containers shown, as indices, sorted by `options.sort`: pod
+/// sandboxes left out, exited ones too unless `show_exited`
+pub fn container_rows(all: &[NodeContainer], options: &ContainerOptions) -> Vec<usize> {
+    let mut rows: Vec<usize> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            !c.info.sandbox
+                && (options.show_exited || c.state() != CtrState::Exited)
+                && crate::namespaces::matches(&options.warp, c.namespace())
+                && hit(c, &options.filter)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    rows.sort_by(|&a, &b| {
+        let (Some(a), Some(b)) = (all.get(a), all.get(b)) else {
+            return std::cmp::Ordering::Equal;
         };
-        let Some(head) = all.get(first) else { continue };
-        let mut visible: Vec<usize> = members
-            .iter()
-            .copied()
-            .filter(|&m| all.get(m).is_some_and(shown))
-            .collect();
-        // Nothing running and nothing left to show: a finished pod
-        let sandbox_up = sandbox
-            .and_then(|s| all.get(s))
-            .is_some_and(|s| s.state() == CtrState::Running);
-        if visible.is_empty() && !options.show_exited && !(sandbox_up && members.is_empty()) {
-            continue;
-        }
-        // The pod itself matches (node, namespace, name): all its containers
-        let pod_hit = [head.node.as_str(), head.namespace(), head.pod()]
-            .iter()
-            .any(|f| f.to_lowercase().contains(filter));
-        let filtering = !filter.is_empty() && !pod_hit;
-        if filtering {
-            visible.retain(|&m| all.get(m).is_some_and(|c| hit(c, filter)));
-            if visible.is_empty() {
-                continue;
-            }
-        }
-        visible.sort_by(|&a, &b| {
-            let name = |i: usize| all.get(i).map(NodeContainer::name);
-            name(a).cmp(&name(b))
-        });
-        let running = visible
-            .iter()
-            .filter(|&&m| all.get(m).is_some_and(|c| c.state() == CtrState::Running))
-            .count();
-        let expanded = filtering || options.expanded.contains(&key);
-        entries.push((
-            visible.first().copied().unwrap_or(first),
-            ContainerRow::Pod {
-                key,
-                first,
-                members: visible,
-                running,
-                expanded,
-            },
-        ));
-    }
-
-    // Sort keys: node, namespace, name, image, pid, status rank
-    let sort_key = |(member, row): &(usize, ContainerRow)| {
-        let (head, rank, pid) = match row {
-            ContainerRow::Pod {
-                first,
-                members,
-                running,
-                ..
-            } => {
-                let head = all.get(*first);
-                let rank = u8::from(*running == members.len() && !members.is_empty());
-                (head, rank, head.map_or(0, |h| h.info.pid))
-            }
-            ContainerRow::Service(i) | ContainerRow::Member(i) => {
-                let c = all.get(*i);
-                let rank = u8::from(c.is_some_and(|c| c.state() == CtrState::Running));
-                (c, rank, c.map_or(0, |c| c.info.pid))
-            }
-        };
-        let image = all.get(*member).map_or("", |c| c.info.image.as_str());
-        let name = head.map_or("", |h| match row {
-            ContainerRow::Pod { .. } => h.pod(),
-            _ => h.name(),
-        });
-        let node = head.map_or("", |h| h.node.as_str());
-        let namespace = head.map_or("", NodeContainer::namespace);
-        (node, namespace, name, image, pid, rank)
-    };
-    entries.sort_by(|a, b| {
-        let (ka, kb) = (sort_key(a), sort_key(b));
         let first = match options.sort {
-            ContainerSort::Node => ka.0.cmp(kb.0),
-            ContainerSort::Namespace => ka.1.cmp(kb.1),
-            ContainerSort::Name => ka.2.cmp(kb.2),
-            ContainerSort::Image => ka.3.cmp(kb.3),
-            ContainerSort::Pid => ka.4.cmp(&kb.4),
-            ContainerSort::Status => ka.5.cmp(&kb.5),
+            ContainerSort::Node => a.node.cmp(&b.node),
+            ContainerSort::Namespace => a.namespace().cmp(b.namespace()),
+            ContainerSort::Pod => a.pod().cmp(b.pod()),
+            ContainerSort::Name => a.name().cmp(b.name()),
+            ContainerSort::Image => a.info.image.cmp(&b.info.image),
+            ContainerSort::Pid => a.info.pid.cmp(&b.info.pid),
+            // Not running first
+            ContainerSort::Status => a.state().cmp(&b.state()),
         };
         first
-            .then_with(|| ka.1.cmp(kb.1))
-            .then_with(|| ka.2.cmp(kb.2))
-            .then_with(|| ka.0.cmp(kb.0))
+            .then_with(|| a.namespace().cmp(b.namespace()))
+            .then_with(|| a.pod().cmp(b.pod()))
+            .then_with(|| a.name().cmp(b.name()))
+            .then_with(|| a.node.cmp(&b.node))
     });
-
-    let mut rows = Vec::new();
-    for (_, row) in entries {
-        let members = match &row {
-            ContainerRow::Pod {
-                members,
-                expanded: true,
-                ..
-            } => members.clone(),
-            _ => Vec::new(),
-        };
-        rows.push(row);
-        rows.extend(members.into_iter().map(ContainerRow::Member));
-    }
     rows
 }
 
@@ -390,53 +255,27 @@ mod tests {
         ]
     }
 
-    fn labels(all: &[NodeContainer], rows: &[ContainerRow]) -> Vec<String> {
+    fn labels(all: &[NodeContainer], rows: &[usize]) -> Vec<String> {
         rows.iter()
-            .map(|r| match r {
-                ContainerRow::Service(i) => all[*i].name().to_string(),
-                ContainerRow::Pod {
-                    first,
-                    members,
-                    running,
-                    ..
-                } => format!("{} {running}/{}", all[*first].pod(), members.len()),
-                ContainerRow::Member(i) => format!("  {}", all[*i].name()),
-            })
+            .map(|&i| format!("{}:{}", all[i].pod(), all[i].name()))
             .collect()
     }
 
     #[test]
-    fn groups_folds_and_hides_exited() {
+    fn lists_containers_and_hides_exited() {
         let all = all();
         let mut o = ContainerOptions::default();
         assert_eq!(
             labels(&all, &container_rows(&all, &o)),
-            ["apid", "gw-1 1/1", "gw-2 0/1"]
+            [":apid", "gw-1:app", "gw-2:app"]
         );
         o.show_exited = true;
-        o.expanded.insert("bc1/web/gw-1".into());
         assert_eq!(
             labels(&all, &container_rows(&all, &o)),
-            [
-                "done 0/1", "apid", "gw-1 1/2", "  app", "  init", "gw-2 0/1"
-            ]
+            ["done:run", ":apid", "gw-1:app", "gw-1:init", "gw-2:app"]
         );
-        // A filter unfolds the pod with the matching containers only
-        let o = ContainerOptions {
-            filter: "init".into(),
-            show_exited: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            labels(&all, &container_rows(&all, &o)),
-            ["gw-1 0/1", "  init"]
-        );
-        // The pod's own name matches: all its containers, folded
-        let o = ContainerOptions {
-            filter: "gw-2".into(),
-            ..Default::default()
-        };
-        assert_eq!(labels(&all, &container_rows(&all, &o)), ["gw-2 0/1"]);
+        o.filter = "init".into();
+        assert_eq!(labels(&all, &container_rows(&all, &o)), ["gw-1:init"]);
     }
 
     #[test]
@@ -446,10 +285,10 @@ mod tests {
             sort: ContainerSort::Status,
             ..Default::default()
         };
-        // Not all running first
+        // Not running first
         assert_eq!(
             labels(&all, &container_rows(&all, &o)),
-            ["gw-2 0/1", "apid", "gw-1 1/1"]
+            ["gw-2:app", ":apid", "gw-1:app"]
         );
         let o = ContainerOptions {
             sort: ContainerSort::Node,
@@ -458,13 +297,13 @@ mod tests {
         };
         assert_eq!(
             labels(&all, &container_rows(&all, &o)),
-            ["gw-1 1/1", "gw-2 0/1"]
+            ["gw-1:app", "gw-2:app"]
         );
         let o = ContainerOptions {
             warp: vec![SYSTEM_NAMESPACE.into()],
             ..Default::default()
         };
-        assert_eq!(labels(&all, &container_rows(&all, &o)), ["apid"]);
+        assert_eq!(labels(&all, &container_rows(&all, &o)), [":apid"]);
         assert_eq!(state_counts(&all, &[]), (2, 2, 1));
         for s in ContainerSort::ALL {
             assert_eq!(ContainerSort::from_name(s.name()), Some(s));

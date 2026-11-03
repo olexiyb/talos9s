@@ -1,12 +1,10 @@
 //! Containers view: every container on a node, a group or the cluster, as
 //! containerd reports it through the Talos API (no Kubernetes API needed)
 //!
-//! Talos services and Kubernetes pods, folded to one row per pod (Enter
-//! unfolds), sorted by any column (`1`-`6`, a header click), filtered
-//! (`/`), warped into namespaces (`W`), exited containers shown with `A`.
-//! The logs pane below follows the selected row: a service, a container,
-//! or a pod's containers merged; read through the Talos API too. `l` gives
-//! it the keys (levels, search), Esc gives them back.
+//! One row per container, Talos services included; sorted by any column
+//! (`1`-`7`, a header click), filtered (`/`), warped into namespaces (`W`),
+//! exited containers shown with `A`. Enter focuses one container: its row
+//! and its logs, read through the Talos API too; Esc goes back.
 
 use crate::action::Action;
 use crate::components::namespace_picker::{NamespacePicker, PickerEvent};
@@ -27,8 +25,7 @@ use talos_rs::{ContainerKind, TalosClient};
 use talos9s_core::AsyncState;
 use talos9s_core::constants::CONTAINERS_TIMEOUT;
 use talos9s_core::containers::{
-    ContainerOptions, ContainerRow, ContainerSort, CtrState, NodeContainer, container_rows,
-    state_counts,
+    ContainerOptions, ContainerSort, CtrState, NodeContainer, container_rows, state_counts,
 };
 use talos9s_core::pod_logs::{LogSource, TalosLog};
 
@@ -56,15 +53,16 @@ pub struct ContainersComponent {
     client: Option<TalosClient>,
     state: AsyncState<ContainersData>,
     options: ContainerOptions,
-    /// The selected row's id (`ContainerRow::id`), kept across refreshes
+    /// The selected container (`NodeContainer::key`), kept across refreshes
     selected_id: String,
     table_state: TableState,
     filtering: bool,
     recent_namespaces: Vec<String>,
     picker: Option<NamespacePicker>,
+    /// The focused container (Enter): its key; the list shows only it and
+    /// the logs pane below
+    focus: Option<String>,
     logs: LogPane,
-    /// The logs pane has the keys (`l`)
-    logs_keys: bool,
     auto_refresh: bool,
     rows: crate::ui_ext::RowHits,
     header: crate::ui_ext::ColumnHits<ContainerSort>,
@@ -82,8 +80,8 @@ impl ContainersComponent {
             filtering: false,
             recent_namespaces: Vec::new(),
             picker: None,
+            focus: None,
             logs: LogPane::default(),
-            logs_keys: false,
             auto_refresh: true,
             rows: crate::ui_ext::RowHits::default(),
             header: crate::ui_ext::ColumnHits::default(),
@@ -122,10 +120,7 @@ impl ContainersComponent {
     /// The namespaces warped into and the recent warps; from the app
     pub fn set_warp(&mut self, warp: Vec<String>, recent: Vec<String>) {
         self.recent_namespaces = recent;
-        if self.options.warp != warp {
-            self.options.warp = warp;
-            self.sync_logs();
-        }
+        self.options.warp = warp;
     }
 
     /// The external viewer couldn't run: say why in the logs pane
@@ -142,22 +137,36 @@ impl ContainersComponent {
         self.state.data().map_or(&[], |d| d.containers.as_slice())
     }
 
-    fn list_rows(&self) -> Vec<ContainerRow> {
-        container_rows(self.all(), &self.options)
+    /// The rows shown: the focused container only, else the list
+    fn list_rows(&self) -> Vec<usize> {
+        let all = self.all();
+        match &self.focus {
+            Some(key) => all
+                .iter()
+                .position(|c| &c.key() == key)
+                .into_iter()
+                .collect(),
+            None => container_rows(all, &self.options),
+        }
     }
 
-    fn selected_index(&self, rows: &[ContainerRow]) -> usize {
+    fn selected_index(&self, rows: &[usize]) -> usize {
         let all = self.all();
         rows.iter()
-            .position(|r| r.id(all) == self.selected_id)
+            .position(|&i| all.get(i).is_some_and(|c| c.key() == self.selected_id))
             .unwrap_or(0)
     }
 
-    fn select(&mut self, rows: &[ContainerRow], index: usize) {
-        if let Some(row) = rows.get(index) {
-            self.selected_id = row.id(self.all());
+    fn select(&mut self, rows: &[usize], index: usize) {
+        if let Some(c) = rows.get(index).and_then(|&i| self.all().get(i)) {
+            self.selected_id = c.key();
         }
-        self.sync_logs();
+    }
+
+    fn selected(&self) -> Option<&NodeContainer> {
+        let rows = self.list_rows();
+        rows.get(self.selected_index(&rows))
+            .and_then(|&i| self.all().get(i))
     }
 
     /// Read every node's containers, all nodes at once, each bounded
@@ -215,22 +224,23 @@ impl ContainersComponent {
                 }));
         }
         self.state.set_data(data);
-        self.sync_logs();
         Ok(())
     }
 
-    /// Point the logs pane at the selected row
-    fn sync_logs(&mut self) {
-        let rows = self.list_rows();
-        let Some(row) = rows.get(self.selected_index(&rows)) else {
+    /// Enter: the selected container and its logs
+    fn open_focus(&mut self) {
+        let Some(c) = self.selected().cloned() else {
             return;
         };
-        let all = self.all();
-        let source = |c: &NodeContainer, label: String| LogSource {
+        let title = match c.info.kind {
+            ContainerKind::System => format!("{} on {}", c.name(), c.node),
+            ContainerKind::Kubernetes => format!("{} · {} on {}", c.pod(), c.name(), c.node),
+        };
+        let source = LogSource {
             namespace: c.namespace().to_string(),
             pod: c.pod().to_string(),
             container: c.name().to_string(),
-            label,
+            label: String::new(),
             has_previous: false,
             talos: Some(TalosLog {
                 address: c.address.clone(),
@@ -238,50 +248,9 @@ impl ContainersComponent {
                 id: c.info.id.clone(),
             }),
         };
-        let (title, sources, command) = match row {
-            ContainerRow::Service(i) | ContainerRow::Member(i) => {
-                let Some(c) = all.get(*i) else { return };
-                let title = match c.info.kind {
-                    ContainerKind::System => format!("{} on {}", c.name(), c.node),
-                    ContainerKind::Kubernetes => {
-                        format!("{} · {} on {}", c.pod(), c.name(), c.node)
-                    }
-                };
-                let command = match c.info.kind {
-                    ContainerKind::System => format!("talosctl -n {} logs {}", c.address, c.name()),
-                    ContainerKind::Kubernetes => format!(
-                        "talosctl -n {} logs --namespace cri {}",
-                        c.address, c.info.id
-                    ),
-                };
-                (title, vec![source(c, String::new())], command)
-            }
-            ContainerRow::Pod { first, members, .. } => {
-                let Some(head) = all.get(*first) else { return };
-                let sources: Vec<LogSource> = members
-                    .iter()
-                    .filter_map(|m| all.get(*m))
-                    .map(|c| {
-                        let label = if members.len() > 1 {
-                            c.name().to_string()
-                        } else {
-                            String::new()
-                        };
-                        source(c, label)
-                    })
-                    .collect();
-                (
-                    format!("{} on {}", head.pod(), head.node),
-                    sources,
-                    format!(
-                        "kubectl -n {} logs {} --all-containers --prefix",
-                        head.namespace(),
-                        head.pod()
-                    ),
-                )
-            }
-        };
-        self.logs.set_sources(title, sources, command);
+        self.logs.set_sources(title, vec![source], logs_command(&c));
+        self.selected_id = c.key();
+        self.focus = Some(c.key());
     }
 
     fn move_selection(&mut self, step: crate::ui_ext::Move) {
@@ -289,31 +258,6 @@ impl ContainersComponent {
         let current = self.selected_index(&rows);
         if let Some(i) = crate::ui_ext::moved(current, rows.len(), step) {
             self.select(&rows, i);
-        }
-    }
-
-    /// Fold or unfold the selected pod (or the pod of a selected container)
-    fn toggle_fold(&mut self) {
-        let rows = self.list_rows();
-        let current = self.selected_index(&rows);
-        // A container: the pod row above it
-        let pod = rows
-            .get(..=current)
-            .unwrap_or_default()
-            .iter()
-            .rev()
-            .find_map(|r| match r {
-                ContainerRow::Pod { key, .. } => Some(key.clone()),
-                ContainerRow::Service(_) => Some(String::new()),
-                ContainerRow::Member(_) => None,
-            })
-            .filter(|k| !k.is_empty());
-        if let Some(key) = pod {
-            if !self.options.expanded.remove(&key) {
-                self.options.expanded.insert(key.clone());
-            }
-            self.selected_id = key;
-            self.sync_logs();
         }
     }
 
@@ -353,31 +297,27 @@ impl ContainersComponent {
                 self.options.filter.clear();
             }
             TextEdit::Submit => self.filtering = false,
-            TextEdit::Changed => {
-                self.options.filter = self.options.filter.to_lowercase();
-            }
-            TextEdit::Ignored => return,
+            TextEdit::Changed => self.options.filter = self.options.filter.to_lowercase(),
+            TextEdit::Ignored => {}
         }
-        self.sync_logs();
     }
 
-    /// Keys while the logs pane has them (`l`)
-    fn handle_logs_key(&mut self, key: KeyEvent) -> Option<Action> {
-        if self.logs.captures_text() || (key.code == KeyCode::Esc && self.logs.has_search()) {
+    /// Keys of the focused container: the logs take most
+    fn handle_focus_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.logs.captures_text()
+            || self.logs.selecting()
+            || (key.code == KeyCode::Esc && self.logs.has_search())
+        {
             self.logs.handle_key(&key, None);
             return None;
         }
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q' | 'l') => self.logs_keys = false,
+            KeyCode::Esc | KeyCode::Char('q') => self.focus = None,
             KeyCode::Char('y') => crate::clipboard::copy_to_clipboard(self.logs.command()),
             KeyCode::Char('v') => return self.open_in_viewer(),
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.logs.scroll_lines(-1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.logs
-                    .handle_key(&KeyEvent::from(KeyCode::PageDown), None);
-            }
+            KeyCode::Char('a') => self.auto_refresh = !self.auto_refresh,
+            KeyCode::Up | KeyCode::Char('k') => self.logs.scroll_lines(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.logs.scroll_lines(1),
             _ => {
                 self.logs.handle_key(&key, None);
             }
@@ -421,139 +361,79 @@ impl ContainersComponent {
         Line::from(spans)
     }
 
-    fn table_row(&self, row: &ContainerRow) -> Row<'static> {
-        let all = self.all();
+    fn table_row(&self, c: &NodeContainer) -> Row<'static> {
         let dim = Style::default().dim();
-        let state_style = |s: CtrState| match s {
+        let style = match c.state() {
             CtrState::Running => Style::default().fg(Color::Green),
             // Finished init containers and jobs exit normally
             CtrState::Exited => dim,
             CtrState::Other => Style::default().fg(Color::Yellow),
         };
-        let pid = |p: u32| if p == 0 { String::new() } else { p.to_string() };
-        let (head, name, image, pid_text, status) = match row {
-            ContainerRow::Pod {
-                first,
-                members,
-                running,
-                expanded,
-                ..
-            } => {
-                let Some(head) = all.get(*first) else {
-                    return Row::new(Vec::<Cell>::new());
-                };
-                let states: Vec<CtrState> = members
-                    .iter()
-                    .filter_map(|m| all.get(*m))
-                    .map(NodeContainer::state)
-                    .collect();
-                let style = if states.contains(&CtrState::Other) {
-                    Style::default().fg(Color::Yellow)
-                } else if *running > 0 {
-                    Style::default().fg(Color::Green)
-                } else {
-                    dim
-                };
-                let images: Vec<&str> = members
-                    .iter()
-                    .filter_map(|m| all.get(*m))
-                    .map(|c| c.info.image.as_str())
-                    .collect();
-                let image = match images.as_slice() {
-                    [] => String::new(),
-                    [one] => (*one).to_string(),
-                    [one, rest @ ..] => format!("{one} +{}", rest.len()),
-                };
-                let marker = if *expanded { "▾" } else { "▸" };
-                (
-                    head,
-                    Cell::from(format!("{marker} {}", head.pod())),
-                    image,
-                    Cell::from(pid(head.info.pid)),
-                    Cell::from(format!("{running}/{}", members.len())).style(style),
-                )
-            }
-            ContainerRow::Service(i) | ContainerRow::Member(i) => {
-                let Some(c) = all.get(*i) else {
-                    return Row::new(Vec::<Cell>::new());
-                };
-                let indent = if matches!(row, ContainerRow::Member(_)) {
-                    "    "
-                } else {
-                    "  "
-                };
-                let status = c
-                    .info
-                    .status
-                    .strip_prefix("CONTAINER_")
-                    .unwrap_or(&c.info.status)
-                    .to_string();
-                (
-                    c,
-                    Cell::from(format!("{indent}{}", c.name())),
-                    c.info.image.clone(),
-                    Cell::from(pid(c.info.pid)),
-                    Cell::from(status).style(state_style(c.state())),
-                )
-            }
-        };
-        let member = matches!(row, ContainerRow::Member(_));
+        let status = c
+            .info
+            .status
+            .strip_prefix("CONTAINER_")
+            .unwrap_or(&c.info.status)
+            .to_string();
         let mut cells = vec![Cell::from("")];
         if self.multi_node() {
-            cells.push(Cell::from(if member {
+            cells.push(Cell::from(c.node.clone()));
+        }
+        cells.extend([
+            Cell::from(c.namespace().to_string()),
+            Cell::from(c.pod().to_string()),
+            Cell::from(c.name().to_string()),
+            Cell::from(c.info.image.clone()).style(dim),
+            Cell::from(if c.info.pid == 0 {
                 String::new()
             } else {
-                head.node.clone()
-            }));
-        }
-        cells.push(Cell::from(if member {
-            String::new()
-        } else {
-            head.namespace().to_string()
-        }));
-        cells.extend([name, Cell::from(image).style(dim), pid_text, status]);
+                c.info.pid.to_string()
+            }),
+            Cell::from(status).style(style),
+        ]);
         Row::new(cells)
     }
 
     fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
         let rows = self.list_rows();
         let all = self.all();
-        let longest = |f: &dyn Fn(&NodeContainer) -> usize, min: usize, max: usize| {
-            all.iter().map(f).max().unwrap_or(min).clamp(min, max)
-        };
         let to_u16 = talos9s_core::convert::to_u16;
-        let node_width = longest(&|c| c.node.chars().count(), 4, 16);
-        let ns_width = longest(&|c| c.namespace().chars().count(), 9, 20);
-        // Names as wide as the longest (marker and indent included); the
-        // room left goes to IMAGE
-        let name_width = rows
-            .iter()
-            .filter_map(|r| match r {
-                ContainerRow::Pod { first, .. } => all.get(*first).map(|c| c.pod().len() + 2),
-                ContainerRow::Service(i) => all.get(*i).map(|c| c.name().len() + 2),
-                ContainerRow::Member(i) => all.get(*i).map(|c| c.name().len() + 4),
-            })
-            .max()
-            .unwrap_or(16)
-            .clamp(16, 60);
+        // Columns as wide as what they hold; the room left goes to IMAGE
+        let longest = |f: &dyn Fn(&NodeContainer) -> usize, min: usize, max: usize| {
+            rows.iter()
+                .filter_map(|&i| all.get(i))
+                .map(f)
+                .max()
+                .unwrap_or(min)
+                .clamp(min, max)
+        };
+        let node = longest(&|c| c.node.chars().count(), 4, 16);
+        let namespace = longest(&|c| c.namespace().chars().count(), 9, 24);
+        let pod = longest(&|c| c.pod().chars().count(), 3, 48);
+        let name = longest(&|c| c.name().chars().count(), 9, 32);
         let mut columns: Vec<(&str, Constraint, Option<ContainerSort>)> =
             vec![("", Constraint::Length(1), None)];
         if self.multi_node() {
             columns.push((
                 "NODE",
-                Constraint::Length(to_u16(node_width + 1)),
+                Constraint::Length(to_u16(node + 1)),
                 Some(ContainerSort::Node),
             ));
         }
         columns.extend([
             (
                 "NAMESPACE",
-                Constraint::Length(to_u16(ns_width + 1)),
+                Constraint::Length(to_u16(namespace + 1)),
                 Some(ContainerSort::Namespace),
             ),
             (
-                "POD / CONTAINER",
-                Constraint::Length(to_u16(name_width + 1)),
+                "POD",
+                Constraint::Length(to_u16(pod + 1)),
+                Some(ContainerSort::Pod),
+            ),
+            (
+                "CONTAINER",
+                Constraint::Length(to_u16(name + 1)),
                 Some(ContainerSort::Name),
             ),
             ("IMAGE", Constraint::Fill(1), Some(ContainerSort::Image)),
@@ -574,11 +454,14 @@ impl ContainersComponent {
         .style(Style::default().add_modifier(Modifier::DIM));
         let widths: Vec<Constraint> = columns.iter().map(|(_, w, _)| *w).collect();
         let targets: Vec<Option<ContainerSort>> = columns.iter().map(|(_, _, s)| *s).collect();
-        let table_rows: Vec<Row> = rows.iter().map(|r| self.table_row(r)).collect();
+        let table_rows: Vec<Row> = rows
+            .iter()
+            .filter_map(|&i| all.get(i))
+            .map(|c| self.table_row(c))
+            .collect();
         let selected = self.selected_index(&rows);
         self.table_state
             .select((!rows.is_empty()).then_some(selected));
-        let empty = rows.is_empty();
         let table = Table::new(table_rows, widths.clone())
             .header(header)
             .row_highlight_style(
@@ -590,8 +473,10 @@ impl ContainersComponent {
         self.header = crate::ui_ext::ColumnHits::new(area, &widths, &targets);
         self.rows =
             crate::ui_ext::RowHits::new(area, false, 1, self.table_state.offset(), rows.len());
-        if empty {
-            let text = if self.options.filter.is_empty() && self.options.warp.is_empty() {
+        if rows.is_empty() {
+            let text = if self.focus.is_some() {
+                "The container is gone"
+            } else if self.options.filter.is_empty() && self.options.warp.is_empty() {
                 "No containers"
             } else {
                 "No containers match"
@@ -620,39 +505,46 @@ impl ContainersComponent {
                 Span::raw(" clear"),
             ]);
         }
-        if self.logs_keys {
+        let logs = &self.logs;
+        if logs.selecting() {
+            return Line::from(vec![
+                key("<j/k>"),
+                Span::raw(" extend  "),
+                key("<y>"),
+                Span::raw(" copy lines  "),
+                key("<Esc>"),
+                Span::raw(" cancel"),
+            ]);
+        }
+        if self.focus.is_some() {
             let search = if self.logs.has_search() {
                 [key("<n/N>"), Span::raw(" match  ")]
             } else {
-                [key("</>"), Span::raw(" search  ")]
+                [key("</>"), Span::raw(" find  ")]
             };
             let mut spans = vec![
                 key("<PgUp/Dn>"),
                 Span::raw(" scroll  "),
                 key("<1-5/0>"),
-                Span::raw(" levels  "),
+                Span::raw(" level  "),
             ];
             spans.extend(search);
             spans.extend([
                 key("<w>"),
                 Span::raw(" wrap  "),
-                key("<y>"),
+                key("<V>"),
                 Span::raw(" copy  "),
                 key("<v>"),
-                Span::raw(" hl  "),
-                key("<Esc>"),
-                Span::raw(" list"),
+                Span::raw(" hl"),
             ]);
             return Line::from(spans);
         }
         Line::from(vec![
             key("<Enter>"),
-            Span::raw(" fold  "),
-            key("<l>"),
             Span::raw(" logs  "),
             key("</>"),
             Span::raw(" filter  "),
-            key("<1-6>"),
+            key(if self.multi_node() { "<1-7>" } else { "<1-6>" }),
             Span::raw(" sort  "),
             key("<A>"),
             Span::raw(if self.options.show_exited {
@@ -662,16 +554,28 @@ impl ContainersComponent {
             }),
             key("<W>"),
             Span::raw(" ns  "),
-            key("<v>"),
-            Span::raw(" hl"),
+            key("<y>"),
+            Span::raw(" copy"),
         ])
+    }
+}
+
+/// The talosctl command that reads `c`'s logs
+fn logs_command(c: &NodeContainer) -> String {
+    match c.info.kind {
+        ContainerKind::System => format!("talosctl -n {} logs {}", c.address, c.name()),
+        ContainerKind::Kubernetes => {
+            format!(
+                "talosctl -n {} logs --namespace cri {}",
+                c.address, c.info.id
+            )
+        }
     }
 }
 
 impl BackgroundRefresh for ContainersComponent {
     fn adopt_refresh(&mut self, refreshed: Self) {
         self.state = refreshed.state;
-        self.sync_logs();
     }
 }
 
@@ -680,19 +584,15 @@ impl Component for ContainersComponent {
         if self.picker.is_some() || self.logs.handle_mouse(&mouse) {
             return Ok(None);
         }
-        // A click in the logs gives them the keys
-        if crate::ui_ext::is_left_click(&mouse) && self.logs.contains(&mouse) {
-            self.logs_keys = true;
-            return Ok(None);
-        }
-        if let Some(sort) = self.header.clicked(&mouse) {
-            self.options.sort = sort;
-            self.sync_logs();
-            return Ok(None);
-        }
-        if let Some(row) = self.rows.clicked(&mouse) {
-            let rows = self.list_rows();
-            self.select(&rows, row);
+        if self.focus.is_none() {
+            if let Some(sort) = self.header.clicked(&mouse) {
+                self.options.sort = sort;
+                return Ok(None);
+            }
+            if let Some(row) = self.rows.clicked(&mouse) {
+                let rows = self.list_rows();
+                self.select(&rows, row);
+            }
         }
         Ok(None)
     }
@@ -720,58 +620,49 @@ impl Component for ContainersComponent {
                 PickerEvent::Pick(warp) => {
                     self.picker = None;
                     self.options.warp = warp.clone();
-                    self.sync_logs();
                     Some(Action::WarpNamespace(warp))
                 }
             });
         }
-        if self.logs_keys {
-            return Ok(self.handle_logs_key(key));
+        if self.focus.is_some() {
+            return Ok(self.handle_focus_key(key));
         }
-        use crate::ui_ext::Move;
         match key.code {
-            KeyCode::Esc if !self.options.filter.is_empty() => {
-                self.options.filter.clear();
-                self.sync_logs();
-            }
+            KeyCode::Esc if !self.options.filter.is_empty() => self.options.filter.clear(),
             KeyCode::Char('q') | KeyCode::Esc => return Ok(Some(Action::Back)),
-            KeyCode::Enter => self.toggle_fold(),
-            KeyCode::Char('l') => self.logs_keys = true,
+            KeyCode::Enter => self.open_focus(),
             KeyCode::Char('/') => self.filtering = true,
-            KeyCode::Char('A') => {
-                self.options.show_exited = !self.options.show_exited;
-                self.sync_logs();
-            }
+            KeyCode::Char('A') => self.options.show_exited = !self.options.show_exited,
             KeyCode::Char('W') => self.open_picker(),
-            KeyCode::Char(c @ '1'..='6') => {
+            KeyCode::Char(c @ '1'..='7') => {
                 let i = usize::from(u8::try_from(c).unwrap_or(b'1') - b'1');
                 // Without a NODE column the keys start at NAMESPACE
                 let offset = usize::from(!self.multi_node());
                 if let Some(&sort) = ContainerSort::ALL.get(i + offset) {
                     self.options.sort = sort;
-                    self.sync_logs();
                 }
             }
             KeyCode::Char('r') => return Ok(Some(Action::Refresh)),
             KeyCode::Char('a') => self.auto_refresh = !self.auto_refresh,
-            KeyCode::Char('y') => crate::clipboard::copy_to_clipboard(self.logs.command()),
-            KeyCode::Char('v') => return Ok(self.open_in_viewer()),
-            KeyCode::Char('w') => self.logs.set_wrap(!self.logs.wrap()),
-            _ => match Move::from_key(&key) {
-                Some(step @ (Move::Prev | Move::Next)) => self.move_selection(step),
-                // The page keys and g/G scroll the logs
-                Some(_) => {
-                    self.logs.handle_key(&key, None);
+            KeyCode::Char('y') => {
+                if let Some(c) = self.selected() {
+                    crate::clipboard::copy_to_clipboard(logs_command(c));
                 }
-                None => {}
-            },
+            }
+            _ => {
+                if let Some(step) = crate::ui_ext::Move::from_key(&key) {
+                    self.move_selection(step);
+                }
+            }
         }
         Ok(None)
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
-            self.logs.tick(None);
+            if self.focus.is_some() {
+                self.logs.tick(None);
+            }
             if self
                 .state
                 .should_auto_refresh(self.auto_refresh, AUTO_REFRESH_INTERVAL)
@@ -794,13 +685,13 @@ impl Component for ContainersComponent {
         }
         let summary = self.summary_line();
         let summary_width = summary.width();
-        let rows = talos9s_core::convert::to_u16(self.list_rows().len());
-        let show_filter = self.filtering || !self.options.filter.is_empty();
+        let show_filter =
+            self.focus.is_none() && (self.filtering || !self.options.filter.is_empty());
+        let list_height = if self.focus.is_some() { 2 } else { area.height };
         let [summary_area, filter_area, list, logs] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Length(u16::from(show_filter)),
-            // The list as tall as its rows, at most half; the logs the rest
-            Constraint::Length(rows.saturating_add(1).clamp(4, area.height / 2)),
+            Constraint::Length(list_height),
             Constraint::Fill(1),
         ])
         .areas(area);
@@ -825,7 +716,9 @@ impl Component for ContainersComponent {
             frame.render_widget(Paragraph::new(Line::from(spans)), filter_area);
         }
         self.draw_list(frame, list);
-        self.logs.draw(frame, logs);
+        if self.focus.is_some() {
+            self.logs.draw(frame, logs);
+        }
         if let Some(picker) = &self.picker {
             picker.draw(frame, area);
         }
@@ -902,50 +795,43 @@ mod tests {
             .join("\n")
     }
 
-    /// Pods start folded; Enter unfolds; the logs follow the selection
+    /// One row per container, no logs; Enter focuses one with its logs,
+    /// Esc goes back to the list where it was
     #[test]
-    fn folds_and_logs_follow() {
+    fn enter_focuses_a_container() {
         let mut c = component();
-        c.sync_logs();
         let s = screen(&mut c);
         assert!(s.contains("bc2: timed out after 10s"), "{s}");
-        assert!(s.contains("▸ gw-1"), "{s}");
-        assert!(!s.contains("proxy"), "{s}");
-        assert!(c.logs.command().contains("logs apid"));
+        assert!(s.contains("apid") && s.contains("proxy"), "{s}");
+        assert!(!s.contains("Logs ·"), "{s}");
         press(&mut c, KeyCode::Down);
-        assert!(c.logs.command().starts_with("kubectl -n web logs gw-1"));
         press(&mut c, KeyCode::Enter);
         let s = screen(&mut c);
-        assert!(s.contains("▾ gw-1") && s.contains("proxy"), "{s}");
-        press(&mut c, KeyCode::Down);
-        assert!(
-            c.logs
-                .command()
-                .contains("--namespace cri web/gw-1:app:abc"),
-            "{}",
-            c.logs.command()
+        assert!(s.contains("Logs · gw-1 · app on bc1"), "{s}");
+        assert!(!s.contains("proxy") && !s.contains("apid"), "{s}");
+        assert_eq!(
+            c.logs.command(),
+            "talosctl -n 10.0.0.3 logs --namespace cri web/gw-1:app:abc"
         );
-        // Enter on a container folds its pod, selecting the pod
-        press(&mut c, KeyCode::Enter);
-        assert!(!screen(&mut c).contains("proxy"));
-        assert_eq!(c.selected_id, "bc1/web/gw-1");
+        // The digits are the logs' levels here, not the sort
+        press(&mut c, KeyCode::Char('3'));
+        assert_eq!(c.options.sort, ContainerSort::Namespace);
+        press(&mut c, KeyCode::Esc);
+        assert!(c.focus.is_none());
+        assert_eq!(c.selected().map(NodeContainer::name), Some("app"));
+        assert!(matches!(press(&mut c, KeyCode::Esc), Some(Action::Back)));
     }
 
     /// Sort keys follow the columns; with one node they start at NAMESPACE
     #[test]
-    fn sort_keys_and_logs_keys() {
+    fn sort_keys_follow_columns() {
         let mut c = component();
         press(&mut c, KeyCode::Char('1'));
         assert_eq!(c.options.sort, ContainerSort::Node);
+        press(&mut c, KeyCode::Char('3'));
+        assert_eq!(c.options.sort, ContainerSort::Pod);
         c.nodes.truncate(1);
         press(&mut c, KeyCode::Char('1'));
         assert_eq!(c.options.sort, ContainerSort::Namespace);
-        // `l` hands the digits to the logs' levels; Esc back
-        press(&mut c, KeyCode::Char('l'));
-        press(&mut c, KeyCode::Char('3'));
-        assert_eq!(c.options.sort, ContainerSort::Namespace);
-        press(&mut c, KeyCode::Esc);
-        assert!(!c.logs_keys);
-        assert!(matches!(press(&mut c, KeyCode::Esc), Some(Action::Back)));
     }
 }

@@ -118,6 +118,31 @@ pub fn bottom_start(total: usize, height: usize, rows: impl Fn(usize) -> usize) 
     0
 }
 
+/// `text` without ANSI escape sequences (colors a program wrote for a
+/// terminal): `ESC [ … letter` and other `ESC x` pairs
+pub fn strip_ansi(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('\u{1b}') {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI: parameters, then one final byte in `@`..=`~`
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out.into()
+}
+
 /// Byte ranges of `text` matching `query` case-insensitively, without
 /// overlap. Compared char by char in `text` itself: offsets found in a
 /// lowercased copy don't fit the original when lowercasing changes a
@@ -679,6 +704,15 @@ pub fn parse_kernel_line(line: &str) -> Option<(&str, LogLevel, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_ansi_colors() {
+        assert_eq!(
+            strip_ansi("\u{1b}[2m2026\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m x"),
+            "2026  INFO x"
+        );
+        assert_eq!(strip_ansi("plain [2m"), "plain [2m");
+    }
 
     #[test]
     fn bottom_start_counts_wrapped_rows() {

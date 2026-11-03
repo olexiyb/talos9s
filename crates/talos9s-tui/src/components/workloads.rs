@@ -1546,7 +1546,9 @@ impl WorkloadHealthComponent {
         let client = self.k8s_client.clone();
         // A search being typed takes every key; Esc clears one before leaving
         if let Some(focus) = &mut self.focus
-            && (focus.logs.captures_text() || (key.code == KeyCode::Esc && focus.logs.has_search()))
+            && (focus.logs.captures_text()
+                || focus.logs.selecting()
+                || (key.code == KeyCode::Esc && focus.logs.has_search()))
         {
             focus.logs.handle_key(&key, client.as_ref());
             return None;
@@ -1633,10 +1635,20 @@ impl WorkloadHealthComponent {
                 Span::raw(" clear"),
             ]);
         }
+        if logs.selecting() {
+            return Line::from(vec![
+                key("<j/k>"),
+                Span::raw(" extend  "),
+                key("<y>"),
+                Span::raw(" copy lines  "),
+                key("<Esc>"),
+                Span::raw(" cancel"),
+            ]);
+        }
         // `<PgUp/PgDn/g/G>` scroll and `<r>` reload are left out: they mean
         // that in every view, and the line must fit 85 columns
         let search = if logs.has_search() {
-            [key("<n/N>"), Span::raw(" match  ")]
+            [key("<n/N>"), Span::raw(" next  ")]
         } else {
             [key("</>"), Span::raw(" find  ")]
         };
@@ -1644,7 +1656,7 @@ impl WorkloadHealthComponent {
             key("<Enter>"),
             Span::raw(" expand  "),
             key("<PgUp/Dn>"),
-            Span::raw(" scroll  "),
+            Span::raw(" page  "),
             key("<1-5/0>"),
             Span::raw(" level  "),
         ];
@@ -1659,8 +1671,10 @@ impl WorkloadHealthComponent {
         spans.extend([
             key("<w>"),
             Span::raw(" wrap  "),
-            key("<y/v>"),
-            Span::raw(" copy/hl"),
+            key("<V>"),
+            Span::raw(" copy  "),
+            key("<v>"),
+            Span::raw(" hl"),
         ]);
         Line::from(spans)
     }
@@ -1958,11 +1972,34 @@ impl Component for WorkloadHealthComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        // Every error here is the Kubernetes API's: the Containers view
+        // reads the nodes' containerd instead, so point to it
+        if let Some(error) = self.state.error() {
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::styled(format!("Error: {error}"), Style::default().fg(Color::Red)),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("The ", Style::default().dim()),
+                        Span::styled("Containers", Style::default().fg(Color::Cyan)),
+                        Span::styled(" view (", Style::default().dim()),
+                        Span::styled("C", crate::ui_ext::KEY),
+                        Span::styled(
+                            ") reads containerd on the nodes directly, without the Kubernetes API",
+                            Style::default().dim(),
+                        ),
+                    ]),
+                ])
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+                area,
+            );
+            return Ok(());
+        }
         if crate::ui_ext::draw_load_gate(
             frame,
             area,
             self.state.is_loading() && !self.state.has_data(),
-            self.state.error(),
+            None,
             "Loading workloads...",
         ) {
             return Ok(());
@@ -2196,6 +2233,26 @@ mod tests {
         assert_eq!(WorkloadHealthComponent::selectable(&rows), [1, 2]);
         press(&mut c, KeyCode::Char('G'));
         assert_eq!(c.selected, 1);
+    }
+
+    /// Without the Kubernetes API the error points to the Containers view
+    #[test]
+    fn api_error_points_to_containers() {
+        let mut c = WorkloadHealthComponent::new(None);
+        c.set_error("Failed to connect to Kubernetes: timed out".into());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 6)).unwrap();
+        terminal.draw(|f| c.draw(f, f.area()).unwrap()).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..buffer.area.height)
+            .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+            .map(|p| buffer[p].symbol().to_string())
+            .collect();
+        assert!(text.contains("Failed to connect to Kubernetes"), "{text}");
+        assert!(
+            text.contains("Containers view (C) reads containerd"),
+            "{text}"
+        );
     }
 
     /// The focused view's key line fits 85 columns in every state
