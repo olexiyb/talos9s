@@ -1356,9 +1356,9 @@ impl WorkloadHealthComponent {
                 pod.state_text(),
                 issue.severity().health().symbol_and_color().1,
             ),
-            None if pod.ready || pod.phase.as_deref() == Some("Succeeded") => {
-                (pod.state_text(), Color::Green)
-            }
+            // Finished is fine but not running: dimmed, as k9s and Lens
+            None if pod.is_completed() => (pod.state_text(), Color::DarkGray),
+            None if pod.ready => (pod.state_text(), Color::Green),
             None => (pod.state_text(), Color::Yellow),
         }
     }

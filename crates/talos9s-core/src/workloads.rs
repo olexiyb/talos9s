@@ -260,7 +260,10 @@ impl PodFacts {
                 return reason.clone().unwrap_or_else(|| format!("Exit {code}"));
             }
         }
-        if phase == "Running" && !self.ready {
+        if phase == "Succeeded" {
+            // As kubectl and k9s say it: finished, not failing
+            "Completed".to_string()
+        } else if phase == "Running" && !self.ready {
             "Running, not ready".to_string()
         } else {
             phase.to_string()
@@ -286,9 +289,15 @@ impl PodFacts {
             .collect()
     }
 
+    /// Finished: every container exited 0 (phase Succeeded). Its Ready
+    /// condition is false (`PodCompleted`), but it isn't a problem
+    pub fn is_completed(&self) -> bool {
+        self.phase.as_deref() == Some("Succeeded")
+    }
+
     /// Not ready and not done: what makes a workload short of ready pods
     fn counts_as_not_ready(&self) -> bool {
-        !self.ready && self.phase.as_deref() != Some("Succeeded")
+        !self.ready && !self.is_completed()
     }
 }
 
@@ -802,7 +811,7 @@ impl PodSort {
 pub fn pod_health(pod: &PodFacts, now: i64) -> WorkloadHealth {
     match pod.issue(now) {
         Some(issue) => issue.severity(),
-        None if !pod.ready && pod.phase.as_deref() != Some("Succeeded") => WorkloadHealth::Degraded,
+        None if !pod.ready && !pod.is_completed() => WorkloadHealth::Degraded,
         None => WorkloadHealth::Healthy,
     }
 }
@@ -865,10 +874,13 @@ pub fn pod_rows<'a>(
         let key = match sort {
             PodSort::Namespace => std::cmp::Ordering::Equal,
             PodSort::Health => ha.cmp(hb),
-            // The share of containers ready, lowest first: 0/2 before 1/2
+            // The share of containers ready, lowest first: 0/2 before 1/2;
+            // finished pods last, their 0/1 isn't a pod short of ready
             PodSort::Ready => {
                 let ((ra, ta), (rb, tb)) = (a.containers_ready(), b.containers_ready());
-                (ra * tb.max(1)).cmp(&(rb * ta.max(1)))
+                a.is_completed()
+                    .cmp(&b.is_completed())
+                    .then_with(|| (ra * tb.max(1)).cmp(&(rb * ta.max(1))))
             }
             PodSort::Owner => pod_owner(a, rs_owners).cmp(&pod_owner(b, rs_owners)),
             // The pod's own name across namespaces (ties: namespace, below)
@@ -1395,6 +1407,12 @@ mod tests {
             names(pod_rows(&pods, None, &all, PodSort::Health, NOW)),
             ["  api-1", "  backup-29", "  db-0"]
         );
+        // Finished last by READY, after ready pods: its 0/1 isn't a problem
+        assert_eq!(
+            names(pod_rows(&pods, None, &all, PodSort::Ready, NOW))[2],
+            "  backup-29"
+        );
+        assert_eq!(pods[1].state_text(), "Completed");
         assert_eq!(
             names(pod_rows(&pods, None, &all, PodSort::Node, NOW))[0],
             "  backup-29"

@@ -188,7 +188,7 @@ All reads, each in the existing timeout (moved to
 
 On a node, or the control plane or workers row, the view keeps today's
 scoping: workloads with pods on those nodes, `x/y here` in READY, and only
-those nodes' pods. The node grid shows only the scoped nodes.
+those nodes' pods.
 
 ## Implementation steps
 
@@ -233,10 +233,11 @@ Each step is usable on its own; 1–3 already answer "where".
 1. The detail pane is below the list (the logs need the width).
 2. `A`, `S`, `P`, the pod sort and the warp are remembered in `state.yaml`.
 3. No node grid (see Dropped).
+4. A finished pod (phase Succeeded) is its own state, as in kubectl, k9s and
+   Lens: READY stays `0/1`, the state reads `Completed`, dimmed, never a
+   problem, and the READY sort puts it after ready pods.
 
 ## Still open
 
-- Finished Job pods count as not ready in the READY sort; should they rank
-  as ready?
 - The live failure test (a bad image tag on a test Deployment) hasn't been
   done: bc has no broken workloads.
