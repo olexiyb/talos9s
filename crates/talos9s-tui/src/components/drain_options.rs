@@ -1,5 +1,5 @@
-//! The drain options in the Operations start dialog (`plans/operations.md`,
-//! "Drain options"): check boxes and values for `kubectl drain`'s flags, each
+//! The drain options in the Operations start dialog
+//! (`.claude/rules/operations.md`): check boxes and values for `kubectl drain`'s flags, each
 //! saying what it hits on the checked nodes.
 
 use crate::components::diagnostics::k8s::{DrainOptions, PodImpact};

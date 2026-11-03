@@ -1,6 +1,6 @@
 //! Operations: cordon, uncordon, drain, reboot and shutdown, on a node or
 //! node by node over a group, run in the background and recorded
-//! (`plans/operations.md`).
+//! (`.claude/rules/operations.md`).
 //!
 //! The app holds the runs going now in a [`Runs`] registry, one per
 //! talosconfig context; the Operations view starts and cancels them there

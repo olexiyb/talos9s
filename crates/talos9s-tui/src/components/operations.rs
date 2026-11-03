@@ -1,5 +1,5 @@
 //! Operations view (`o`): the operations for the selected node, group or
-//! cluster, and every run so far (`plans/operations.md`).
+//! cluster, and every run so far (`.claude/rules/operations.md`).
 //!
 //! The top picks what to run: the operation (a drop list) and the nodes
 //! (check boxes; a single node is checked already). Enter opens the

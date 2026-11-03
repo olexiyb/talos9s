@@ -43,7 +43,7 @@ What talos9s changes on a cluster, and the guards each change needs.
 - **Fixes are not operations:** diagnostic fixes and storage remedies are
   shown and copied, never run (`CLAUDE.md`).
 - Live tests open these dialogs and cancel with `n`; never confirm one.
-- **One engine** (`crate::operations`, `plans/operations.md`): cordon,
+- **One engine** (`crate::operations`): cordon,
   uncordon, drain, reboot and shutdown on one node or node by node, run in
   the app's `Runs` registry (one per context) so they outlive the view.
   Every step is a line in the run file (masked, flushed); a failure after
@@ -56,3 +56,12 @@ What talos9s changes on a cluster, and the guards each change needs.
   be cordoned and drained.
 - **Quitting** waits for running operations: a second `Ctrl+C` within
   `QUIT_ANYWAY` quits anyway, and the run shows as interrupted.
+- **Run files** (`~/.talos9s/operations/`, 0600): a JSON header, the
+  output lines (masked, flushed per line), a JSON end line; no end line
+  on the next start shows the run as interrupted. Never deleted
+  automatically, only with `D`. The design history is in git
+  (`plans/operations.md`, removed once built).
+- **CloudNativePG**: a primary's `<cluster>-primary` PDB allows 0 on
+  purpose; the operator switches over once the node is cordoned, so a
+  primary with replicas isn't a blocker (`PdbHold`). Only a one-instance
+  cluster blocks.
