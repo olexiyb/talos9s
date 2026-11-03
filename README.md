@@ -272,7 +272,7 @@ talos9s runs with your talosconfig, which usually means full admin on every
 node, so it is careful about what it changes:
 
 - **Reads by default.** It changes a node only for cordon, uncordon, drain,
-  reboot, shutdown, service restart, cluster install and bootstrap, each after
+  reboot, shutdown, cluster install and bootstrap, each after
   a confirmation dialog, and logs every step to `~/.talos9s/audit.log`
   (operations also to their run file in `~/.talos9s/operations/`).
 - **Never runs suggested commands.** Diagnostic fixes (talosctl) and storage

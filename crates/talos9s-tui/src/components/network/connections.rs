@@ -738,9 +738,7 @@ impl NetworkStatsComponent {
                 Span::styled(health_text, Style::default().fg(health_color)),
                 Span::raw(")   "),
                 Span::styled("<o>", crate::ui_ext::KEY),
-                Span::styled(" logs  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("<R>", crate::ui_ext::KEY),
-                Span::styled(" restart", Style::default().fg(Color::DarkGray)),
+                Span::styled(" logs", Style::default().fg(Color::DarkGray)),
             ]));
         } else {
             // No service - show process info hint
@@ -893,12 +891,6 @@ impl NetworkStatsComponent {
 
             // Open service logs (for known service ports)
             KeyCode::Char('o') => self.open_service_logs(),
-
-            // Restart service (for known service ports) - requires confirmation
-            KeyCode::Char('R') => {
-                self.initiate_service_restart();
-                None
-            }
 
             // Show DNS config (/etc/resolv.conf)
             KeyCode::Char('d') => {

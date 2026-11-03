@@ -23,8 +23,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 use talos_rs::{
     ConnectionCounts, ConnectionInfo, KubeSpanPeerStatus, NetDevRate, NetDevStats, NetstatFilter,
-    NodeConnections, NodeNetworkStats, NodeServices, ServiceInfo, ServiceRestartResult,
-    TalosClient, TalosError,
+    NodeConnections, NodeNetworkStats, NodeServices, ServiceInfo, TalosClient, TalosError,
 };
 use talos9s_core::AsyncState;
 use talos9s_core::constants::{CLOSE_WAIT_WARN, SYN_SENT_WARN, TIME_WAIT_WARN};
@@ -53,12 +52,6 @@ type StatsFetch = (
     std::result::Result<Vec<NodeServices>, TalosError>,
 );
 
-/// A service restart's id and outcome
-type RestartResult = (
-    String,
-    std::result::Result<Vec<ServiceRestartResult>, TalosError>,
-);
-
 /// A file viewer fetch: viewer, path, and content
 type FileResult = (
     FileViewerType,
@@ -74,14 +67,13 @@ type CaptureResult = std::result::Result<tokio::sync::mpsc::UnboundedReceiver<Ve
 #[derive(Default)]
 struct NetworkTasks {
     stats: Option<JoinHandle<StatsFetch>>,
-    restart: Option<JoinHandle<RestartResult>>,
     file: Option<JoinHandle<FileResult>>,
     capture: Option<JoinHandle<CaptureResult>>,
 }
 
 impl Drop for NetworkTasks {
     fn drop(&mut self) {
-        // Results only feed this view. A restart already sent is left to finish.
+        // Results only feed this view
         if let Some(t) = &self.stats {
             t.abort();
         }
@@ -190,13 +182,6 @@ pub enum ConnSortBy {
     #[default]
     State, // Sort by connection state
     Port, // Sort by local port
-}
-
-/// Pending action requiring confirmation
-#[derive(Debug, Clone)]
-pub enum PendingAction {
-    /// Restart a service (service_id, service_name)
-    RestartService(String, String),
 }
 
 /// File viewer overlay type
@@ -367,12 +352,8 @@ pub struct NetworkStatsComponent {
     /// Viewport height for connection table (for page navigation)
     conn_viewport_height: u16,
 
-    /// Pending action requiring confirmation
-    pending_action: Option<PendingAction>,
-    /// Status message to show (e.g., "Service restarted successfully")
+    /// Status message to show
     status_message: Option<(String, Instant)>,
-    /// Service ID pending restart (to be executed in update)
-    pending_restart_service: Option<String>,
 
     /// Show command output pane at bottom
     show_output_pane: bool,
@@ -458,9 +439,7 @@ impl NetworkStatsComponent {
             show_all_connections: false,
             conn_visual: Default::default(),
             conn_viewport_height: 20, // Will be updated on draw
-            pending_action: None,
             status_message: None,
-            pending_restart_service: None,
             show_output_pane: false,
             command_output: None,
             file_viewer: None,
@@ -511,7 +490,7 @@ impl NetworkStatsComponent {
     }
 
     /// Refresh network data from the node: start any requested action
-    /// (service restart, file view, packet capture) and a stats fetch, each in
+    /// (file view, packet capture) and a stats fetch, each in
     /// a spawned task. Returns at once; `update(Tick)` applies the results.
     /// A stats fetch is in flight
     pub fn refreshing(&self) -> bool {
@@ -524,7 +503,6 @@ impl NetworkStatsComponent {
             return;
         };
 
-        self.perform_pending_restart();
         if self.file_viewer_needs_fetch() {
             self.fetch_file_content();
         }
@@ -558,9 +536,6 @@ impl NetworkStatsComponent {
     fn poll_tasks(&mut self) {
         if let Some(fetch) = take_finished(&mut self.tasks.stats) {
             self.apply_stats(fetch);
-        }
-        if let Some((service_id, result)) = take_finished(&mut self.tasks.restart) {
-            self.apply_restart(&service_id, result);
         }
         if let Some((viewer_type, path, result)) = take_finished(&mut self.tasks.file) {
             self.apply_file_content(viewer_type, path, result);
@@ -769,14 +744,6 @@ impl Component for NetworkStatsComponent {
                 Span::raw(" close"),
             ]));
         }
-        if self.pending_action.is_some() {
-            return Some(Line::from(vec![
-                key("<y>"),
-                Span::raw(" confirm  "),
-                key("<n/Esc>"),
-                Span::raw(" cancel"),
-            ]));
-        }
         let mut line = match self.view_mode {
             ViewMode::Interfaces => self.interfaces_key_hints(),
             ViewMode::Connections => self.connections_key_hints(),
@@ -804,11 +771,6 @@ impl Component for NetworkStatsComponent {
         if self.show_output_pane && matches!(key.code, KeyCode::Esc) {
             self.show_output_pane = false;
             return Ok(None);
-        }
-
-        // If there's a pending confirmation, handle that first
-        if self.pending_action.is_some() {
-            return Ok(self.handle_confirmation_key(key));
         }
 
         match self.view_mode {
@@ -886,11 +848,6 @@ impl Component for NetworkStatsComponent {
         // Draw output pane if shown
         if let Some(output_rect) = output_area {
             self.draw_output_pane(frame, output_rect);
-        }
-
-        // Draw confirmation dialog overlay if pending
-        if let Some(ref action) = self.pending_action {
-            self.draw_confirmation_dialog(frame, area, action);
         }
 
         // Draw status message overlay if present

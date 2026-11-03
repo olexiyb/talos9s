@@ -1,9 +1,8 @@
-//! Service actions: logs, restart with confirmation, and the output pane
+//! Service actions: health of the key ports, logs, and the output pane
 
-use super::{CommandOutput, NetworkStatsComponent, PendingAction, port_to_service, with_timeout};
+use super::{NetworkStatsComponent, port_to_service};
 use crate::action::Action;
 use crate::components::LogNode;
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -11,8 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use std::time::Instant;
-use talos_rs::{ConnectionState, ServiceRestartResult, TalosError};
+use talos_rs::ConnectionState;
 
 impl NetworkStatsComponent {
     /// Update service health indicators based on connection data
@@ -30,25 +28,6 @@ impl NetworkStatsComponent {
                 .iter()
                 .any(|c| c.local_port == *port as u32 && c.state == ConnectionState::Listen);
             data.service_health.insert(*port, is_listening);
-        }
-    }
-
-    /// Handle key events when a confirmation is pending
-    pub(super) fn handle_confirmation_key(&mut self, key: KeyEvent) -> Option<Action> {
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
-                // Confirmed - execute the action
-                if let Some(action) = self.pending_action.take() {
-                    return Some(self.execute_pending_action(action));
-                }
-                None
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                // Cancelled
-                self.pending_action = None;
-                None
-            }
-            _ => None,
         }
     }
 
@@ -74,194 +53,6 @@ impl NetworkStatsComponent {
             service_vec.clone(),
             service_vec, // from network view we only know about this service
         ))
-    }
-
-    /// Initiate service restart - sets pending_action for confirmation
-    pub(super) fn initiate_service_restart(&mut self) {
-        let conns = self.get_filtered_connections();
-        let Some(conn) = conns.get(self.conn_selected) else {
-            return;
-        };
-
-        // Only for known service ports
-        let Some(service_name) = port_to_service(conn.local_port) else {
-            return;
-        };
-
-        // Check if service exists
-        let service_exists = self
-            .data()
-            .map(|d| d.services.contains_key(service_name))
-            .unwrap_or(false);
-        if !service_exists {
-            self.status_message = Some((
-                format!("Service '{service_name}' not found"),
-                Instant::now(),
-            ));
-            return;
-        }
-
-        // Set pending action - will require confirmation
-        self.pending_action = Some(PendingAction::RestartService(
-            service_name.to_string(),
-            service_name.to_string(),
-        ));
-    }
-
-    /// Execute a pending action after confirmation
-    fn execute_pending_action(&mut self, action: PendingAction) -> Action {
-        match action {
-            PendingAction::RestartService(service_id, service_name) => {
-                // Show status message while waiting
-                self.status_message =
-                    Some((format!("Restarting {service_name}..."), Instant::now()));
-
-                // Store that we need to restart - will be executed on next refresh
-                self.pending_restart_service = Some(service_id);
-
-                // Trigger immediate refresh to execute the restart
-                Action::Refresh
-            }
-        }
-    }
-
-    /// Start the pending service restart in the background (from `refresh`)
-    pub(super) fn perform_pending_restart(&mut self) {
-        let Some(service_id) = self.pending_restart_service.take() else {
-            return;
-        };
-
-        let Some(client) = self.client.clone() else {
-            let output = CommandOutput {
-                command: format!("Restart {service_id}"),
-                lines: vec!["Error: No client configured".to_string()],
-                timestamp: Instant::now(),
-                success: false,
-            };
-            self.command_output = Some(output);
-            self.show_output_pane = true;
-            return;
-        };
-
-        self.status_message = Some((format!("Restarting {service_id}..."), Instant::now()));
-        crate::audit::audit_start("SERVICE_RESTART", &self.hostname, &service_id);
-        self.tasks.restart = Some(tokio::spawn(async move {
-            let result = with_timeout(client.service_restart(&service_id)).await;
-            (service_id, result)
-        }));
-    }
-
-    /// Show the outcome of a finished service restart
-    pub(super) fn apply_restart(
-        &mut self,
-        service_id: &str,
-        result: std::result::Result<Vec<ServiceRestartResult>, TalosError>,
-    ) {
-        match result {
-            Ok(results) => {
-                crate::audit::audit_success("SERVICE_RESTART", &self.hostname, service_id);
-                let mut lines = Vec::new();
-                lines.push(format!("Restarting service: {service_id}"));
-                lines.push(String::new());
-
-                if let Some(result) = results.first() {
-                    if !result.response.is_empty() {
-                        lines.push(format!("Response: {}", result.response));
-                    }
-                    // Show metadata if available
-                    if !result.node.is_empty() {
-                        lines.push(format!("Node: {}", result.node));
-                    }
-                }
-
-                lines.push(String::new());
-                lines.push("Service restart initiated successfully.".to_string());
-                lines.push("The service will restart momentarily.".to_string());
-
-                let output = CommandOutput {
-                    command: format!("Restart {service_id}"),
-                    lines,
-                    timestamp: Instant::now(),
-                    success: true,
-                };
-                self.command_output = Some(output);
-                self.show_output_pane = true;
-                self.status_message = None; // Clear status message, using output pane instead
-            }
-            Err(e) => {
-                crate::audit::audit_failure(
-                    "SERVICE_RESTART",
-                    &self.hostname,
-                    &format!("{service_id}: {e}"),
-                );
-                let lines = vec![
-                    format!("Restarting service: {}", service_id),
-                    String::new(),
-                    format!("Error: {}", e),
-                    String::new(),
-                    "The service restart failed. Check the error above.".to_string(),
-                ];
-
-                let output = CommandOutput {
-                    command: format!("Restart {service_id}"),
-                    lines,
-                    timestamp: Instant::now(),
-                    success: false,
-                };
-                self.command_output = Some(output);
-                self.show_output_pane = true;
-                self.status_message = None;
-            }
-        }
-    }
-
-    /// Draw the confirmation dialog
-    pub(super) fn draw_confirmation_dialog(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        action: &PendingAction,
-    ) {
-        let (title, message) = match action {
-            PendingAction::RestartService(_, name) => {
-                ("Confirm Restart", format!("Restart service '{name}'?"))
-            }
-        };
-
-        // Center the dialog
-        let dialog_area = crate::ui_ext::open_dialog(frame, area, 40, 5);
-
-        // Draw the dialog block with background
-        let block = Block::default()
-            .title(Span::styled(
-                format!(" {title} "),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
-
-        let inner = block.inner(dialog_area);
-
-        let text = vec![
-            Line::from(message),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("<y>", crate::ui_ext::KEY_YES),
-                Span::raw(" Yes  "),
-                Span::styled("<n/Esc>", crate::ui_ext::KEY_NO),
-                Span::raw(" No"),
-            ]),
-        ];
-
-        let paragraph = Paragraph::new(text)
-            .alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().bg(Color::Black));
-
-        frame.render_widget(block, dialog_area);
-        frame.render_widget(paragraph, inner);
     }
 
     /// Draw the status message as a floating notification

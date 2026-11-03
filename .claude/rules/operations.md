@@ -6,11 +6,10 @@ paths:
   - "crates/talos9s-core/src/operations.rs"
   - "crates/talos9s-tui/src/components/lifecycle.rs"
   - "crates/talos9s-tui/src/components/wizard.rs"
-  - "crates/talos9s-tui/src/components/network/services.rs"
   - "crates/talos9s-tui/src/components/diagnostics/k8s.rs"
 ---
 
-# Operations: reboot, shutdown, drain, upgrade, apply, restart
+# Operations: cordon, drain, reboot, shutdown, upgrade, apply
 
 What talos9s changes on a cluster, and the guards each change needs.
 

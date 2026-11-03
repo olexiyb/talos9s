@@ -90,8 +90,7 @@ Shelling out to `talosctl reboot` would lose them. So:
 - **Top:** an Operation drop list and the target's nodes as check boxes
   (a group starts with none checked, "all nodes" checks every one; a
   single node is checked already). Operations, named the same on a node
-  and a group: Cordon, Uncordon, Drain, Reboot, Shutdown (node only),
-  Service restart (node only, pick the service). On a group or cluster an
+  and a group: Cordon, Uncordon, Drain, Reboot, Shutdown (node only). On a group or cluster an
   operation runs node by node (see "Operations on a group"). Unavailable ones are dimmed with the
   reason (`needs the Kubernetes API`).
 - **History:** newest first; NODE is a node, `3 nodes` for a rolling run.
@@ -109,7 +108,7 @@ Shelling out to `talosctl reboot` would lose them. So:
   command, `D` deletes the selected run or, with a filter, the filtered
   runs, after a confirmation naming how many.
 - `o` in the tree opens this view (the menu entry's letter); `O` and the
-  popups go away. `R` in Connections starts a service restart run.
+  popups go away.
 
 ## Data
 
@@ -151,8 +150,8 @@ Shelling out to `talosctl reboot` would lose them. So:
    (`.claude/rules/tui-views.md`).
 4. Done. The run pane: `LogPane` with a run source (file while finished, the
    live recorder while running).
-5. Done. Move `o`/`O` to open the view; remove the popups. Service restart from
-   Connections becomes a run.
+5. Done. Move `o`/`O` to open the view; remove the popups. Service restart
+   (`R` in Connections) was removed instead of moved, see "Decided".
 6. Done. README, key bindings, `.claude/rules/operations.md`.
 
 ## Testing
@@ -208,9 +207,6 @@ group.
 
 ## Not done yet
 
-- **Service restart** is still `R` in Network → Connections, with its own
-  confirmation and audit entry, not a run in this view: it needs a service
-  picker here first.
 - **Drain options** are the defaults (ignore DaemonSets, delete emptyDir
   data, 30 s between nodes of a reboot); the dialog has no way to change
   them yet.
@@ -219,6 +215,9 @@ group.
 
 ## Decided
 
+- **No service restart.** `R` in Network → Connections (restart the Talos
+  service on a connection's port) was removed: it reached only kubelet,
+  apid and trustd, and Talos supervises and restarts its services itself.
 - Rolling runs keep a progress bar.
 - History shows every context by default; `A` narrows to the current one.
 - Runs are never deleted automatically, only with `D`.

@@ -70,11 +70,11 @@ filter of the same kind (`L` listening only next to `A` all in connections).
 
 ## Actions that change state
 
-- Never on a lowercase key next to a harmless one; use uppercase (`R`
-  restart) or the Operations view (`o`).
+- Never on a lowercase key next to a harmless one; put it in the
+  Operations view (`o`).
 - Always a confirmation (`<y>` / `<n/Esc>`) and `audit_start` /
-  `audit_success` / `audit_failure` (`crate::audit`), as drain, reboot and
-  service restart do.
+  `audit_success` / `audit_failure` (`crate::audit`), as the operations
+  do.
 
 ## Keys that only sometimes act
 
