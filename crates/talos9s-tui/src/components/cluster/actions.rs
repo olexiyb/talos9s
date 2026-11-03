@@ -312,7 +312,7 @@ impl ClusterComponent {
         // "Not connected" for good. The dashboard shows the connecting state
         // itself.
         if item != NavMenuItem::Dashboard && self.client().is_none() && self.nodes_pending() {
-            return Some(Action::ShowHint(item, LOADING_NODES_HINT.to_string()));
+            return Some(Action::ShowHint(item, self.nodes_pending_hint()));
         }
         let action = match item {
             NavMenuItem::Dashboard => Some(Action::ShowDashboard),
@@ -337,7 +337,7 @@ impl ClusterComponent {
         // start): say so; the app opens the view once they arrive
         action.or_else(|| {
             self.nodes_pending()
-                .then(|| Action::ShowHint(item, LOADING_NODES_HINT.to_string()))
+                .then(|| Action::ShowHint(item, self.nodes_pending_hint()))
         })
     }
 }

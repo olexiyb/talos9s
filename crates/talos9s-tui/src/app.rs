@@ -1584,13 +1584,18 @@ impl App {
         if key == self.applied_target {
             self.pending_target = None;
             // A view picked while the nodes were loading opens once they
-            // are known; the selection hasn't changed, so nothing else would
+            // are known, and the hint follows a failed connection (and a
+            // retry); the selection hasn't changed, so nothing else would
             if self.view == View::Hint
-                && self.hint.as_deref() == Some(crate::components::cluster::LOADING_NODES_HINT)
-                && !matches!(
-                    self.cluster.action_for(self.pane),
-                    None | Some(Action::ShowHint(..))
-                )
+                && self
+                    .hint
+                    .as_deref()
+                    .is_some_and(crate::components::cluster::is_waiting_hint)
+                && match self.cluster.action_for(self.pane) {
+                    None => false,
+                    Some(Action::ShowHint(_, ref m)) => self.hint.as_deref() != Some(m.as_str()),
+                    Some(_) => true,
+                }
             {
                 return self.retarget().await;
             }

@@ -350,6 +350,19 @@ impl ClusterComponent {
     }
 
     /// The selected cluster is still connecting or has listed no nodes yet
+    /// The hint for a view picked while the nodes aren't known: loading,
+    /// or once a connection attempt failed, its error (else the hint says
+    /// loading for good)
+    pub(super) fn nodes_pending_hint(&self) -> String {
+        match self.clusters.get(self.active_cluster) {
+            Some(c) if !c.loading && c.versions.is_empty() => match &c.error {
+                Some(e) => format!("{}{e}", super::UNREACHABLE_HINT_PREFIX),
+                None => super::LOADING_NODES_HINT.to_string(),
+            },
+            _ => super::LOADING_NODES_HINT.to_string(),
+        }
+    }
+
     pub(super) fn nodes_pending(&self) -> bool {
         self.clusters
             .get(self.active_cluster)

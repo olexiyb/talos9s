@@ -342,6 +342,33 @@ fn assembling_nodes_while_a_refresh_runs() {
     assert_eq!(cluster.load_avg.len(), 1);
 }
 
+/// A cluster that couldn't be reached says so in the hint instead of
+/// "loading" for good; the hint still waits, so the view opens once it's back
+#[test]
+fn views_picked_while_unreachable_show_the_error() {
+    let mut comp = ClusterComponent::default();
+    comp.clusters.push(ClusterData {
+        name: "test".to_string(),
+        loading: false,
+        error: Some("Could not connect — deadline has elapsed".to_string()),
+        ..Default::default()
+    });
+    match comp.action_for(NavMenuItem::Workloads) {
+        Some(Action::ShowHint(NavMenuItem::Workloads, m)) => {
+            assert!(m.starts_with(UNREACHABLE_HINT_PREFIX));
+            assert!(m.ends_with("deadline has elapsed"));
+            assert!(super::is_waiting_hint(&m));
+        }
+        other => panic!("expected the unreachable hint, got {other:?}"),
+    }
+    // Still connecting: loading, not an old error
+    comp.clusters[0].loading = true;
+    assert!(matches!(
+        comp.action_for(NavMenuItem::Workloads),
+        Some(Action::ShowHint(_, ref m)) if m == LOADING_NODES_HINT
+    ));
+}
+
 /// A view picked before the nodes are known shows the loading hint
 /// instead of doing nothing; once nodes are listed it opens for real
 #[test]

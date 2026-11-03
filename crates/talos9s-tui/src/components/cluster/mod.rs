@@ -278,6 +278,16 @@ const CLUSTER_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// Shown for a view picked before the cluster's nodes are known
 pub const LOADING_NODES_HINT: &str = "Loading the cluster's nodes…";
 
+/// Starts the hint for a view picked while the cluster can't be reached;
+/// the error follows. The view still opens once the nodes are known
+pub const UNREACHABLE_HINT_PREFIX: &str = "Can't reach the cluster, retrying: ";
+
+/// A hint for a view waiting on the nodes, which the app replaces with the
+/// view once they're known
+pub fn is_waiting_hint(hint: &str) -> bool {
+    hint == LOADING_NODES_HINT || hint.starts_with(UNREACHABLE_HINT_PREFIX)
+}
+
 /// How often a running cluster refresh hands what it has so far to the
 /// dashboard
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
