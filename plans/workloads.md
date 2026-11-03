@@ -217,10 +217,21 @@ Each step is usable on its own; 1–3 already answer "where".
     Deployment), check it and its node appear; fix it, check the row
     disappears and the summary is healthy again. Done only on a test
     namespace, with the user's go-ahead; talos9s itself never changes it.
+    (Done on bc, 2026-11-03: `talos9s-test/broken` with a bad tag showed
+    `0/2`, NODES `bc2, bc3`, both pods `ImagePullBackOff` with their event;
+    after fixing the image the rows went on the next refresh and the
+    summary read healthy.)
   - **Degradation:** a kubeconfig without permission to list StatefulSets;
     an unreachable API (the view shows the error, nothing hangs).
+    (Unreachable API done, 2026-11-03: the view said "Loading the cluster's
+    nodes…" for good; fixed, it now shows the connection error and opens
+    once the cluster answers. The StatefulSets permission check is not done.)
   - **Stale events:** a pod that failed and recovered shows no event and no
     issue.
+    (Done in the bad-image test: the recovered Deployment's new pods show
+    no event. The same pod recovering hasn't been seen live.)
+- Live, finished pods (2026-11-03, bc and kprod): Job pods read `0/1`
+  `Completed`, dimmed, last in the READY sort, never a problem.
 
 ## Later
 
@@ -239,5 +250,5 @@ Each step is usable on its own; 1–3 already answer "where".
 
 ## Still open
 
-- The live failure test (a bad image tag on a test Deployment) hasn't been
-  done: bc has no broken workloads.
+- The degradation test with a kubeconfig that can't list StatefulSets
+  (needs a restricted kubeconfig).
