@@ -8,6 +8,7 @@ pub mod app;
 pub mod audit;
 pub mod clipboard;
 pub mod components;
+pub mod help;
 pub mod kube_list;
 pub mod linstor;
 pub mod linstor_volumes;

@@ -163,7 +163,6 @@ impl ClusterComponent {
                     | NodeListItem::ControlPlaneHeader(_)
                     | NodeListItem::WorkersHeader(_)
             );
-            let node_selected = self.current_node_name().is_some();
             let auto_refresh_status = if self.auto_refresh { "ON" } else { "OFF" };
             let auto_refresh_color = if self.auto_refresh {
                 Color::Green
@@ -207,12 +206,7 @@ impl ClusterComponent {
                     if header_selected && !dashboard {
                         spans.extend([sep(), key("<Space>"), label(" fold")]);
                     }
-                    if node_selected {
-                        spans.extend([sep(), key("<o>"), label(" ops")]);
-                    }
-                    if !self.clusters.is_empty() {
-                        spans.extend([sep(), key("<O>"), label(" rolling")]);
-                    }
+                    spans.extend([sep(), key("<?>"), label(" help")]);
                     // q returns to the dashboard first, and quits from there
                     if dashboard {
                         spans.extend([sep(), key("<q>"), label(" quit")]);
@@ -345,6 +339,8 @@ impl ClusterComponent {
         let key = |k: &'static str| Span::styled(k, crate::ui_ext::KEY);
         let label = |l: &'static str| Span::styled(l, Style::default().dim());
         let global = Line::from(vec![
+            key("<?>"),
+            label(" help  "),
             key("<Tab>"),
             label(" next window  "),
             key("<Z>"),

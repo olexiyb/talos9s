@@ -44,6 +44,7 @@ below.
 | `w` | wrap long lines (logs); one saved setting for every logs pane |
 | `V` | visual (line) selection |
 | `Space` | toggle the selected entry or fold a group |
+| `?` | the help overlay (`help.rs`), unless the view `captures_text()`; it lists the view's `key_hints()`, so a key missing there is missing in help too |
 
 Don't use `c` for copy: it's packet capture in the network views.
 

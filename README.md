@@ -246,6 +246,9 @@ mouse do the same):
 
 Everywhere:
 
+- `?` lists every key that works now: the view's own (as on the bottom
+  line), the view letters, the tree's and the shared ones. `j`/`k` scroll
+  it, `Esc`, `q` or `?` close it.
 - `j`/`k` or arrows move the selection and the view follows; `g`/`G` or
   `Home`/`End` jump to top or bottom, `PageUp`/`PageDown` move a page.
 - `→`, `Enter` or a click puts the keyboard in the view; `←`, `Esc` or `q`

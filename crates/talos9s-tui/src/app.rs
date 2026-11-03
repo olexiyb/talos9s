@@ -75,6 +75,10 @@ pub struct App {
     view_has_focus: bool,
     /// `q` on the dashboard asked "Quit talos9s?"; the next key answers
     confirm_quit: bool,
+    /// The help overlay (`?`) is open, scrolled this far
+    help: Option<u16>,
+    /// The largest useful help scroll, from the last draw
+    help_max: u16,
     /// Nodes pane width chosen with `[` `]` `Z`; `None` fits it to the screen
     pane_width: Option<PaneWidth>,
     /// Width to return to when zoom is turned off
@@ -170,6 +174,8 @@ impl App {
             pane: NavMenuItem::Dashboard,
             view_has_focus: false,
             confirm_quit: false,
+            help: None,
+            help_max: 0,
             pane_width: None,
             width_before_zoom: None,
             applied_target: String::new(),
@@ -827,6 +833,10 @@ impl App {
                     return;
                 }
                 self.draw_workspace(frame, area);
+                if let Some(scroll) = self.help {
+                    let lines = self.help_lines();
+                    self.help_max = crate::help::draw(frame, area, lines, scroll);
+                }
             })?;
 
             // Handle events with timeout
@@ -1006,6 +1016,15 @@ impl App {
             let yes = matches!(key.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter);
             return Ok(yes.then_some(Action::Quit));
         }
+        if let Some(scroll) = self.help {
+            self.help_key(key, scroll);
+            return Ok(None);
+        }
+        // `?` is help wherever the view isn't taking text
+        if key.code == KeyCode::Char('?') && !self.view_captures_text() {
+            self.help = Some(0);
+            return Ok(None);
+        }
         if !self.view_captures_text() && self.layout_key(key) {
             return Ok(None);
         }
@@ -1032,6 +1051,28 @@ impl App {
         // q in a view means back, like Esc: some terminals (IDEA's) never
         // deliver Esc. q in the tree quits.
         self.dispatch_view_key(key)
+    }
+
+    /// A key while help is open: scroll it, or close it
+    fn help_key(&mut self, key: KeyEvent, scroll: u16) {
+        self.help = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | '?') => None,
+            KeyCode::Down | KeyCode::Char('j') => Some((scroll + 1).min(self.help_max)),
+            KeyCode::Up | KeyCode::Char('k') => Some(scroll.saturating_sub(1)),
+            KeyCode::PageDown | KeyCode::Char(' ') => Some((scroll + 10).min(self.help_max)),
+            KeyCode::PageUp => Some(scroll.saturating_sub(10)),
+            KeyCode::Char('g') | KeyCode::Home => Some(0),
+            KeyCode::Char('G') | KeyCode::End => Some(self.help_max),
+            _ => Some(scroll),
+        };
+    }
+
+    /// The help overlay's lines: the shown view's keys first
+    fn help_lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        let view = self
+            .view_key_hints()
+            .map(|hints| (self.pane_title.as_str(), crate::help::hint_pairs(&hints)));
+        crate::help::help_lines(view)
     }
 
     /// The view's component, unless the dashboard is shown

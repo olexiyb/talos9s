@@ -222,7 +222,7 @@ impl NavMenuItem {
         }
     }
 
-    fn hotkey(&self) -> &'static str {
+    pub(crate) fn hotkey(&self) -> &'static str {
         match self {
             NavMenuItem::Dashboard => "D",
             NavMenuItem::Logs => "L",
