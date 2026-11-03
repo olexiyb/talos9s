@@ -116,6 +116,209 @@ pub struct OpNode {
     pub is_controlplane: bool,
 }
 
+/// Whether a node answers the Talos API
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TalosState {
+    /// Seconds since it booted
+    Up(u64),
+    Offline,
+}
+
+/// The node as Kubernetes has it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum K8sNode {
+    /// Kubernetes answered, without this node
+    Missing,
+    Present {
+        /// The Ready condition; `None` when not reported
+        ready: Option<bool>,
+        cordoned: bool,
+    },
+}
+
+/// What the Operations view knows about a node now; `None` is unknown (not
+/// read yet, or the source failed), which never blocks an operation
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NodeFacts {
+    pub talos: Option<TalosState>,
+    pub k8s: Option<K8sNode>,
+    /// Pods a drain would evict (not DaemonSet or mirror pods, not finished)
+    pub pods: Option<usize>,
+}
+
+/// Why `kind` can't run on a node with `facts`, or `None` when it can.
+/// Cordon and drain go through the Kubernetes API, so they work on a node
+/// that is down (the usual fix for a dead node); reboot and shutdown need
+/// the node's Talos API.
+pub fn blocked(kind: OpKind, facts: &NodeFacts) -> Option<&'static str> {
+    let missing = matches!(facts.k8s, Some(K8sNode::Missing));
+    let cordoned = match facts.k8s {
+        Some(K8sNode::Present { cordoned, .. }) => Some(cordoned),
+        _ => None,
+    };
+    match kind {
+        OpKind::Cordon | OpKind::Uncordon | OpKind::Drain if missing => {
+            Some("not a Kubernetes node")
+        }
+        OpKind::Cordon if cordoned == Some(true) => Some("already cordoned"),
+        OpKind::Uncordon if cordoned == Some(false) => Some("not cordoned"),
+        OpKind::Reboot | OpKind::Shutdown if facts.talos == Some(TalosState::Offline) => {
+            Some("offline: needs the Talos API")
+        }
+        _ => None,
+    }
+}
+
+/// The facts of `nodes`, and why Kubernetes couldn't be read
+#[derive(Debug, Default)]
+pub struct NodeFactsResult {
+    pub facts: HashMap<String, NodeFacts>,
+    pub k8s_error: Option<String>,
+}
+
+/// How long a node may take to answer the Talos probe
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Read every node's facts: a Talos probe per node (in parallel, bounded),
+/// one node list and one pod list from Kubernetes
+pub async fn fetch_node_facts(
+    talos: TalosClient,
+    cp_ip: Option<String>,
+    nodes: Vec<OpNode>,
+) -> NodeFactsResult {
+    let probes = nodes.iter().map(|n| {
+        let client = talos.with_node(&n.address);
+        async move {
+            match tokio::time::timeout(PROBE_TIMEOUT, client.system_stat()).await {
+                Ok(Ok(stats)) => {
+                    let now = Utc::now().timestamp().max(0).unsigned_abs();
+                    let boot = stats.first().map_or(now, |s| s.boot_time);
+                    TalosState::Up(now.saturating_sub(boot))
+                }
+                _ => TalosState::Offline,
+            }
+        }
+    });
+    let talos_states = futures::future::join_all(probes).await;
+    let mut result = NodeFactsResult::default();
+    for (n, state) in nodes.iter().zip(talos_states) {
+        result.facts.insert(
+            n.hostname.clone(),
+            NodeFacts {
+                talos: Some(state),
+                ..NodeFacts::default()
+            },
+        );
+    }
+    let k8s = match tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        crate::components::diagnostics::k8s::connect(&talos, cp_ip.as_deref()),
+    )
+    .await
+    {
+        Ok(Ok((k8s, _))) => k8s,
+        Ok(Err(e)) => {
+            result.k8s_error = Some(e);
+            return result;
+        }
+        Err(_) => {
+            result.k8s_error = Some("timed out connecting to Kubernetes".to_string());
+            return result;
+        }
+    };
+    use k8s_openapi::api::core::v1::{Node, Pod};
+    use kube::api::{Api, ListParams};
+    let listed = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        Api::<Node>::all(k8s.clone()).list(&ListParams::default()),
+    )
+    .await;
+    match listed {
+        Ok(Ok(list)) => {
+            for n in &nodes {
+                let node = list
+                    .items
+                    .iter()
+                    .find(|k| k.metadata.name.as_deref() == Some(n.hostname.as_str()));
+                if let Some(f) = result.facts.get_mut(&n.hostname) {
+                    f.k8s = Some(node.map_or(K8sNode::Missing, k8s_node));
+                }
+            }
+        }
+        Ok(Err(e)) => result.k8s_error = Some(format!("listing nodes: {e}")),
+        Err(_) => result.k8s_error = Some("listing nodes timed out".to_string()),
+    }
+    if let Ok(Ok(pods)) = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        Api::<Pod>::all(k8s).list(&ListParams::default()),
+    )
+    .await
+    {
+        for f in result.facts.values_mut() {
+            f.pods = Some(0);
+        }
+        for pod in pods.items.iter().filter(|p| counts_for_drain(p)) {
+            let node = pod.spec.as_ref().and_then(|s| s.node_name.as_deref());
+            if let Some(f) = node.and_then(|n| result.facts.get_mut(n))
+                && let Some(count) = &mut f.pods
+            {
+                *count += 1;
+            }
+        }
+    }
+    result
+}
+
+fn k8s_node(node: &k8s_openapi::api::core::v1::Node) -> K8sNode {
+    let ready = node
+        .status
+        .as_ref()
+        .and_then(|s| s.conditions.as_ref())
+        .and_then(|c| c.iter().find(|c| c.type_ == "Ready"))
+        .and_then(|c| match c.status.as_str() {
+            "True" => Some(true),
+            "False" => Some(false),
+            _ => None,
+        });
+    let cordoned = node
+        .spec
+        .as_ref()
+        .and_then(|s| s.unschedulable)
+        .unwrap_or(false);
+    K8sNode::Present { ready, cordoned }
+}
+
+/// A pod a drain would evict: not a mirror or DaemonSet pod, not finished
+fn counts_for_drain(pod: &k8s_openapi::api::core::v1::Pod) -> bool {
+    let mirror = pod
+        .metadata
+        .annotations
+        .as_ref()
+        .is_some_and(|a| a.contains_key("kubernetes.io/config.mirror"));
+    let daemonset = pod
+        .metadata
+        .owner_references
+        .as_ref()
+        .is_some_and(|refs| refs.iter().any(|r| r.kind == "DaemonSet"));
+    let finished = pod
+        .status
+        .as_ref()
+        .and_then(|s| s.phase.as_deref())
+        .is_some_and(|p| p == "Succeeded" || p == "Failed");
+    !mirror && !daemonset && !finished
+}
+
+/// Whether the node is cordoned now; `None` when it can't be read
+async fn is_cordoned(k8s: &Client, hostname: &str) -> Option<bool> {
+    use k8s_openapi::api::core::v1::Node;
+    let api: kube::api::Api<Node> = kube::api::Api::all(k8s.clone());
+    let node = tokio::time::timeout(REQUEST_TIMEOUT, api.get(hostname))
+        .await
+        .ok()?
+        .ok()?;
+    Some(node.spec.and_then(|s| s.unschedulable).unwrap_or(false))
+}
+
 /// An operation to start
 #[derive(Debug, Clone)]
 pub struct OpRequest {
@@ -132,8 +335,41 @@ pub struct OpRequest {
 
 /// The commands a user would type for `kind` on `node`, as recorded and
 /// shown in the dialog
-pub fn commands_for(kind: OpKind, node: &OpNode, options: &DrainOptions) -> Vec<String> {
+pub fn commands_for(
+    context: &str,
+    kind: OpKind,
+    node: &OpNode,
+    options: &DrainOptions,
+) -> Vec<String> {
     let h = &node.hostname;
+    let drain = drain_command(h, options);
+    let commands = match kind {
+        OpKind::Cordon => vec![format!("kubectl cordon {h}")],
+        OpKind::Uncordon => vec![format!("kubectl uncordon {h}")],
+        OpKind::Drain => vec![drain],
+        OpKind::Reboot => {
+            let mut c = vec![drain, format!("talosctl -n {} reboot", node.address)];
+            if options.uncordon_after_reboot {
+                c.push(format!("kubectl uncordon {h}"));
+            }
+            c
+        }
+        OpKind::Shutdown => vec![drain, format!("talosctl -n {} shutdown", node.address)],
+    };
+    commands.iter().map(|c| with_context(context, c)).collect()
+}
+
+/// `kubectl cordon bc1` as `kubectl --context bc cordon bc1`: the same
+/// command typed in another cluster's context would change the wrong node
+fn with_context(context: &str, command: &str) -> String {
+    match command.split_once(' ') {
+        Some((tool, rest)) if !context.is_empty() => format!("{tool} --context {context} {rest}"),
+        _ => command.to_string(),
+    }
+}
+
+/// `kubectl drain` with the flags `options` stand for
+fn drain_command(h: &str, options: &DrainOptions) -> String {
     let mut drain = format!("kubectl drain {h}");
     if options.ignore_daemonsets {
         drain.push_str(" --ignore-daemonsets");
@@ -147,19 +383,13 @@ pub fn commands_for(kind: OpKind, node: &OpNode, options: &DrainOptions) -> Vec<
     if let Some(grace) = options.grace_period_secs {
         let _ = write!(drain, " --grace-period={grace}");
     }
-    match kind {
-        OpKind::Cordon => vec![format!("kubectl cordon {h}")],
-        OpKind::Uncordon => vec![format!("kubectl uncordon {h}")],
-        OpKind::Drain => vec![drain],
-        OpKind::Reboot => {
-            let mut c = vec![drain, format!("talosctl -n {} reboot", node.address)];
-            if options.uncordon_after_reboot {
-                c.push(format!("kubectl uncordon {h}"));
-            }
-            c
-        }
-        OpKind::Shutdown => vec![drain, format!("talosctl -n {} shutdown", node.address)],
-    }
+    drain
+}
+
+/// A step's shell equivalent in the run's output (`$ kubectl cordon bc1`):
+/// talos9s calls the APIs itself, the line says what that amounts to
+fn shell(rec: &Recorder, command: &str) {
+    rec.line(&format!("$ {}", with_context(&rec.context, command)));
 }
 
 /// How a run is going, shared between its task and the app
@@ -323,6 +553,8 @@ pub fn run_output(text: &str) -> String {
 /// one is skipped (wait loops report the same thing every few seconds).
 #[derive(Clone)]
 struct Recorder {
+    /// The cluster's talosconfig context, named in the commands written
+    context: String,
     file: Arc<Mutex<Option<std::fs::File>>>,
     progress: Arc<Mutex<Progress>>,
 }
@@ -407,7 +639,7 @@ pub fn start(
         commands: request
             .nodes
             .iter()
-            .flat_map(|n| commands_for(request.kind, n, &request.options))
+            .flat_map(|n| commands_for(&request.context, request.kind, n, &request.options))
             .collect(),
         started: Utc::now(),
     };
@@ -422,6 +654,7 @@ pub fn start(
     }));
     let cancel = Arc::new(AtomicBool::new(false));
     let recorder = Recorder {
+        context: request.context.clone(),
         file: Arc::new(Mutex::new(Some(file))),
         progress: Arc::clone(&progress),
     };
@@ -610,13 +843,13 @@ async fn run_node(
     let options = &request.options;
     match request.kind {
         OpKind::Cordon => {
-            rec.line(&format!("cordon {h}"));
+            shell(rec, &format!("kubectl cordon {h}"));
             return set_schedulable(k8s, h, false)
                 .await
                 .map(|()| Step::Done("cordoned".into()));
         }
         OpKind::Uncordon => {
-            rec.line(&format!("uncordon {h}"));
+            shell(rec, &format!("kubectl uncordon {h}"));
             return set_schedulable(k8s, h, true)
                 .await
                 .map(|()| Step::Done("uncordoned".into()));
@@ -630,9 +863,16 @@ async fn run_node(
         wait_for_etcd_safe(talos, node, rec).await?;
     }
 
-    rec.line(&format!("cordon {h}"));
-    set_schedulable(k8s, h, false).await?;
-    rec.line(&format!("drain {h}"));
+    // A node cordoned before the run stays cordoned after it: a failure or
+    // the reboot's end uncordons only what this run cordoned
+    let was_cordoned = is_cordoned(k8s, h).await == Some(true);
+    if was_cordoned {
+        rec.line(&format!("{h} is cordoned already; it stays cordoned"));
+    } else {
+        shell(rec, &format!("kubectl cordon {h}"));
+        set_schedulable(k8s, h, false).await?;
+    }
+    shell(rec, &drain_command(h, options));
     let r = rec.clone();
     let callback: crate::components::diagnostics::k8s::DrainProgressCallback =
         Box::new(move |msg: &str| r.line(msg));
@@ -644,9 +884,13 @@ async fn run_node(
                 .error
                 .clone()
                 .unwrap_or_else(|| format!("could not evict {}", d.failed_pods.join(", ")));
-            return Err(undo_cordon(k8s, h, rec, format!("drain failed: {why}")).await);
+            return Err(
+                undo_cordon(k8s, h, rec, was_cordoned, format!("drain failed: {why}")).await,
+            );
         }
-        Err(e) => return Err(undo_cordon(k8s, h, rec, format!("drain failed: {e}")).await),
+        Err(e) => {
+            return Err(undo_cordon(k8s, h, rec, was_cordoned, format!("drain failed: {e}")).await);
+        }
     };
     let mut summary = format!("{} pod(s) evicted", drained.pods_evicted);
     if !drained.force_deleted_pods.is_empty() {
@@ -663,7 +907,14 @@ async fn run_node(
 
     // The last moment to stop before the node goes down
     if cancel.load(Ordering::Relaxed) {
-        let msg = undo_cordon(k8s, h, rec, "cancelled before going down".to_string()).await;
+        let msg = undo_cordon(
+            k8s,
+            h,
+            rec,
+            was_cordoned,
+            "cancelled before going down".to_string(),
+        )
+        .await;
         return Ok(Step::Cancelled(msg));
     }
 
@@ -675,11 +926,14 @@ async fn run_node(
         get_node_boot_id(k8s, h).await
     };
     let client = talos.with_node(&node.address);
-    rec.line(&format!(
-        "talosctl -n {} {}",
-        node.address,
-        if shutdown { "shutdown" } else { "reboot" }
-    ));
+    shell(
+        rec,
+        &format!(
+            "talosctl -n {} {}",
+            node.address,
+            if shutdown { "shutdown" } else { "reboot" }
+        ),
+    );
     let sent = if shutdown {
         tokio::time::timeout(REQUEST_TIMEOUT, client.shutdown(false)).await
     } else {
@@ -697,7 +951,7 @@ async fn run_node(
     };
     if let Some(why) = failed {
         let what = if shutdown { "shutdown" } else { "reboot" };
-        return Err(undo_cordon(k8s, h, rec, format!("{what} failed: {why}")).await);
+        return Err(undo_cordon(k8s, h, rec, was_cordoned, format!("{what} failed: {why}")).await);
     }
     // Talos uncordons on boot only a node it cordoned itself
     if shutdown {
@@ -708,7 +962,13 @@ async fn run_node(
     if !options.wait_for_node_ready {
         return Ok(Step::Done("reboot sent (not waiting for Ready)".into()));
     }
-    rec.line(&format!("waiting for {h} to come back Ready"));
+    shell(
+        rec,
+        &format!(
+            "kubectl wait --for=condition=Ready node/{h} --timeout={}s",
+            options.post_reboot_timeout_secs
+        ),
+    );
     let r = rec.clone();
     let callback: crate::components::diagnostics::k8s::NodeReadyProgressCallback =
         Box::new(move |msg: &str| r.line(msg));
@@ -733,7 +993,12 @@ async fn run_node(
     if !options.uncordon_after_reboot {
         return Ok(Step::Done(format!("rebooted in {took}s; stays cordoned")));
     }
-    rec.line(&format!("uncordon {h}"));
+    if was_cordoned {
+        return Ok(Step::Done(format!(
+            "rebooted in {took}s; stays cordoned, as before"
+        )));
+    }
+    shell(rec, &format!("kubectl uncordon {h}"));
     match set_schedulable(k8s, h, true).await {
         Ok(()) => Ok(Step::Done(format!("rebooted in {took}s, uncordoned"))),
         Err(e) => Err(format!("rebooted in {took}s, but uncordon failed: {e}")),
@@ -759,8 +1024,19 @@ async fn set_schedulable(k8s: &Client, hostname: &str, schedulable: bool) -> Res
 
 /// Uncordon after a failure; the failure's message, saying whether the
 /// node was uncordoned
-async fn undo_cordon(k8s: &Client, hostname: &str, rec: &Recorder, why: String) -> String {
-    rec.line(&format!("{why}; uncordon {hostname}"));
+async fn undo_cordon(
+    k8s: &Client,
+    hostname: &str,
+    rec: &Recorder,
+    was_cordoned: bool,
+    why: String,
+) -> String {
+    if was_cordoned {
+        rec.line(&format!("{why}; {hostname} stays cordoned, as before"));
+        return format!("{why} (stays cordoned, as before)");
+    }
+    rec.line(&why);
+    shell(rec, &format!("kubectl uncordon {hostname}"));
     match set_schedulable(k8s, hostname, true).await {
         Ok(()) => format!("{why} (uncordoned again)"),
         Err(e) => format!("{why}; uncordon failed too: {e}"),
@@ -775,6 +1051,7 @@ async fn wait_for_etcd_safe(
     node: &OpNode,
     rec: &Recorder,
 ) -> Result<(), String> {
+    shell(rec, &format!("talosctl -n {} etcd status", node.address));
     let start = std::time::Instant::now();
     loop {
         let safety = fetch_etcd_info(talos, &node.address)
@@ -896,6 +1173,44 @@ pub async fn fetch_safety(
 mod tests {
     use super::*;
 
+    /// Cordon only an uncordoned node, uncordon only a cordoned one;
+    /// reboot needs Talos, cordon and drain don't; unknown blocks nothing
+    #[test]
+    fn what_a_node_allows() {
+        let facts = |talos, k8s| NodeFacts {
+            talos,
+            k8s,
+            pods: None,
+        };
+        let cordoned = Some(K8sNode::Present {
+            ready: Some(true),
+            cordoned: true,
+        });
+        let open = Some(K8sNode::Present {
+            ready: Some(true),
+            cordoned: false,
+        });
+        let up = Some(TalosState::Up(60));
+        let down = Some(TalosState::Offline);
+        assert_eq!(
+            blocked(OpKind::Cordon, &facts(up, cordoned)),
+            Some("already cordoned")
+        );
+        assert_eq!(blocked(OpKind::Uncordon, &facts(up, cordoned)), None);
+        assert_eq!(
+            blocked(OpKind::Uncordon, &facts(up, open)),
+            Some("not cordoned")
+        );
+        assert_eq!(blocked(OpKind::Cordon, &facts(down, open)), None);
+        assert_eq!(blocked(OpKind::Drain, &facts(down, cordoned)), None);
+        assert!(blocked(OpKind::Reboot, &facts(down, open)).is_some());
+        assert!(blocked(OpKind::Shutdown, &facts(down, open)).is_some());
+        assert!(blocked(OpKind::Drain, &facts(up, Some(K8sNode::Missing))).is_some());
+        for kind in OpKind::ALL {
+            assert_eq!(blocked(kind, &NodeFacts::default()), None, "{kind:?}");
+        }
+    }
+
     fn node(h: &str, cp: bool) -> OpNode {
         OpNode {
             hostname: h.into(),
@@ -910,16 +1225,16 @@ mod tests {
         let n = node("bc2", true);
         let options = DrainOptions::default();
         assert_eq!(
-            commands_for(OpKind::Reboot, &n, &options),
+            commands_for("bc", OpKind::Reboot, &n, &options),
             [
-                "kubectl drain bc2 --ignore-daemonsets --delete-emptydir-data",
-                "talosctl -n 10.0.0.3 reboot",
-                "kubectl uncordon bc2",
+                "kubectl --context bc drain bc2 --ignore-daemonsets --delete-emptydir-data",
+                "talosctl --context bc -n 10.0.0.3 reboot",
+                "kubectl --context bc uncordon bc2",
             ]
         );
         assert_eq!(
-            commands_for(OpKind::Cordon, &n, &options),
-            ["kubectl cordon bc2"]
+            commands_for("bc", OpKind::Cordon, &n, &options),
+            ["kubectl --context bc cordon bc2"]
         );
         let options = DrainOptions {
             ignore_daemonsets: false,
@@ -928,10 +1243,10 @@ mod tests {
             ..DrainOptions::default()
         };
         assert_eq!(
-            commands_for(OpKind::Shutdown, &n, &options),
+            commands_for("bc", OpKind::Shutdown, &n, &options),
             [
-                "kubectl drain bc2 --grace-period=5",
-                "talosctl -n 10.0.0.3 shutdown"
+                "kubectl --context bc drain bc2 --grace-period=5",
+                "talosctl --context bc -n 10.0.0.3 shutdown"
             ]
         );
     }

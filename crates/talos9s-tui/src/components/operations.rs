@@ -1,8 +1,9 @@
 //! Operations view (`o`): the operations for the selected node, group or
 //! cluster, and every run so far (`plans/operations.md`).
 //!
-//! The top lists what can run on the target; Enter opens its dialog (the
-//! nodes, the commands, the safety checks), `y` starts it. Runs go on in the
+//! The top picks what to run: the operation (a drop list) and the nodes
+//! (check boxes; a single node is checked already). Enter opens the
+//! confirmation (the commands, the safety checks), `y` starts it. Runs go on in the
 //! background (`crate::operations`), one per context; the history below
 //! lists the run files, newest first, and Enter shows one's output in the
 //! log pane, following it while it runs.
@@ -12,7 +13,8 @@ use crate::components::Component;
 use crate::components::diagnostics::k8s::DrainOptions;
 use crate::components::pod_logs::LogPane;
 use crate::operations::{
-    ActiveRun, DELAY_BETWEEN_NODES, OpKind, OpNode, OpRequest, Runs, SafetyInfo, fetch_safety,
+    ActiveRun, DELAY_BETWEEN_NODES, K8sNode, NodeFacts, NodeFactsResult, OpKind, OpNode, OpRequest,
+    Runs, SafetyInfo, TalosState, fetch_node_facts, fetch_safety,
 };
 use crate::ui_ext::{KEY, KEY_NO, KEY_YES, Move, RowHits};
 use color_eyre::Result;
@@ -24,6 +26,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Gauge, Paragraph, Row, Table, TableState, Wrap},
 };
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -36,14 +39,18 @@ use tokio::task::JoinHandle;
 /// Read the history again this often while a run goes, else this often
 const RELOAD_RUNNING: Duration = Duration::from_secs(2);
 const RELOAD_IDLE: Duration = Duration::from_secs(15);
+/// How often the shown run's file is read while it runs
+const RUN_FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
+/// Read the nodes' state (Talos, Kubernetes, pods) again this often, and
+/// whenever a run in this cluster ends
+const FACTS_EVERY: Duration = Duration::from_secs(15);
 
 /// A dialog over the view
 enum Dialog {
-    /// Start `kind`: pick the nodes (a group), read the checks, `y` starts
+    /// Start `kind` on the checked nodes: read the checks, `y` starts
     Start {
         kind: OpKind,
-        picked: Vec<bool>,
-        cursor: usize,
+        nodes: Vec<OpNode>,
         safety: Option<SafetyInfo>,
         task: Option<JoinHandle<SafetyInfo>>,
     },
@@ -65,8 +72,23 @@ pub struct OperationsComponent {
     cp_ip: Option<String>,
     history: Vec<(PathBuf, Run)>,
     loaded: Option<Instant>,
-    /// Over the operations, then the history rows
+    /// Over the top rows (`TopRow`), then the history rows
     selected: usize,
+    /// The operation picked, an index into `ops()`
+    kind: usize,
+    /// The nodes checked; a single node is checked from the start
+    picked: Vec<bool>,
+    /// The operation drop list, open, with its cursor
+    dropdown: Option<usize>,
+    /// Where the drop list was drawn, for clicks
+    dropdown_area: Rect,
+    /// Each node's state now, by hostname
+    facts: HashMap<String, NodeFacts>,
+    facts_error: Option<String>,
+    facts_task: Option<JoinHandle<NodeFactsResult>>,
+    facts_at: Option<Instant>,
+    /// A run went in this cluster at the last tick: its end reloads facts
+    was_busy: bool,
     table: TableState,
     filter: String,
     filtering: bool,
@@ -75,6 +97,9 @@ pub struct OperationsComponent {
     dialog: Option<Dialog>,
     /// The run shown (Enter), and its output
     focus: Option<PathBuf>,
+    /// Whether the run shown was running at the last tick, for the read
+    /// after it ends
+    focus_was_running: bool,
     logs: LogPane,
     /// Why the last action didn't happen
     message: Option<String>,
@@ -90,6 +115,7 @@ impl OperationsComponent {
         group: bool,
         runs: Runs,
     ) -> Self {
+        let picked = vec![!group; nodes.len()];
         Self {
             context,
             target,
@@ -102,12 +128,22 @@ impl OperationsComponent {
             history: Vec::new(),
             loaded: None,
             selected: 0,
+            kind: 0,
+            picked,
+            dropdown: None,
+            dropdown_area: Rect::default(),
+            facts: HashMap::new(),
+            facts_error: None,
+            facts_task: None,
+            facts_at: None,
+            was_busy: false,
             table: TableState::default(),
             filter: String::new(),
             filtering: false,
             this_context: false,
             dialog: None,
             focus: None,
+            focus_was_running: false,
             logs: LogPane::default(),
             message: None,
             ops_area: Rect::default(),
@@ -171,12 +207,34 @@ impl OperationsComponent {
         })
     }
 
+    /// The operation picked
+    fn kind(&self) -> OpKind {
+        self.ops().get(self.kind).copied().unwrap_or(OpKind::Cordon)
+    }
+
+    /// Rows above the history: the operation, "all nodes" on a group, the
+    /// nodes
+    fn top_rows(&self) -> usize {
+        1 + usize::from(self.group) + self.nodes.len()
+    }
+
+    fn top_row(&self, row: usize) -> Option<TopRow> {
+        match (row, self.group) {
+            (0, _) => Some(TopRow::Operation),
+            (1, true) => Some(TopRow::All),
+            _ => {
+                let i = row - 1 - usize::from(self.group);
+                (i < self.nodes.len()).then_some(TopRow::Node(i))
+            }
+        }
+    }
+
     fn row_count(&self) -> usize {
-        self.ops().len() + self.history_rows().len()
+        self.top_rows() + self.history_rows().len()
     }
 
     fn selected_run(&self) -> Option<&(PathBuf, Run)> {
-        let i = self.selected.checked_sub(self.ops().len())?;
+        let i = self.selected.checked_sub(self.top_rows())?;
         let rows = self.history_rows();
         self.history.get(*rows.get(i)?)
     }
@@ -196,40 +254,218 @@ impl OperationsComponent {
         };
     }
 
-    /// Enter: an operation's dialog, or a run's output
+    /// Enter: the drop list on the operation, the confirmation on a node,
+    /// a run's output in the history
     fn enter(&mut self) {
         self.message = None;
-        let ops = self.ops();
-        if let Some(&kind) = ops.get(self.selected) {
-            self.open_start(kind);
-        } else if let Some((path, _)) = self.selected_run() {
-            let path = path.clone();
-            self.open_run(path);
+        match self.top_row(self.selected) {
+            Some(TopRow::Operation) => self.dropdown = Some(self.kind),
+            Some(_) => self.open_start(),
+            None => {
+                if let Some((path, _)) = self.selected_run() {
+                    let path = path.clone();
+                    self.open_run(path);
+                }
+            }
         }
     }
 
-    fn open_start(&mut self, kind: OpKind) {
+    /// Space: open the drop list, or check a node (all of them on "all")
+    fn toggle(&mut self) {
+        match self.top_row(self.selected) {
+            Some(TopRow::Operation) => self.dropdown = Some(self.kind),
+            // Every node the operation can run on, or none once they are
+            Some(TopRow::All) => {
+                let open: Vec<usize> = (0..self.nodes.len())
+                    .filter(|&i| self.blocked(i).is_none())
+                    .collect();
+                let all = !open
+                    .iter()
+                    .all(|&i| self.picked.get(i).copied().unwrap_or(false));
+                self.picked.fill(false);
+                for i in open {
+                    if let Some(p) = self.picked.get_mut(i) {
+                        *p = all;
+                    }
+                }
+            }
+            Some(TopRow::Node(i)) if self.blocked(i).is_some() => {
+                self.message = self.blocked(i).map(|why| {
+                    format!(
+                        "{} can't run on {}: {why}",
+                        self.kind().name(),
+                        self.nodes.get(i).map_or("", |n| n.hostname.as_str())
+                    )
+                });
+            }
+            // A single node is the target itself: always checked
+            Some(TopRow::Node(i)) if self.group => {
+                if let Some(p) = self.picked.get_mut(i) {
+                    *p = !*p;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Pick the `i`th operation and move to the nodes: checking them is
+    /// the next step
+    fn pick_operation(&mut self, i: usize) {
+        if i >= self.ops().len() {
+            return;
+        }
+        self.kind = i;
+        self.dropdown = None;
+        self.drop_blocked();
+        // The first row under the operation: "all nodes", or the node
+        self.selected = 1;
+    }
+
+    fn handle_dropdown_key(&mut self, key: KeyEvent, cursor: usize) {
+        let last = self.ops().len().saturating_sub(1);
+        if let KeyCode::Char(c @ '1'..='9') = key.code {
+            self.pick_operation(usize::from(c as u8 - b'1'));
+            return;
+        }
+        self.dropdown = match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.pick_operation(cursor);
+                None
+            }
+            KeyCode::Esc | KeyCode::Char('q') => None,
+            _ => match Move::from_key(&key) {
+                Some(Move::Prev) => Some(cursor.saturating_sub(1)),
+                Some(Move::Next) => Some((cursor + 1).min(last)),
+                Some(Move::First) => Some(0),
+                Some(Move::Last) => Some(last),
+                _ => Some(cursor),
+            },
+        };
+    }
+
+    /// Why the picked operation can't run on the `i`th node
+    fn blocked(&self, i: usize) -> Option<&'static str> {
+        let node = self.nodes.get(i)?;
+        let facts = self.facts.get(&node.hostname)?;
+        crate::operations::blocked(self.kind(), facts)
+    }
+
+    /// Uncheck nodes the operation can't run on (after the operation or the
+    /// facts change); a single node keeps its check, it is the target
+    fn drop_blocked(&mut self) {
+        if !self.group {
+            return;
+        }
+        for i in 0..self.picked.len() {
+            if self.blocked(i).is_some()
+                && let Some(p) = self.picked.get_mut(i)
+            {
+                *p = false;
+            }
+        }
+    }
+
+    fn checked_nodes(&self) -> Vec<OpNode> {
+        self.nodes
+            .iter()
+            .zip(&self.picked)
+            .enumerate()
+            .filter(|(i, (_, p))| **p && self.blocked(*i).is_none())
+            .map(|(_, (n, _))| n.clone())
+            .collect()
+    }
+
+    /// Start reading the nodes' facts when due
+    fn load_facts(&mut self) {
+        let busy = crate::operations::busy(&self.runs, &self.context).is_some();
+        let run_ended = self.was_busy && !busy;
+        self.was_busy = busy;
+        if self.facts_task.is_some() {
+            return;
+        }
+        let due = run_ended || self.facts_at.is_none_or(|t| t.elapsed() >= FACTS_EVERY);
+        if let (true, Some(talos)) = (due, self.talos.clone()) {
+            self.facts_at = Some(Instant::now());
+            self.facts_task = Some(tokio::spawn(fetch_node_facts(
+                talos,
+                self.cp_ip.clone(),
+                self.nodes.clone(),
+            )));
+        }
+    }
+
+    fn poll_facts(&mut self) {
+        if self
+            .facts_task
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+            && let Some(Some(Ok(result))) = self.facts_task.take().map(crate::task::poll_finished)
+        {
+            self.facts = result.facts;
+            self.facts_error = result.k8s_error;
+            self.drop_blocked();
+        }
+    }
+
+    /// The newest run that included `hostname`: operation, status, when
+    fn last_run(&self, hostname: &str) -> Option<(String, RunStatus, String)> {
+        let (path, run) = self
+            .history
+            .iter()
+            .filter(|(_, r)| r.header.context == self.context)
+            .filter(|(_, r)| r.header.nodes.iter().any(|n| n == hostname))
+            .max_by_key(|(_, r)| r.header.started)?;
+        let when = run
+            .header
+            .started
+            .with_timezone(&chrono::Local)
+            .format("%m-%d %H:%M")
+            .to_string();
+        Some((
+            run.header.operation.clone(),
+            self.status_of(path, run),
+            when,
+        ))
+    }
+
+    fn open_start(&mut self) {
         if let Some(why) = crate::operations::busy(&self.runs, &self.context) {
             self.message = Some(why);
             return;
         }
-        if self.nodes.is_empty() {
-            self.message = Some("No nodes to run on".to_string());
+        let nodes = self.checked_nodes();
+        if nodes.is_empty() {
+            self.message = Some(match (self.group, self.blocked(0)) {
+                (false, Some(why)) => format!("{} can't run here: {why}", self.kind().name()),
+                _ => "Check the nodes to run on first (Space)".to_string(),
+            });
             return;
         }
+        let kind = self.kind();
         let task = self.talos.clone().map(|talos| {
-            let nodes = self.nodes.clone();
+            let nodes = nodes.clone();
             tokio::spawn(fetch_safety(talos, self.cp_ip.clone(), kind, nodes))
         });
         self.dialog = Some(Dialog::Start {
             kind,
-            // A group starts with nothing picked: the user chooses the
-            // nodes. A single node is the target itself
-            picked: vec![!self.group; self.nodes.len()],
-            cursor: 0,
+            nodes,
             safety: None,
             task,
         });
+    }
+
+    /// What the run is on: the group when all its nodes are checked, else
+    /// the nodes (a run on bc1 from the cluster is "bc1", not "bc")
+    fn run_target(&self, nodes: &[OpNode]) -> String {
+        if nodes.len() == self.nodes.len() {
+            self.target.clone()
+        } else {
+            nodes
+                .iter()
+                .map(|n| n.hostname.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
     }
 
     fn open_run(&mut self, path: PathBuf) {
@@ -258,7 +494,7 @@ impl OperationsComponent {
     }
 
     /// `y` in the dialog: start the run and show it
-    fn start(&mut self, kind: OpKind, picked: &[bool]) {
+    fn start(&mut self, kind: OpKind, nodes: Vec<OpNode>) {
         let Some(talos) = self.talos.clone() else {
             self.message = Some("Not connected to the cluster".to_string());
             return;
@@ -267,20 +503,9 @@ impl OperationsComponent {
             self.message = Some("No home directory for the run files".to_string());
             return;
         };
-        let nodes: Vec<OpNode> = self
-            .nodes
-            .iter()
-            .zip(picked)
-            .filter(|(_, p)| **p)
-            .map(|(n, _)| n.clone())
-            .collect();
-        if nodes.is_empty() {
-            self.message = Some("No node picked".to_string());
-            return;
-        }
         let request = OpRequest {
             context: self.context.clone(),
-            target: self.target.clone(),
+            target: self.run_target(&nodes),
             kind,
             nodes,
             options: DrainOptions::default(),
@@ -337,44 +562,20 @@ impl OperationsComponent {
         match dialog {
             Dialog::Start {
                 kind,
-                mut picked,
-                mut cursor,
+                nodes,
                 safety,
                 task,
             } => {
-                if yes && picked.contains(&true) {
-                    self.start(kind, &picked);
-                    return;
+                if yes {
+                    self.start(kind, nodes);
+                } else if !no {
+                    self.dialog = Some(Dialog::Start {
+                        kind,
+                        nodes,
+                        safety,
+                        task,
+                    });
                 }
-                if no {
-                    return;
-                }
-                match key.code {
-                    KeyCode::Char(' ') if self.group => {
-                        if let Some(p) = picked.get_mut(cursor) {
-                            *p = !*p;
-                        }
-                    }
-                    // All, or none once all are picked
-                    KeyCode::Char('a') if self.group => {
-                        let all = !picked.iter().all(|p| *p);
-                        picked.fill(all);
-                    }
-                    _ => match Move::from_key(&key) {
-                        Some(Move::Prev) => cursor = cursor.saturating_sub(1),
-                        Some(Move::Next) => {
-                            cursor = (cursor + 1).min(picked.len().saturating_sub(1));
-                        }
-                        _ => {}
-                    },
-                }
-                self.dialog = Some(Dialog::Start {
-                    kind,
-                    picked,
-                    cursor,
-                    safety,
-                    task,
-                });
             }
             Dialog::Delete(paths) => {
                 if yes {
@@ -451,6 +652,14 @@ impl OperationsComponent {
         }
     }
 
+    /// "running Reboot" while a run goes in this view's cluster, for the
+    /// window title
+    pub fn running_here(&self) -> Option<String> {
+        let runs = self.runs.lock().ok()?;
+        let run = runs.get(&self.context).filter(|r| !r.finished())?;
+        Some(format!("running {}", run.header.operation))
+    }
+
     pub fn viewer_failed(&mut self, problem: String) {
         self.logs.set_viewer_problem(problem);
     }
@@ -470,23 +679,23 @@ impl OperationsComponent {
     fn key_hints_line(&self) -> Line<'static> {
         let key = |k: &'static str| Span::styled(k, KEY);
         let label = |l: &'static str| Span::raw(l);
-        if let Some(dialog) = &self.dialog {
-            let mut spans = vec![
+        if self.dialog.is_some() {
+            return Line::from(vec![
                 Span::styled("<y>", KEY_YES),
                 label(" yes  "),
                 Span::styled("<n/Esc>", KEY_NO),
                 label(" no"),
-            ];
-            if matches!(dialog, Dialog::Start { .. }) && self.group {
-                spans.extend([
-                    label("  "),
-                    key("<j/k>"),
-                    label(" node  "),
-                    key("<Space>"),
-                    label(" pick"),
-                ]);
-            }
-            return Line::from(spans);
+            ]);
+        }
+        if self.dropdown.is_some() {
+            return Line::from(vec![
+                key("<j/k>"),
+                label(" move  "),
+                key("<Enter/1-5>"),
+                label(" pick  "),
+                key("<Esc>"),
+                label(" close"),
+            ]);
         }
         if self.filtering {
             return Line::from(vec![
@@ -527,9 +736,40 @@ impl OperationsComponent {
             }
             return Line::from(spans);
         }
+        let busy = crate::operations::busy(&self.runs, &self.context).is_some();
+        let cancel = [label("  "), key("<x>"), label(" cancel")];
+        match self.top_row(self.selected) {
+            Some(TopRow::Operation) => {
+                let mut spans = vec![
+                    key("<Enter/o>"),
+                    label(" choose the operation  "),
+                    key("<1-5>"),
+                    label(" pick one"),
+                ];
+                if busy {
+                    spans.extend(cancel);
+                }
+                return Line::from(spans);
+            }
+            Some(_) => {
+                let mut spans = vec![
+                    key("<Space>"),
+                    label(" check  "),
+                    key("<Enter>"),
+                    label(" start (asks first)  "),
+                    key("<o/1-5>"),
+                    label(" operation"),
+                ];
+                if busy {
+                    spans.extend(cancel);
+                }
+                return Line::from(spans);
+            }
+            None => {}
+        }
         let mut spans = vec![
             key("<Enter>"),
-            label(" run/open  "),
+            label(" open  "),
             key("</>"),
             label(" filter  "),
             key("<A>"),
@@ -543,57 +783,143 @@ impl OperationsComponent {
             key("<D>"),
             label(" delete"),
         ];
-        if crate::operations::busy(&self.runs, &self.context).is_some() {
-            spans.extend([label("  "), key("<x>"), label(" cancel")]);
+        if busy {
+            spans.extend(cancel);
         }
         Line::from(spans)
     }
 
     fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
-        let ops = self.ops();
         let busy = crate::operations::busy(&self.runs, &self.context);
         let [ops_area, msg_area, history_area] = Layout::vertical([
-            Constraint::Length(talos9s_core::convert::to_u16(ops.len() + 1)),
+            Constraint::Length(talos9s_core::convert::to_u16(self.top_rows() + 2)),
             Constraint::Length(1),
             Constraint::Min(3),
         ])
         .areas(area);
 
+        let checked = self.picked.iter().filter(|p| **p).count();
         let mut lines = vec![Line::from(vec![
             Span::styled(format!(" Run on {}", self.target), Style::default().bold()),
             Span::styled(
                 format!(
-                    " · {} · context {}",
+                    " · {} of {} checked · context {}",
+                    checked,
                     talos9s_core::pluralize(self.nodes.len(), "node", "nodes"),
                     self.context
                 ),
                 Style::default().dim(),
             ),
         ])];
-        for (i, kind) in ops.iter().enumerate() {
-            let selected = i == self.selected;
-            let style = if selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else if busy.is_some() {
-                Style::default().dim()
+        let pointer = |row: usize| {
+            if row == self.selected {
+                Span::styled(crate::ui_ext::PICK_POINTER, crate::ui_ext::PICK_CURSOR)
             } else {
-                Style::default()
-            };
+                Span::raw(" ")
+            }
+        };
+        let here = |row: usize, style: Style| {
+            if row == self.selected {
+                crate::ui_ext::PICK_CURSOR
+            } else {
+                style
+            }
+        };
+        let kind = self.kind();
+        lines.push(Line::from(vec![
+            pointer(0),
+            Span::styled("Operation  ", Style::default().dim()),
+            Span::styled(
+                format!("[ {:<9}▾ ]", kind.name()),
+                here(0, Style::default().bold()),
+            ),
+            Span::styled(
+                format!("  {}", kind.about(self.group)),
+                Style::default().dim(),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "     {:<12} {:<13} {:<10} {:<9} {:<10} {:>4}  LAST RUN",
+                "NODE", "ROLE", "TALOS", "K8S", "SCHEDULE", "PODS"
+            ),
+            Style::default().bold(),
+        )));
+        if self.group {
+            let open: Vec<usize> = (0..self.nodes.len())
+                .filter(|&i| self.blocked(i).is_none())
+                .collect();
+            let all = !open.is_empty()
+                && open
+                    .iter()
+                    .all(|&i| self.picked.get(i).copied().unwrap_or(false));
             lines.push(Line::from(vec![
-                Span::raw(if selected { " ▸ " } else { "   " }),
-                Span::styled(format!("{:<10}", kind.name()), style),
-                Span::styled(
-                    format!(" {}", kind.about(self.group)),
-                    Style::default().dim(),
-                ),
+                pointer(1),
+                crate::ui_ext::check_box(all),
+                Span::styled("all nodes", here(1, Style::default().dim())),
             ]));
+        }
+        let first = 1 + usize::from(self.group);
+        for (i, (node, on)) in self.nodes.iter().zip(&self.picked).enumerate() {
+            let row = first + i;
+            let style = if *on {
+                Style::default().bold()
+            } else {
+                crate::ui_ext::PICK_DIM
+            };
+            let role = if node.is_controlplane {
+                "control plane"
+            } else {
+                "worker"
+            };
+            let blocked = self.blocked(i);
+            let style = if blocked.is_some() {
+                crate::ui_ext::PICK_DIM
+            } else {
+                style
+            };
+            let check = if blocked.is_some() {
+                Span::styled("[-] ", crate::ui_ext::PICK_DIM)
+            } else {
+                crate::ui_ext::check_box(*on)
+            };
+            let facts = self.facts.get(&node.hostname);
+            let mut spans = vec![
+                pointer(row),
+                check,
+                Span::styled(format!("{:<12}", node.hostname), here(row, style)),
+                Span::styled(format!(" {role:<13}"), Style::default().dim()),
+            ];
+            spans.extend(fact_cells(facts, self.facts_task.is_some()));
+            match (blocked, self.last_run(&node.hostname)) {
+                (Some(why), _) => {
+                    spans.push(Span::styled(
+                        format!("  {why}"),
+                        Style::default().fg(Color::Yellow),
+                    ));
+                }
+                (None, Some((op, status, when))) => {
+                    spans.push(Span::styled(format!("  {op} "), Style::default().dim()));
+                    spans.push(Span::styled(
+                        status.name(),
+                        Style::default().fg(status_color(status)),
+                    ));
+                    spans.push(Span::styled(format!(" {when}"), Style::default().dim()));
+                }
+                (None, None) => {}
+            }
+            lines.push(Line::from(spans));
         }
         frame.render_widget(Paragraph::new(lines), ops_area);
         self.ops_area = ops_area;
 
-        let note = match (&self.message, &busy) {
-            (Some(m), _) => Span::styled(format!(" {m}"), Style::default().fg(Color::Yellow)),
-            (None, Some(b)) => Span::styled(format!(" {b}"), Style::default().fg(Color::Cyan)),
+        let note = match (&self.message, &busy, &self.facts_error) {
+            (Some(m), _, _) => Span::styled(format!(" {m}"), Style::default().fg(Color::Yellow)),
+            (None, Some(b), _) => Span::styled(format!(" {b}"), Style::default().fg(Color::Cyan)),
+            (None, None, Some(e)) => Span::styled(
+                format!(" Kubernetes unreadable ({e}): K8S, SCHEDULE and PODS unknown"),
+                Style::default().dim(),
+            ),
             _ => Span::raw(""),
         };
         frame.render_widget(Paragraph::new(Line::from(note)), msg_area);
@@ -650,7 +976,7 @@ impl OperationsComponent {
                     Cell::from(run.header.context.clone()),
                     Cell::from(run.header.target.clone()),
                     Cell::from(run.header.operation.clone()),
-                    Cell::from(status.name()).style(Style::default().fg(color)),
+                    Cell::from(status_label(status)).style(Style::default().fg(color)),
                     Cell::from(talos9s_core::format_duration_human(run.took())),
                     Cell::from(run.header.commands.first().cloned().unwrap_or_default())
                         .style(Style::default().dim()),
@@ -677,7 +1003,7 @@ impl OperationsComponent {
                     .title(title),
             )
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        let in_history = self.selected.checked_sub(ops.len());
+        let in_history = self.selected.checked_sub(self.top_rows());
         self.table.select(in_history);
         frame.render_stateful_widget(table, history_area, &mut self.table);
         self.rows = RowHits::new(
@@ -726,7 +1052,10 @@ impl OperationsComponent {
             lines.push(Line::from(vec![
                 Span::styled(format!(" {} ", h.operation), Style::default().bold()),
                 Span::raw(format!("on {} · context {} · ", h.target, h.context)),
-                Span::styled(status.name(), Style::default().fg(status_color(status))),
+                Span::styled(
+                    status_label(status),
+                    Style::default().fg(status_color(status)),
+                ),
                 Span::styled(
                     format!(
                         " · started {}",
@@ -796,53 +1125,34 @@ impl OperationsComponent {
         match dialog {
             Dialog::Start {
                 kind,
-                picked,
-                cursor,
+                nodes,
                 safety,
                 ..
             } => {
-                title = format!(" {} on {}? ", kind.name(), self.target);
+                title = format!(" {} on {}? ", kind.name(), self.run_target(nodes));
                 lines.push(Line::from(Span::styled(
-                    format!(" {}", kind.about(self.group)),
+                    format!(" {}", kind.about(nodes.len() > 1)),
                     Style::default().dim(),
                 )));
                 lines.push(Line::default());
-                for (i, (node, p)) in self.nodes.iter().zip(picked).enumerate() {
-                    // Picked: a green tick and the name in bold; left out:
-                    // dimmed. The cursor is a cyan arrow and bar, readable
-                    // in any theme (reverse video on a dim row barely shows)
-                    let here = self.group && i == *cursor;
-                    let (mark, mark_style, name_style) = if *p {
-                        (
-                            "[✓]",
-                            Style::default().fg(Color::Green),
-                            Style::default().add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        ("[ ]", Style::default().dim(), Style::default().dim())
-                    };
-                    let name_style = if here {
-                        name_style.fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        name_style
-                    };
-                    let pointer = if here { "▶" } else { " " };
+                for node in nodes {
                     let role = if node.is_controlplane {
                         "control plane"
                     } else {
                         "worker"
                     };
-                    let commands =
-                        crate::operations::commands_for(*kind, node, &DrainOptions::default());
                     lines.push(Line::from(vec![
-                        Span::styled(pointer, Style::default().fg(Color::Cyan)),
-                        Span::styled(format!("{mark} "), mark_style),
-                        Span::styled(node.hostname.clone(), name_style),
+                        Span::styled(format!(" {}", node.hostname), Style::default().bold()),
                         Span::styled(format!("  {role}"), Style::default().dim()),
                     ]));
-                    for c in commands {
+                    for c in crate::operations::commands_for(
+                        &self.context,
+                        *kind,
+                        node,
+                        &DrainOptions::default(),
+                    ) {
                         lines.push(Line::from(Span::styled(
-                            format!("     $ {c}"),
+                            format!("   $ {c}"),
                             Style::default().dim(),
                         )));
                     }
@@ -878,36 +1188,13 @@ impl OperationsComponent {
             }
         }
         lines.push(Line::default());
-        // `y` acts only once a node is picked; until then say how
-        let none_picked = matches!(dialog, Dialog::Start { picked, .. } if !picked.contains(&true));
-        if none_picked {
-            lines.push(Line::from(Span::styled(
-                " Pick the nodes to run on first.",
-                Style::default().fg(Color::Yellow),
-            )));
-        }
-        let mut answer = vec![
+        let answer = vec![
             Span::raw(" "),
-            if none_picked {
-                Span::styled("<y>", Style::default().dim())
-            } else {
-                Span::styled("<y>", KEY_YES)
-            },
+            Span::styled("<y>", KEY_YES),
             Span::raw(" yes   "),
             Span::styled("<n/Esc>", KEY_NO),
             Span::raw(" no"),
         ];
-        if self.group && matches!(dialog, Dialog::Start { .. }) {
-            answer.extend([
-                Span::raw("   "),
-                Span::styled("<Space>", KEY),
-                Span::styled(" pick  ", Style::default().dim()),
-                Span::styled("<a>", KEY),
-                Span::styled(" all  ", Style::default().dim()),
-                Span::styled("<j/k>", KEY),
-                Span::styled(" move", Style::default().dim()),
-            ]);
-        }
         lines.push(Line::from(answer));
         let width = 76.min(area.width);
         // Rows the lines take once wrapped, so the answer line stays inside
@@ -925,6 +1212,123 @@ impl OperationsComponent {
             ),
             popup,
         );
+    }
+}
+
+impl OperationsComponent {
+    /// The operation drop list, under the operation row
+    fn draw_dropdown(&mut self, frame: &mut Frame, cursor: usize) {
+        let ops = self.ops();
+        let width = ops
+            .iter()
+            .map(|k| k.name().len().max(9) + k.about(self.group).len() + 7)
+            .max()
+            .unwrap_or(20);
+        let area = frame.area();
+        let x = self.ops_area.x + 12;
+        let y = self.ops_area.y + 2;
+        let rect = Rect {
+            x,
+            y,
+            width: talos9s_core::convert::to_u16(width).min(area.right().saturating_sub(x)),
+            height: talos9s_core::convert::to_u16(ops.len() + 2)
+                .min(area.bottom().saturating_sub(y)),
+        };
+        let lines: Vec<Line> = ops
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let (pointer, style) = if i == cursor {
+                    (crate::ui_ext::PICK_POINTER, crate::ui_ext::PICK_CURSOR)
+                } else {
+                    (" ", Style::default())
+                };
+                Line::from(vec![
+                    Span::styled(pointer, crate::ui_ext::PICK_CURSOR),
+                    Span::styled(format!("{} ", i + 1), KEY),
+                    Span::styled(format!("{:<9}", k.name()), style),
+                    Span::styled(format!(" {}", k.about(self.group)), Style::default().dim()),
+                ])
+            })
+            .collect();
+        self.dropdown_area = rect;
+        frame.render_widget(Clear, rect);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            ),
+            rect,
+        );
+    }
+}
+
+/// A row above the history
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopRow {
+    Operation,
+    /// "all nodes", on a group
+    All,
+    Node(usize),
+}
+
+/// TALOS, K8S, SCHEDULE and PODS for a node; `…` while the first read
+/// goes, `?` when a source couldn't be read
+fn fact_cells(facts: Option<&NodeFacts>, loading: bool) -> Vec<Span<'static>> {
+    let unknown = if loading && facts.is_none() {
+        "…"
+    } else {
+        "?"
+    };
+    let dim = Style::default().dim();
+    let (talos, talos_style) = match facts.and_then(|f| f.talos) {
+        Some(TalosState::Up(secs)) => (
+            format!(
+                "up {}",
+                talos9s_core::format_duration_human(chrono::Duration::seconds(
+                    i64::try_from(secs).unwrap_or(i64::MAX)
+                ))
+            ),
+            Style::default().fg(Color::Green),
+        ),
+        Some(TalosState::Offline) => ("offline".to_string(), Style::default().fg(Color::Red)),
+        None => (unknown.to_string(), dim),
+    };
+    let (k8s, k8s_style, sched, sched_style) = match facts.and_then(|f| f.k8s) {
+        Some(K8sNode::Present { ready, cordoned }) => {
+            let (r, rs) = match ready {
+                Some(true) => ("Ready", Style::default().fg(Color::Green)),
+                Some(false) => ("NotReady", Style::default().fg(Color::Red)),
+                None => ("?", dim),
+            };
+            let (c, cs) = if cordoned {
+                ("cordoned", Style::default().fg(Color::Yellow))
+            } else {
+                ("yes", Style::default())
+            };
+            (r, rs, c, cs)
+        }
+        Some(K8sNode::Missing) => ("missing", Style::default().fg(Color::Red), "-", dim),
+        None => (unknown, dim, unknown, dim),
+    };
+    let pods = facts
+        .and_then(|f| f.pods)
+        .map_or_else(|| unknown.to_string(), |p| p.to_string());
+    vec![
+        Span::styled(format!(" {talos:<10}"), talos_style),
+        Span::styled(format!(" {k8s:<9}"), k8s_style),
+        Span::styled(format!(" {sched:<10}"), sched_style),
+        Span::raw(format!(" {pods:>4}")),
+    ]
+}
+
+/// The status, with a spinner while it runs (as a refresh shows one)
+fn status_label(status: RunStatus) -> String {
+    if status == RunStatus::Running {
+        format!("{} {}", crate::ui_ext::spinner(), status.name())
+    } else {
+        status.name().to_string()
     }
 }
 
@@ -1009,7 +1413,25 @@ fn safety_lines(info: &SafetyInfo) -> Vec<Line<'static>> {
 
 impl Component for OperationsComponent {
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
+        let click = mouse.kind
+            == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left);
         if self.dialog.is_some() {
+            return Ok(None);
+        }
+        // The drop list: a click on an item picks it, elsewhere closes it
+        if self.dropdown.is_some() {
+            if click {
+                let a = self.dropdown_area;
+                let inside = mouse.column > a.x
+                    && mouse.column + 1 < a.right()
+                    && mouse.row > a.y
+                    && mouse.row + 1 < a.bottom();
+                if inside {
+                    self.pick_operation(usize::from(mouse.row - a.y - 1));
+                } else {
+                    self.dropdown = None;
+                }
+            }
             return Ok(None);
         }
         if self.focus.is_some() {
@@ -1017,7 +1439,7 @@ impl Component for OperationsComponent {
             return Ok(None);
         }
         if let Some(row) = self.rows.clicked(&mouse) {
-            self.selected = self.ops().len() + row;
+            self.selected = self.top_rows() + row;
         } else if mouse.kind
             == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
             && mouse.row > self.ops_area.y
@@ -1025,7 +1447,20 @@ impl Component for OperationsComponent {
             && mouse.column >= self.ops_area.x
             && mouse.column < self.ops_area.right()
         {
-            self.selected = usize::from(mouse.row - self.ops_area.y - 1);
+            // Line 1 is the operation (a click opens the drop list), line 2
+            // the column header; a click on a node checks it
+            match mouse.row - self.ops_area.y {
+                1 => {
+                    self.selected = 0;
+                    self.dropdown = Some(self.kind);
+                }
+                2 => {}
+                n => {
+                    self.selected = usize::from(n - 2);
+                    self.message = None;
+                    self.toggle();
+                }
+            }
         }
         Ok(None)
     }
@@ -1035,12 +1470,19 @@ impl Component for OperationsComponent {
     }
 
     fn captures_text(&self) -> bool {
-        self.filtering || self.dialog.is_some() || self.logs.captures_text()
+        self.filtering
+            || self.dialog.is_some()
+            || self.dropdown.is_some()
+            || self.logs.captures_text()
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.dialog.is_some() {
             self.handle_dialog_key(key);
+            return Ok(None);
+        }
+        if let Some(cursor) = self.dropdown {
+            self.handle_dropdown_key(key, cursor);
             return Ok(None);
         }
         if self.filtering {
@@ -1051,7 +1493,7 @@ impl Component for OperationsComponent {
                     self.filter.clear();
                     self.filtering = false;
                 }
-                TextEdit::Changed => self.selected = self.selected.min(self.ops().len()),
+                TextEdit::Changed => self.selected = self.selected.min(self.top_rows()),
                 TextEdit::Ignored => {}
             }
             return Ok(None);
@@ -1064,6 +1506,10 @@ impl Component for OperationsComponent {
             KeyCode::Esc if !self.filter.is_empty() => self.filter.clear(),
             KeyCode::Char('q') | KeyCode::Esc => return Ok(Some(Action::Back)),
             KeyCode::Enter => self.enter(),
+            KeyCode::Char(' ') => self.toggle(),
+            // The operation: `o` opens the drop list, a digit picks one
+            KeyCode::Char('o') => self.dropdown = Some(self.kind),
+            KeyCode::Char(c @ '1'..='9') => self.pick_operation(usize::from(c as u8 - b'1')),
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('A') => {
                 self.this_context = !self.this_context;
@@ -1090,6 +1536,8 @@ impl Component for OperationsComponent {
         match action {
             Action::Tick => {
                 self.poll_safety();
+                self.poll_facts();
+                self.load_facts();
                 let every = if self.running().is_empty() {
                     RELOAD_IDLE
                 } else {
@@ -1098,11 +1546,25 @@ impl Component for OperationsComponent {
                 if self.loaded.is_none_or(|t| t.elapsed() >= every) {
                     self.reload();
                 }
+                // The pane reads the run's file; the default pace for logs
+                // (seconds) would leave a short run looking empty
+                let running = self.focus_running();
                 if self.focus.is_some() {
-                    self.logs.tick(None);
+                    if running {
+                        self.logs.tick_every(None, RUN_FOLLOW_INTERVAL);
+                    } else if self.focus_was_running {
+                        self.logs.fetch(None);
+                    } else {
+                        self.logs.tick(None);
+                    }
                 }
+                self.focus_was_running = running;
             }
-            Action::Refresh => self.reload(),
+            Action::Refresh => {
+                self.reload();
+                self.facts_at = None;
+                self.load_facts();
+            }
             _ => {}
         }
         Ok(None)
@@ -1115,6 +1577,9 @@ impl Component for OperationsComponent {
         match self.focus.clone() {
             Some(path) => self.draw_run(frame, area, &path),
             None => self.draw_list(frame, area),
+        }
+        if let Some(cursor) = self.dropdown {
+            self.draw_dropdown(frame, cursor);
         }
         self.draw_dialog(frame, area);
         Ok(())
@@ -1215,42 +1680,128 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect();
         assert!(screen.contains("Run on bc1"));
-        assert!(screen.contains("Shutdown"));
-        assert!(screen.contains("Reboot"));
+        assert!(screen.contains("[ Cordon"));
+        assert!(screen.contains("[✓]bc1") || screen.contains("[✓] bc1"));
         assert!(screen.contains("failed"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A group offers no shutdown; Enter on an operation opens its dialog,
-    /// `n` closes it without starting anything; Space unpicks a node
+    /// A group offers no shutdown and starts with nothing checked; the
+    /// drop list picks the operation, Space checks nodes, Enter asks first,
+    /// `n` closes without starting anything
     #[test]
-    fn dialog_opens_and_cancels() {
+    fn pick_operation_and_nodes() {
         let dir = std::env::temp_dir().join(format!("talos9s-opsdlg-{}", std::process::id()));
         let mut c = component(&dir, true);
         assert!(!c.ops().contains(&OpKind::Shutdown));
+        assert_eq!(c.picked, [false, false]);
+        // The drop list: Enter opens, j moves, Enter picks
         press(&mut c, KeyCode::Enter);
-        let Some(Dialog::Start { kind, .. }) = &c.dialog else {
-            panic!("no dialog");
-        };
-        assert_eq!(*kind, OpKind::Cordon);
         assert!(c.captures_text());
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Enter);
+        assert_eq!(c.kind(), OpKind::Uncordon);
+        assert!(c.dropdown.is_none());
+        // Picking moves to the nodes ("all nodes")
+        assert_eq!(c.top_row(c.selected), Some(TopRow::All));
+        // A digit picks an operation without the list; `o` opens it
+        press(&mut c, KeyCode::Char('3'));
+        assert_eq!(c.kind(), OpKind::Drain);
+        press(&mut c, KeyCode::Char('o'));
+        assert!(c.dropdown.is_some());
+        press(&mut c, KeyCode::Char('2'));
+        assert_eq!(c.kind(), OpKind::Uncordon);
+        // Nothing checked: Enter on a node says so
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Enter);
+        assert!(c.dialog.is_none());
+        assert!(c.message.is_some());
+        // Space on "all nodes" checks both, again unchecks
+        press(&mut c, KeyCode::Char('k'));
         press(&mut c, KeyCode::Char(' '));
-        let Some(Dialog::Start { picked, .. }) = &c.dialog else {
+        assert_eq!(c.picked, [true, true]);
+        press(&mut c, KeyCode::Char(' '));
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char(' '));
+        assert_eq!(c.picked, [true, false]);
+        assert_eq!(c.run_target(&c.checked_nodes()), "bc1");
+        press(&mut c, KeyCode::Enter);
+        let Some(Dialog::Start { kind, nodes, .. }) = &c.dialog else {
             panic!("no dialog");
         };
-        assert_eq!(picked, &[true, false]);
-        // `y` with nothing picked keeps the dialog open
-        press(&mut c, KeyCode::Char(' '));
-        press(&mut c, KeyCode::Char('y'));
-        assert!(c.dialog.is_some());
-        press(&mut c, KeyCode::Char('a'));
-        let Some(Dialog::Start { picked, .. }) = &c.dialog else {
-            panic!("no dialog");
-        };
-        assert_eq!(picked, &[true, true]);
+        assert_eq!(*kind, OpKind::Uncordon);
+        assert_eq!(nodes.len(), 1);
         press(&mut c, KeyCode::Char('n'));
         assert!(c.dialog.is_none());
         assert!(c.history_rows().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A single node is checked from the start and stays checked
+    #[test]
+    fn single_node_is_checked() {
+        let dir = std::env::temp_dir().join(format!("talos9s-opsone-{}", std::process::id()));
+        let mut c = component(&dir, false);
+        assert_eq!(c.picked, [true]);
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char(' '));
+        assert_eq!(c.picked, [true]);
+        assert_eq!(c.run_target(&c.checked_nodes()), "bc1");
+        press(&mut c, KeyCode::Enter);
+        assert!(matches!(c.dialog, Some(Dialog::Start { .. })));
+        press(&mut c, KeyCode::Esc);
+        assert!(c.dialog.is_none());
+    }
+
+    /// A cordoned node can't be cordoned again, only uncordoned; "all
+    /// nodes" skips what the operation can't run on, and changing the
+    /// operation unchecks it
+    #[test]
+    fn node_state_limits_the_checks() {
+        let dir = std::env::temp_dir().join(format!("talos9s-opsfacts-{}", std::process::id()));
+        let mut c = component(&dir, true);
+        let state = |cordoned| NodeFacts {
+            talos: Some(TalosState::Up(3600)),
+            k8s: Some(K8sNode::Present {
+                ready: Some(true),
+                cordoned,
+            }),
+            pods: Some(7),
+        };
+        c.facts.insert("bc1".into(), state(true));
+        c.facts.insert("bc2".into(), state(false));
+        // Cordon: "all nodes" checks bc2 only, Space on bc1 says why
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char(' '));
+        assert_eq!(c.picked, [false, true]);
+        press(&mut c, KeyCode::Char('j'));
+        press(&mut c, KeyCode::Char(' '));
+        assert_eq!(c.picked, [false, true]);
+        assert!(
+            c.message
+                .as_deref()
+                .is_some_and(|m| m.contains("already cordoned"))
+        );
+        // Uncordon: bc2 no longer fits and is unchecked
+        c.kind = 1;
+        c.drop_blocked();
+        assert_eq!(c.picked, [false, false]);
+        press(&mut c, KeyCode::Char(' '));
+        assert_eq!(c.picked, [true, false]);
+        assert_eq!(c.checked_nodes().len(), 1);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal.draw(|f| c.draw(f, f.area()).unwrap()).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(screen.contains("cordoned"), "{screen}");
+        assert!(screen.contains("not cordoned"), "{screen}");
+        assert!(screen.contains("[-]"), "{screen}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1263,6 +1814,11 @@ mod tests {
         c.focus = Some(dir.join("x.log"));
         assert!(c.key_hints_line().width() <= 85, "{}", c.key_hints_line());
         c.focus = None;
+        for _ in 0..4 {
+            assert!(c.key_hints_line().width() <= 85, "{}", c.key_hints_line());
+            press(&mut c, KeyCode::Char('j'));
+        }
+        press(&mut c, KeyCode::Char('g'));
         press(&mut c, KeyCode::Enter);
         assert!(c.key_hints_line().width() <= 85, "{}", c.key_hints_line());
     }

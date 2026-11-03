@@ -310,12 +310,16 @@ impl LogPane {
     /// On each tick: read when the selection has rested, or again while
     /// following the end
     pub fn tick(&mut self, client: Option<&Client>) {
+        self.tick_every(client, POD_LOG_FOLLOW_INTERVAL);
+    }
+
+    /// `tick` following the end every `follow` (a run's file changes by the
+    /// second, a container's logs are read at the slower default)
+    pub fn tick_every(&mut self, client: Option<&Client>, follow: Duration) {
         self.poll();
         let due = match (self.pending, self.last_read) {
             (Some(since), _) => since.elapsed() >= SETTLE,
-            (None, Some(last)) => {
-                self.scroll.is_none() && last.elapsed() >= POD_LOG_FOLLOW_INTERVAL
-            }
+            (None, Some(last)) => self.scroll.is_none() && last.elapsed() >= follow,
             (None, None) => false,
         };
         if due {
