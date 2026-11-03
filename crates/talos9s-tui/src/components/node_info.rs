@@ -283,6 +283,14 @@ fn short_size(bytes: usize) -> String {
     }
 }
 
+/// A line count in at most 5 columns: `812`, `14K`
+fn short_count(lines: usize) -> String {
+    match lines {
+        0..=9_999 => lines.to_string(),
+        _ => format!("{}K", lines / 1000),
+    }
+}
+
 /// Placeholder for a hidden value
 const HIDDEN: &str = "••••••";
 
@@ -573,6 +581,8 @@ pub struct NodeInfoComponent {
     config_in_content: bool,
     outline_offset: usize,
     outline_area: Rect,
+    /// The outline counts lines (`#`) instead of bytes
+    outline_lines: bool,
     /// When the view opened, for the time a slow config load has taken
     opened: Instant,
 }
@@ -617,6 +627,7 @@ impl NodeInfoComponent {
             config_in_content: false,
             outline_offset: 0,
             outline_area: Rect::default(),
+            outline_lines: false,
             opened: Instant::now(),
         }
         .with_cached_config()
@@ -966,16 +977,16 @@ impl NodeInfoComponent {
             .skip(offset)
             .take(rows)
             .map(|(i, section)| {
-                // Size, not lines: a manifest can be one enormous line
-                let count = short_size(
-                    config
-                        .lines
-                        .get(section.start..section.end)
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|l| l.text.len() + 1)
-                        .sum(),
-                );
+                // Bytes by default: a manifest can be one enormous line
+                let lines = config
+                    .lines
+                    .get(section.start..section.end)
+                    .unwrap_or_default();
+                let count = if self.outline_lines {
+                    short_count(lines.len())
+                } else {
+                    short_size(lines.iter().map(|l| l.text.len() + 1).sum())
+                };
                 let indent = "  ".repeat(section.depth as usize);
                 let room = width.saturating_sub(indent.len() + count.len() + 2);
                 let mut label: String = section.label.chars().take(room).collect();
@@ -1146,6 +1157,14 @@ impl NodeInfoComponent {
             ];
             if self.tab == NodeInfoTab::Config && !self.config_in_content {
                 spans.extend([key("<Enter/→>"), Span::raw(" read  ")]);
+                spans.extend([
+                    key("<#>"),
+                    Span::raw(if self.outline_lines {
+                        " bytes  "
+                    } else {
+                        " lines  "
+                    }),
+                ]);
             }
             if self.tab == NodeInfoTab::Config && self.config_in_content {
                 spans.extend([
@@ -1315,6 +1334,10 @@ impl Component for NodeInfoComponent {
                 } else {
                     return Ok(Some(Action::Back));
                 }
+            }
+            // Count lines or bytes in the outline
+            KeyCode::Char('#') if self.tab == NodeInfoTab::Config => {
+                self.outline_lines = !self.outline_lines;
             }
             KeyCode::Enter if self.tab == NodeInfoTab::Config => {
                 self.config_in_content = true;
@@ -1641,6 +1664,22 @@ auth: bWU6aHVudGVyMg==
         );
         assert_eq!(lines[0], "    registry: {username: me, password: ••••••}");
         assert_eq!(lines[1], "    {\"name\": \"a\", \"auth\": \"••••••\"}");
+    }
+
+    /// `#` switches the outline between bytes and lines, and the hint says
+    /// what it switches to
+    #[test]
+    fn hash_counts_lines_or_bytes() {
+        use crate::components::Component;
+        let mut c = NodeInfoComponent::default();
+        let hint = |c: &NodeInfoComponent| c.key_hints_line().to_string();
+        assert!(hint(&c).contains("<#> lines"));
+        c.handle_key_event(KeyEvent::from(KeyCode::Char('#')))
+            .unwrap();
+        assert!(c.outline_lines);
+        assert!(hint(&c).contains("<#> bytes"));
+        assert_eq!(short_count(812), "812");
+        assert_eq!(short_count(14_200), "14K");
     }
 
     #[test]
