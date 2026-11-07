@@ -81,15 +81,20 @@ fn row_id(row: &ListRow) -> Option<String> {
     }
 }
 
-/// Write `text` to `path`, readable by the user only: logs can hold what
-/// the containers printed
-pub(crate) fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+/// Write `text` to a new temp file readable by the user only (logs can hold
+/// what the containers printed) and keep it for the viewer, which removes
+/// it. The name is random and the file created exclusively: a predictable
+/// name in a shared `/tmp` lets another user plant a symlink the write
+/// would follow, or a file whose mode it would keep
+pub(crate) fn write_private_temp(prefix: &str, text: &str) -> std::io::Result<std::path::PathBuf> {
     use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(text.as_bytes())
+    let mut file = tempfile::Builder::new()
+        .prefix(prefix)
+        .suffix(".log")
+        .tempfile()?;
+    file.write_all(text.as_bytes())?;
+    let (_, path) = file.keep().map_err(|e| e.error)?;
+    Ok(path)
 }
 
 /// The warp hint at the right of a summary line, only where it fits after
@@ -1609,13 +1614,12 @@ impl WorkloadHealthComponent {
     fn open_in_viewer(&mut self) -> Option<Action> {
         let focus = self.focus.as_mut()?;
         let text = focus.logs.export()?;
-        let path = std::env::temp_dir().join(format!("talos9s-logs-{}.log", std::process::id()));
-        match write_private(&path, &text) {
-            Ok(()) => Some(Action::OpenInViewer(path)),
+        match write_private_temp("talos9s-logs-", &text) {
+            Ok(path) => Some(Action::OpenInViewer(path)),
             Err(e) => {
                 focus
                     .logs
-                    .set_viewer_problem(format!("Couldn't write {}: {e}", path.display()));
+                    .set_viewer_problem(format!("Couldn't write a temp file: {e}"));
                 None
             }
         }
@@ -2239,6 +2243,29 @@ mod tests {
         assert_eq!(WorkloadHealthComponent::selectable(&rows), [1, 2]);
         press(&mut c, KeyCode::Char('G'));
         assert_eq!(c.selected, 1);
+    }
+
+    /// Each viewer file is new, random-named and private: nothing at a
+    /// guessable path for another user to plant first
+    #[test]
+    fn viewer_temp_files_are_new_and_private() {
+        let a = write_private_temp("talos9s-test-", "line 1\n").unwrap();
+        let b = write_private_temp("talos9s-test-", "line 2\n").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "line 1\n");
+        let name = a.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            name.starts_with("talos9s-test-") && name.ends_with(".log"),
+            "{name}"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_file(a).unwrap();
+        std::fs::remove_file(b).unwrap();
     }
 
     /// A list the kubeconfig may not read (StatefulSets forbidden) is `?`

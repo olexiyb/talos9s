@@ -62,7 +62,7 @@ chrono.workspace = true
 # Home directory
 dirs-next.workspace = true
 
-[dev-dependencies]
+# Viewer temp files: random name, created exclusively, 0600
 tempfile = "3"
 
 [lints]

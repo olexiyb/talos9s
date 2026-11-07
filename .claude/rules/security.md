@@ -65,8 +65,11 @@ from the cluster, and anyone who can create a pod controls some of them.
 
 - **Private files** (0600, directory 0700): run files in
   `~/.talos9s/operations/` (`operations::create_private`), the default
-  tracing log (`main.rs`), the temp file for the external log viewer, and
-  packet captures. A new file that may hold cluster data is created the
+  tracing log (`main.rs`), the temp files for the external log viewer, and
+  packet captures. Viewer temp files have a random name and are created
+  exclusively (`workloads::write_private_temp`, via `tempfile`): a fixed
+  name in a shared `/tmp` would let another user plant a symlink the write
+  follows, or a file whose mode it keeps. A new file that may hold cluster data is created the
   same way. The audit log and `state.yaml` hold no secrets and use the
   default mode; a `--log-file` path is created with the default mode too.
 - **Audit entries** are one line each: newlines in details are replaced
@@ -95,9 +98,3 @@ Not verified when this was written; worth a look in the next review:
 - Control characters in cluster text outside the log views (event
   messages, annotations, API errors) reaching the terminal.
 - Copied commands that embed a label, annotation or path without quoting.
-- **Viewer temp files** (`workloads::write_private`, used by Workloads,
-  Containers and Operations): a predictable name in the temp dir
-  (`talos9s-logs-<pid>.log`) opened with `create`, not `create_new`. In a
-  shared `/tmp` (Linux) another user can plant a symlink there, and the
-  write follows it; an existing file also keeps its own mode. A random
-  name with `create_new` (or a private directory) closes it.

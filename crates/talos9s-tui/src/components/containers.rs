@@ -10,7 +10,7 @@ use crate::action::Action;
 use crate::components::namespace_picker::{NamespacePicker, PickerEvent};
 use crate::components::pod_logs::LogPane;
 use crate::components::processes::ProcessNode;
-use crate::components::workloads::{draw_warp_hint, warp_hint, write_private};
+use crate::components::workloads::{draw_warp_hint, warp_hint, write_private_temp};
 use crate::components::{BackgroundRefresh, Component};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -279,12 +279,11 @@ impl ContainersComponent {
 
     fn open_in_viewer(&mut self) -> Option<Action> {
         let text = self.logs.export()?;
-        let path = std::env::temp_dir().join(format!("talos9s-logs-{}.log", std::process::id()));
-        match write_private(&path, &text) {
-            Ok(()) => Some(Action::OpenInViewer(path)),
+        match write_private_temp("talos9s-logs-", &text) {
+            Ok(path) => Some(Action::OpenInViewer(path)),
             Err(e) => {
                 self.logs
-                    .set_viewer_problem(format!("Couldn't write {}: {e}", path.display()));
+                    .set_viewer_problem(format!("Couldn't write a temp file: {e}"));
                 None
             }
         }
