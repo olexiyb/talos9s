@@ -68,7 +68,10 @@ site logic in files the operator owns.
   [Unattended runs](#unattended-runs)).
 - Rolling back automatically. A failed node is reported with the rollback
   command; the operator decides.
-- Changing schematics or machine configs beyond the install image (below).
+- Writing machine configs. The config is the source of truth for the
+  target image; whatever writes it (tofu, talhelper, Omni, `talosctl
+  apply`) stays its owner (Decided #2).
+- Running inside `tofu apply` or another config tool (Decided #3).
 
 ## What tuppr does, and what we keep
 
@@ -83,7 +86,7 @@ carry over, with the bug each one fixed:
 | Cluster health before every node and after the last (#668): nodes Ready, `MachineStatus` running+ready, etcd members = control-plane nodes, no learners, a leader, IDs match | yes, extended | Finishing while the last node still rejoins reported success too early |
 | Upgrade path and Kubernetes support checked per node (#672, Talos machinery's `UpgradeableFrom` / `SupportedWith`) | yes | Built-in table, same rules |
 | Image: the node's `machine.install.image` with the tag replaced; refuse when it doesn't carry the running schematic; factory URL for a generic installer with extensions | yes | Reinstalling the generic installer wipes extensions; `ghcr.io/siderolabs/installer` stopped at 1.14 |
-| After success, write the new `install.image` into the machine config (apply, no reboot) | yes, opt-in | Otherwise the next config apply writes the old installer back. kprod bumps `talos_version` in tofu instead; both are valid, so it's a setting |
+| After success, write the new `install.image` into the machine config (apply, no reboot) | no | The config owner writes the intent first (kprod: `talos_version` in tofu, applied with no reboot); talos9s writing it would make tofu's state drift (Decided #2) |
 | Pre-pull the installer on every node before the first cordon | yes (stage) | Finds a missing image on all nodes at once, shortens each node's downtime. Warm the Image Factory first (90-155 s for a new build) |
 | Drain: skip DaemonSet, mirror and finished pods; PDB-aware; wait for VolumeAttachments to detach | yes | talos9s's drain already follows kubectl's rules |
 | A failed drain uncordons and retries later | stop instead | A person is watching: say why and stop |
@@ -122,8 +125,13 @@ deprecated `MachineService.Upgrade`; the first version refuses them.
 
 ### 1. Plan
 
-Input: context, target Talos version, optionally a node selection and an
-order. Output: a table of nodes (current version, target image, order) and
+Input: context, optionally a node selection and an order. The target is
+each node's `machine.install.image` from its machine config: the config
+owner has already written it. `--talos vX.Y.Z` names the expected version:
+nodes whose config already says so roll; a node whose config says
+otherwise is a plan error unless `--allow-drift`, which swaps the tag for
+that run and reports the drift (the next config apply would write the old
+image back). Output: a table of nodes (current version, target image, order) and
 the result of every plan-time check. Any failure stops before anything
 changes.
 
@@ -132,6 +140,7 @@ changes.
 | The target is a valid upgrade from each node's version (no skipped minor, no downgrade) | Version API, built-in table |
 | The cluster's Kubernetes version is supported by the target | Built-in table |
 | Each node's install image carries the schematic it runs | Machine config, ExtensionStatus |
+| Each node's configured image matches `--talos`, or the drift is allowed and shown | Machine config |
 | The target image exists for every schematic | Registry HEAD |
 | No other upgrade runs: the talos9s Lease is free, no tuppr `TalosUpgrade`/`KubernetesUpgrade` active or unsuspended | Kubernetes API |
 | Every node reachable and on 1.13+ | Version API |
@@ -404,6 +413,21 @@ RBAC.
   (holder gone > 2 min) can be taken after confirmation.
 - **Quitting** waits for the current step, as for other operations.
 
+## Integration with config tools
+
+talos9s never runs inside `tofu apply` (Decided #3). The two meet through
+the cluster:
+
+1. tofu (or any config tool) bumps the version and applies the machine
+   configs with no reboot. Quick, fits tofu's model, as kprod does today.
+2. talos9s rolls each node to the image its config names, with gates,
+   hooks and the live view. It doesn't need to know who wrote the config.
+
+Without config management, `--talos` with `--allow-drift` swaps the tag
+and reports the drift. A one-command flow for tofu users is a recipe, not
+code: a Makefile target in the GitOps repo running `tofu apply`, then
+`talos9s upgrade run`.
+
 ## Interfaces
 
 **TUI:** `U` on a cluster opens the upgrade view: target version (prefilled
@@ -418,11 +442,19 @@ talos9s upgrade plan   --context kprod --talos v1.14.6 [--upgrade-config F]
 talos9s upgrade run    --context kprod --talos v1.14.6 [--yes]
 talos9s upgrade resume --context kprod
 talos9s upgrade status --context kprod
+talos9s upgrade attach --context kprod
 talos9s upgrade k8s    --context kprod --to v1.37.2 [--yes]
 ```
 
 Human-readable by default, `--output json` for one JSON event per line.
 Exit 0 only when every node verified.
+
+**Attach:** watch a rollout something else started (CI, a jump host, a
+colleague). `upgrade attach`, or the TUI's upgrade view opening on its own
+when the Lease shows a running rollout, follows its progress from the
+Lease (holder, node, step) and, on the same machine, the run file's
+events. Read-only from another machine; stop and resume only where the run
+file is.
 
 ## Unattended runs
 
@@ -435,7 +467,8 @@ tuppr starts a rollout when Renovate merges a version bump. Options:
 3. A talos9s controller mode: out of scope, it brings back in-cluster admin
    rights.
 
-Recommended: 2 later; for now a person runs it.
+Recommended: 2 later; for now a person runs it. Either way, anyone can
+`attach` to watch.
 
 ## Security
 
@@ -490,16 +523,27 @@ Recommended: 2 later; for now a person runs it.
    `API_URL` hooks use a `kubectl proxy` wrapper on the operator's
    kubeconfig.
 
+2. **Install image** (2026-11-07): the machine config is the source of
+   truth. Each node rolls to the image its config names; talos9s never
+   writes the config in v1. `--talos` beyond the config is a plan error,
+   or with `--allow-drift` a one-run tag swap with the drift reported.
+   Writing it would make tofu's state drift and give two owners for one
+   field.
+3. **No tofu integration** (2026-11-07): talos9s doesn't run inside `tofu
+   apply` (provider or `local-exec`). The apply would hold the state lock
+   for the whole rollout (hours per node on kprod), die with its CI runner
+   or ssh session, and hide the plan behind `--yes`; a failure halfway
+   doesn't fit "converges or errors". tofu writes the intent, talos9s
+   carries it out ([Integration](#integration-with-config-tools)); `attach`
+   covers watching a run started elsewhere.
+
 ## Open questions
 
-1. **Install image in the machine config:** keep tofu as the source
-   (`writeInstallImage: false`, as kprod) or let talos9s write it (as
-   tuppr)? A mismatch either way is caught by the plan's schematic check.
-2. **Settle scope:** all DRBD resyncs cluster-wide, or only those touching
+1. **Settle scope:** all DRBD resyncs cluster-wide, or only those touching
    the node just upgraded?
-3. **Support table:** built in and updated with releases, or Talos
+2. **Support table:** built in and updated with releases, or Talos
    machinery's data via a small build step?
-4. **Worker batches** (tuppr's `parallelism`): worth it for our sizes, or
+3. **Worker batches** (tuppr's `parallelism`): worth it for our sizes, or
    always one at a time?
-5. **Coexistence with tuppr:** refuse while any `TalosUpgrade` isn't
+4. **Coexistence with tuppr:** refuse while any `TalosUpgrade` isn't
    suspended, or only while one is active?
