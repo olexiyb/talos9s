@@ -78,6 +78,11 @@ from the cluster, and anyone who can create a pod controls some of them.
   shell, the command split on whitespace and the temp file passed as the
   last argument, then removed. The variable is the user's own; the file
   name is ours, never from the cluster.
+- **Upgrade hooks** (`plans/upgrades.md`): run without a shell, from the
+  config file's directory, always with a timeout. A hook that needs
+  Kubernetes gets the operator's own kubeconfig (`KUBECONFIG`,
+  `KUBECONFIG_CONTEXT`); the admin kubeconfig fetched from Talos never
+  reaches a hook, not as a file and not through a proxy.
 - **Update check** (`update.rs`): one bounded HTTPS GET to the GitHub
   releases API, at most daily; off with `--no-update-check`,
   `TALOS9S_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. It only reports a version;
