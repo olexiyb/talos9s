@@ -357,7 +357,6 @@ nodes:
   selector: kolmena.ai/provider=hetzner-robot
   order: [kpw1, kpd1, kpd2, kpd3, kpc1, kpc3, kpc2, kpg1]
 timeouts: { reboot: 15m, drain: 10m, settle: 1h }
-writeInstallImage: false      # tofu's talos_version holds the image
 silences:
   alertmanager: http://vmalertmanager.monitoring.svc:9093  # through the API proxy
   matchers: ['alertname=~"KubeNodeNotReady|PiraeusNodeOffline|..."']
