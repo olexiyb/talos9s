@@ -894,13 +894,10 @@ impl NodeInfoComponent {
         }
     }
 
-    fn draw_error(frame: &mut Frame, area: Rect, title: &str, error: &str) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(title.to_string());
-        let text = Paragraph::new(format!("Could not read: {error}"))
+    fn draw_error(frame: &mut Frame, area: Rect, what: &str, error: &str) {
+        let text = Paragraph::new(format!("Could not read the {what}: {error}"))
             .style(Style::default().fg(Color::Red))
-            .block(block);
+            .wrap(ratatui::widgets::Wrap { trim: true });
         frame.render_widget(text, area);
     }
 
@@ -910,7 +907,7 @@ impl NodeInfoComponent {
         };
         let Some(config) = &data.config else {
             match &data.config_error {
-                Some(e) => Self::draw_error(frame, area, " Machine config ", e),
+                Some(e) => Self::draw_error(frame, area, "machine config", e),
                 None => frame.render_widget(
                     Paragraph::new("Loading machine config...")
                         .style(Style::default().fg(Color::DarkGray)),
@@ -921,7 +918,7 @@ impl NodeInfoComponent {
         };
         let mut title = vec![Span::styled(
             format!(
-                " Machine config, revision {}{} · {} secrets hidden ",
+                "Revision {}{} · {} secrets hidden ",
                 config.version,
                 config
                     .updated
@@ -938,11 +935,13 @@ impl NodeInfoComponent {
                 Style::default().fg(Color::Yellow),
             ));
         }
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(Line::from(title));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // A summary line over a rule; the window frames the view
+        let [summary_area, inner] =
+            Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
+        frame.render_widget(
+            Paragraph::new(Line::from(title)).block(Block::default().borders(Borders::BOTTOM)),
+            summary_area,
+        );
 
         // Outline on the left, the picked part on the right
         let sections = config.sections.clone();
@@ -1060,7 +1059,7 @@ impl NodeInfoComponent {
             return;
         };
         if let (Some(e), true) = (&data.extensions_error, data.extensions.is_empty()) {
-            Self::draw_error(frame, area, " Extensions ", e);
+            Self::draw_error(frame, area, "extensions", e);
             return;
         }
         let total = data.extensions.len();
@@ -1070,8 +1069,18 @@ impl NodeInfoComponent {
             .selected()
             .and_then(|i| visible.get(i))
             .map(|e| (*e).clone());
-        let [table_area, detail_area] =
-            Layout::vertical([Constraint::Min(5), Constraint::Length(5)]).areas(area);
+        // Summary line over a rule, the table, details under a rule
+        let [summary_area, table_area, detail_area] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(3),
+            Constraint::Length(4),
+        ])
+        .areas(area);
+        frame.render_widget(
+            Paragraph::new(format!("{total} installed"))
+                .block(Block::default().borders(Borders::BOTTOM)),
+            summary_area,
+        );
         let header = Row::new(
             ["NAME", "VERSION", "AUTHOR"]
                 .map(|h| Cell::from(h).style(Style::default().add_modifier(Modifier::BOLD))),
@@ -1095,12 +1104,6 @@ impl NodeInfoComponent {
             ],
         )
         .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Extensions: {total} installed "))
-                .title_style(Style::default().fg(Color::Cyan)),
-        )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
         frame.render_stateful_widget(table, table_area, &mut self.extensions_table);
         self.content_area = table_area;
@@ -1118,12 +1121,7 @@ impl NodeInfoComponent {
         frame.render_widget(
             Paragraph::new(detail)
                 .wrap(ratatui::widgets::Wrap { trim: true })
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Details ")
-                        .title_style(Style::default().fg(Color::Yellow)),
-                ),
+                .block(Block::default().borders(Borders::TOP)),
             detail_area,
         );
     }
@@ -1272,14 +1270,14 @@ impl Component for NodeInfoComponent {
                     }
                     return Ok(None);
                 }
-                // Table rows start below the border and the header
+                // Table rows start below the header
                 let area = self.content_area;
-                if !at(&area) || mouse.row < area.y + 2 {
+                if !at(&area) || mouse.row < area.y + 1 {
                     return Ok(None);
                 }
                 let len = self.visible_extensions().len();
                 let table = &mut self.extensions_table;
-                let row = table.offset() + (mouse.row - area.y - 2) as usize;
+                let row = table.offset() + (mouse.row - area.y - 1) as usize;
                 if row < len {
                     table.select(Some(row));
                 }

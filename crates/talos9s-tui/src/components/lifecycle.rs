@@ -817,7 +817,7 @@ impl LifecycleComponent {
 
         let block = Block::default()
             .title(" Cluster Versions ")
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let paragraph = Paragraph::new(lines).block(block);
@@ -887,7 +887,7 @@ impl LifecycleComponent {
 
         let block = Block::default()
             .title(" Node Status ")
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let row_count = rows.len();
@@ -903,7 +903,8 @@ impl LifecycleComponent {
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
         self.rows =
-            crate::ui_ext::RowHits::new(area, true, 1, self.table_state.offset(), row_count);
+            // Rows start under the section's rule and the header
+            crate::ui_ext::RowHits::new(area, false, 2, self.table_state.offset(), row_count);
     }
 
     /// Draw the alerts section
@@ -925,7 +926,7 @@ impl LifecycleComponent {
 
         let block = Block::default()
             .title(" Alerts ")
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let paragraph = Paragraph::new(lines).block(block);
@@ -1089,7 +1090,7 @@ impl LifecycleComponent {
 
         let block = Block::default()
             .title(" Pre-Operation Checks ")
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let paragraph = Paragraph::new(lines).block(block);
@@ -1160,35 +1161,15 @@ impl Component for LifecycleComponent {
             return Ok(());
         }
 
-        // Get context name from data
-        let context_name = self
-            .data()
-            .map(|d| d.context_name.clone())
-            .unwrap_or_default();
-
-        // Layout
-        let [
-            header_area,
-            versions_area,
-            checks_area,
-            nodes_area,
-            alerts_area,
-        ] = Layout::vertical([
-            Constraint::Length(1),  // Header
-            Constraint::Length(10), // Versions section
-            Constraint::Length(7),  // Pre-Operation Checks (4 lines + border + padding)
-            Constraint::Min(6),     // Node table
-            Constraint::Length(6),  // Alerts (3 lines + border)
+        // Each section under a rule that names it; the window frames the
+        // view, so no section gets a box of its own
+        let [versions_area, checks_area, nodes_area, alerts_area] = Layout::vertical([
+            Constraint::Length(9), // Versions section
+            Constraint::Length(6), // Pre-Operation Checks (4 lines + rule + padding)
+            Constraint::Min(5),    // Node table
+            Constraint::Length(5), // Alerts (3 lines + rule)
         ])
         .areas(area);
-
-        // Header
-        let header = Paragraph::new(format!(" Lifecycle │ {context_name}")).style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-        frame.render_widget(header, header_area);
 
         // Versions section
         self.draw_versions_section(frame, versions_area);

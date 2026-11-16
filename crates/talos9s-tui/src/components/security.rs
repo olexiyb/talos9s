@@ -631,33 +631,24 @@ impl Component for SecurityComponent {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let [header_area, content_area, details_area] = Layout::vertical([
-            Constraint::Length(3), // Header
+            Constraint::Length(2), // Summary and its rule
             Constraint::Fill(1),   // Content
-            Constraint::Length(5), // Details
+            Constraint::Length(5), // Rule and details
         ])
         .areas(area);
 
         // Get data for rendering (default values if not yet loaded)
-        let (context_display, cert_summary) = if let Some(data) = self.data() {
-            let context = if data.context_name.is_empty() {
-                "default".to_string()
-            } else {
-                data.context_name.clone()
-            };
+        let cert_summary = if let Some(data) = self.data() {
             let (valid, warning, _critical, expired) = data.pki_status.summary();
-            let summary = format!("{valid} valid, {warning} warning, {expired} expired");
-            (context, summary)
+            format!("{valid} valid, {warning} warning, {expired} expired")
         } else {
-            ("default".to_string(), "loading...".to_string())
+            "loading...".to_string()
         };
 
         // Header
         let header = Paragraph::new(Line::from(vec![
-            Span::styled(" Security ", Style::default().bold().fg(Color::Cyan)),
-            Span::raw("─ "),
-            Span::styled(&context_display, Style::default().fg(Color::Yellow)),
-            Span::raw(" ─ "),
-            Span::styled(cert_summary, Style::default().dim()),
+            // The window title names the view and cluster
+            Span::styled(format!(" {cert_summary}"), Style::default().dim()),
         ]))
         .block(
             Block::default()
@@ -692,14 +683,8 @@ impl Component for SecurityComponent {
 
 impl SecurityComponent {
     fn render_items(&mut self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Certificate Status ")
-            .title_style(Style::default().fg(Color::Cyan).bold())
-            .border_style(Style::default().fg(Color::DarkGray));
-
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // The sections are headings in one list; the window frames it
+        let inner = area;
 
         let Some(data) = self.data() else {
             return;
@@ -761,9 +746,7 @@ impl SecurityComponent {
 
     fn render_details(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Details ")
-            .title_style(Style::default().fg(Color::Cyan).bold())
+            .borders(Borders::TOP)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let inner = block.inner(area);

@@ -310,8 +310,6 @@ async fn fetch_node(client: TalosClient, basics: Option<NodeBasics>) -> NodeFetc
 /// Processes component for viewing node processes
 #[derive(Clone)]
 pub struct ProcessesComponent {
-    /// What is being viewed: a node name, or a cluster / group name
-    title: String,
     /// Nodes whose processes are listed
     nodes: Vec<ProcessNode>,
     /// What the dashboard knows of each node (parallel to `nodes`)
@@ -352,7 +350,7 @@ pub struct ProcessesComponent {
 
 impl Default for ProcessesComponent {
     fn default() -> Self {
-        Self::new(String::new(), Vec::new())
+        Self::new(Vec::new())
     }
 }
 
@@ -372,7 +370,7 @@ impl ProcessesComponent {
         self.sort_by = sort_by;
     }
 
-    pub fn new(title: String, nodes: Vec<ProcessNode>) -> Self {
+    pub fn new(nodes: Vec<ProcessNode>) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
@@ -380,7 +378,6 @@ impl ProcessesComponent {
         state.start_loading();
 
         Self {
-            title,
             basics: Vec::new(),
             nodes,
             state,
@@ -906,16 +903,10 @@ impl ProcessesComponent {
             String::new()
         };
 
-        let mut spans = vec![
-            Span::styled("Processes: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(&self.title),
-        ];
+        // The window title names the view and target
+        let mut spans = Vec::new();
         match self.nodes.as_slice() {
-            [node] => {
-                spans.push(Span::styled(" (", Style::default().fg(Color::DarkGray)));
-                spans.push(Span::raw(&node.address));
-                spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
-            }
+            [node] => spans.push(Span::raw(&node.address)),
             nodes => spans.push(Span::styled(
                 format!(" · {} nodes", nodes.len()),
                 Style::default().fg(Color::DarkGray),
@@ -1792,7 +1783,7 @@ mod tests {
     fn a_toggles_auto_refresh() {
         use crate::components::Component;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let mut c = ProcessesComponent::new("t".into(), Vec::new());
+        let mut c = ProcessesComponent::new(Vec::new());
         let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         assert!(c.auto_refresh);
         c.handle_key_event(a).unwrap();
@@ -1822,7 +1813,7 @@ mod tests {
             hostname: name.to_string(),
             address: String::new(),
         };
-        let mut comp = ProcessesComponent::new("test".into(), vec![node("n1"), node("n2")]);
+        let mut comp = ProcessesComponent::new(vec![node("n1"), node("n2")]);
         let procs = [
             (0, process(1, 0, "init", 10)),
             (0, process(2, 1, "kubelet", 300)),
@@ -1921,7 +1912,7 @@ mod tests {
             hostname: "n1".to_string(),
             address: String::new(),
         };
-        let mut comp = ProcessesComponent::new("test".into(), vec![node]);
+        let mut comp = ProcessesComponent::new(vec![node]);
         comp.state.set_data(ProcessesData {
             processes: procs
                 .into_iter()

@@ -168,16 +168,8 @@ impl NetworkStatsComponent {
 
         // Build tab bar for right side (Connections is a subscreen, not a tab)
         let kubespan = self.view_mode == ViewMode::KubeSpan;
-        let mut spans = vec![
-            Span::styled(
-                if kubespan { "KubeSpan: " } else { "Network: " },
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(&self.hostname),
-            Span::styled(" (", Style::default().fg(Color::DarkGray)),
-            Span::raw(&self.address),
-            Span::styled(")", Style::default().fg(Color::DarkGray)),
-        ];
+        // The window title names the view and node
+        let mut spans = vec![Span::raw(&self.address)];
         if !kubespan {
             spans.extend([
                 Span::raw("  "),

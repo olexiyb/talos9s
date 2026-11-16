@@ -2071,17 +2071,18 @@ impl Component for MultiLogsComponent {
         } else {
             String::new()
         };
-        let mut header_spans = vec![
-            Span::raw(if self.multi_node() {
-                " Cluster Logs: "
-            } else {
-                " Multi-Service Logs: "
-            })
-            .bold()
-            .fg(Color::Cyan),
-            Span::raw(&self.title).fg(Color::White),
-            Span::raw(format!(" ({})", self.subtitle)).dim(),
-            Span::raw("  "),
+        // The window title names the view and target; one node's address
+        // and role are what it adds
+        let mut header_spans = if self.multi_node() {
+            vec![Span::raw(" ")]
+        } else {
+            vec![
+                Span::raw(format!(" {}", self.title)).fg(Color::White),
+                Span::raw(format!(" ({})", self.subtitle)).dim(),
+                Span::raw("  "),
+            ]
+        };
+        header_spans.extend([
             follow_indicator,
             Span::raw(format!(
                 " [{}/{} svcs, {}/{} lvls{nodes}]",
@@ -2091,7 +2092,7 @@ impl Component for MultiLogsComponent {
                 self.levels.len()
             ))
             .dim(),
-        ];
+        ]);
         let (_, waiting, failed) = self.stream_counts();
         if failed > 0 {
             let hint = if self.multi_node() { ", see <o>" } else { "" };
@@ -2395,7 +2396,7 @@ mod tests {
         ]);
         let screen = render(&mut logs);
         assert!(
-            screen.contains("Cluster Logs: bc control plane"),
+            !screen.contains("Cluster Logs") && !screen.contains("bc control plane"),
             "{screen}"
         );
         assert!(screen.contains("3/3 nodes"), "{screen}");
@@ -2473,7 +2474,8 @@ mod tests {
         .unwrap();
         logs.process_stream_entries();
         let screen = render(&mut logs);
-        assert!(screen.contains("Multi-Service Logs: 10.0.0.1"), "{screen}");
+        assert!(screen.contains(" 10.0.0.1 ("), "{screen}");
+        assert!(!screen.contains("Multi-Service Logs"), "{screen}");
         assert!(screen.contains("synced"), "{screen}");
         assert!(!screen.contains("w1 "), "{screen}");
         assert!(!screen.contains("<o>"), "{screen}");

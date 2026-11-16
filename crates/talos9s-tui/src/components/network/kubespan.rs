@@ -136,12 +136,12 @@ impl NetworkStatsComponent {
         ])
         .areas(area);
 
-        let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
-            .style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            );
+        // The window title names the view and node
+        let header = Paragraph::new(format!(" {}", self.address)).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(header, header_area);
 
         let info_lines = vec![
@@ -190,12 +190,12 @@ impl NetworkStatsComponent {
         ])
         .areas(area);
 
-        let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
-            .style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            );
+        // The window title names the view and node
+        let header = Paragraph::new(format!(" {}", self.address)).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(header, header_area);
 
         let error = self.data().and_then(|d| d.kubespan_error.clone());
@@ -242,12 +242,12 @@ impl NetworkStatsComponent {
         ])
         .areas(area);
 
-        let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
-            .style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            );
+        // The window title names the view and node
+        let header = Paragraph::new(format!(" {}", self.address)).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(header, header_area);
 
         let info_lines = vec![
@@ -284,7 +284,7 @@ impl NetworkStatsComponent {
         // Header with summary
         let header = Line::from(vec![
             Span::styled(
-                format!(" KubeSpan │ {} ({}) │ ", self.hostname, self.address),
+                format!(" {} │ ", self.address),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),

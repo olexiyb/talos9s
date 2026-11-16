@@ -1024,19 +1024,13 @@ impl Component for DiagnosticsComponent {
             Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
         // Get header info from data
-        let (hostname, address, cni_label) = self
+        let (address, cni_label) = self
             .data()
-            .map(|d| {
-                (
-                    d.hostname.clone(),
-                    d.address.clone(),
-                    d.context.cni_type.name(),
-                )
-            })
-            .unwrap_or_else(|| (String::new(), String::new(), "Unknown"));
+            .map(|d| (d.address.clone(), d.context.cni_type.name()))
+            .unwrap_or_else(|| (String::new(), "Unknown"));
 
-        // Header
-        let header_text = format!(" Diagnostics: {hostname} ({address}) [{cni_label}] ");
+        // The window title names the view and node
+        let header_text = format!(" {address} · CNI {cni_label} ");
         let header = Paragraph::new(header_text)
             .style(Style::default().add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::BOTTOM));

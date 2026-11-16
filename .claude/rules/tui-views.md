@@ -125,6 +125,16 @@ What each view shows per target:
   (clearing a filter first).
 - `/` filters lists or searches text; `r` refreshes. Views have no tab bars:
   each mode is its own menu entry, and `Tab` always moves between windows.
+- The app's window title already names the view and its target ("Network ·
+  bc1", "GitOps (all clusters)"). A view's own header line or box title
+  adds only what that title lacks (an address, counts, status), never the
+  view's name or the target again.
+- No boxes inside the window: the window frames the view. A list view is
+  a summary line over a rule (`Borders::BOTTOM`), the table, and details
+  under a rule (`Borders::TOP`), as Volumes and Workloads do. Sections are
+  heading lines in one list (Diagnostics, Security) or rules that name them
+  (`Borders::TOP` with a title, Lifecycle). Boxes are for dialogs and
+  popups, and for panes shown side by side (a diff).
 - Clicks: every view gets left clicks through `handle_mouse_event`; a click
   on a row selects it (a double-click arrives as `Enter`). Record rows with
   `ui_ext::RowHits::new(area, bordered, header_lines, state.offset(), rows)`

@@ -1890,7 +1890,7 @@ impl App {
                 let mut load = false;
                 tracing::info!("ShowProcesses: '{}' ({} node(s))", title, nodes.len());
 
-                let mut processes = ProcessesComponent::new(title, nodes);
+                let mut processes = ProcessesComponent::new(nodes);
                 processes.set_sort_by(self.settings.processes_sort);
                 processes.set_node_basics(|n| self.cluster.node_basics(n));
                 match self.cluster.client() {
@@ -2425,7 +2425,7 @@ mod tests {
     }
 
     fn processes(sort: crate::components::processes::SortBy) -> ViewComponent {
-        let mut p = ProcessesComponent::new("bc1".to_string(), Vec::new());
+        let mut p = ProcessesComponent::new(Vec::new());
         p.set_sort_by(sort);
         ViewComponent::Processes(Box::new(p))
     }

@@ -97,18 +97,27 @@ fn selected_row() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Table title, naming a failed read
-fn table_title(name: &str, error: Option<&str>) -> Line<'static> {
-    match error {
-        None => Line::styled(format!(" {name} "), Style::default().fg(Color::Cyan)),
-        Some(e) => Line::from(vec![
-            Span::styled(format!(" {name} "), Style::default().fg(Color::Cyan)),
-            Span::styled(
-                format!("· read failed: {e} "),
-                Style::default().fg(Color::Red),
-            ),
-        ]),
+/// The line over a table: what it holds, and a failed read in red
+fn summary(what: String, error: Option<&str>) -> Line<'static> {
+    let mut spans = vec![Span::raw(what)];
+    if let Some(e) = error {
+        spans.push(Span::styled(
+            format!("  read failed: {e}"),
+            Style::default().fg(Color::Red),
+        ));
     }
+    Line::from(spans)
+}
+
+/// Summary line over a rule, the table, and the details under a rule: the
+/// window frames the view, so nothing inside gets a box of its own
+fn split(area: Rect) -> [Rect; 3] {
+    Layout::vertical([
+        Constraint::Length(2), // Summary and its rule
+        Constraint::Min(3),    // Table
+        Constraint::Length(4), // Rule and details
+    ])
+    .areas(area)
 }
 
 /// Storage component for viewing disk and volume information
@@ -304,11 +313,7 @@ impl StorageComponent {
 
     /// Draw the disks view
     fn draw_disks_view(&mut self, frame: &mut Frame, area: Rect) {
-        let [table_area, detail_area] = Layout::vertical([
-            Constraint::Min(5),    // Table
-            Constraint::Length(5), // Detail section
-        ])
-        .areas(area);
+        let [summary_area, table_area, detail_area] = split(area);
 
         let disks = self.visible_disks();
         let hidden = self
@@ -367,25 +372,33 @@ impl StorageComponent {
             widths.push(Constraint::Length(4));
         }
         widths.extend([Constraint::Length(12), Constraint::Min(20)]);
-        let title = if hidden > 0 {
-            format!("Disks · {hidden} virtual hidden")
+        // The window title names the view; the box says what it hides
+        let what = if hidden > 0 {
+            format!(
+                "{} disks · {hidden} virtual hidden  <A> shows them",
+                disks.len()
+            )
         } else {
-            "Disks".to_string()
+            format!("{} disks", disks.len())
         };
+        frame.render_widget(
+            Paragraph::new(summary(
+                what,
+                self.data().and_then(|d| d.disks_error.as_deref()),
+            ))
+            .block(Block::default().borders(Borders::BOTTOM)),
+            summary_area,
+        );
 
         let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
-            .block(Block::default().borders(Borders::ALL).title(table_title(
-                &title,
-                self.data().and_then(|d| d.disks_error.as_deref()),
-            )))
             .row_highlight_style(selected_row());
 
         frame.render_stateful_widget(table, table_area, &mut self.disk_table_state);
         self.rows = crate::ui_ext::RowHits::new(
             table_area,
-            true,
+            false,
             1,
             self.disk_table_state.offset(),
             row_count,
@@ -397,10 +410,7 @@ impl StorageComponent {
 
     /// Draw disk detail section
     fn draw_disk_detail(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Details ")
-            .title_style(Style::default().fg(Color::Yellow));
+        let block = Block::default().borders(Borders::TOP);
 
         let content = if self.data().is_some() {
             if let Some(disk) = self
@@ -455,11 +465,16 @@ impl StorageComponent {
 
     /// Draw the volumes view
     fn draw_volumes_view(&mut self, frame: &mut Frame, area: Rect) {
-        let [table_area, detail_area] = Layout::vertical([
-            Constraint::Min(5),    // Table
-            Constraint::Length(5), // Detail section
-        ])
-        .areas(area);
+        let [summary_area, table_area, detail_area] = split(area);
+        let count = self.data().map_or(0, |d| d.volumes.len());
+        frame.render_widget(
+            Paragraph::new(summary(
+                format!("{count} partitions"),
+                self.data().and_then(|d| d.volumes_error.as_deref()),
+            ))
+            .block(Block::default().borders(Borders::BOTTOM)),
+            summary_area,
+        );
 
         // Draw volume table
         let header = Row::new(vec![
@@ -514,16 +529,12 @@ impl StorageComponent {
         let row_count = rows.len();
         let table = Table::new(rows, widths)
             .header(header)
-            .block(Block::default().borders(Borders::ALL).title(table_title(
-                "Partitions",
-                self.data().and_then(|d| d.volumes_error.as_deref()),
-            )))
             .row_highlight_style(selected_row());
 
         frame.render_stateful_widget(table, table_area, &mut self.volume_table_state);
         self.rows = crate::ui_ext::RowHits::new(
             table_area,
-            true,
+            false,
             1,
             self.volume_table_state.offset(),
             row_count,
@@ -535,10 +546,7 @@ impl StorageComponent {
 
     /// Draw volume detail section
     fn draw_volume_detail(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Details ")
-            .title_style(Style::default().fg(Color::Yellow));
+        let block = Block::default().borders(Borders::TOP);
 
         let content = if let Some(data) = self.data() {
             if let Some(vol) = data.volumes.get(self.selected_volume_index()) {
@@ -791,9 +799,9 @@ mod tests {
     }
 
     #[test]
-    fn failed_read_is_named_in_the_title() {
-        let title = table_title("Disks", Some("timed out after 10s"));
-        let text: String = title.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, " Disks · read failed: timed out after 10s ");
+    fn failed_read_is_named_in_the_summary() {
+        let line = summary("2 disks".into(), Some("timed out after 10s"));
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "2 disks  read failed: timed out after 10s");
     }
 }

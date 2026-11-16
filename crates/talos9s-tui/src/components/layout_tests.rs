@@ -45,13 +45,10 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
         ),
         (
             "processes",
-            Box::new(ProcessesComponent::new(
-                "bc1".into(),
-                vec![ProcessNode {
-                    hostname: h.clone(),
-                    address: a.clone(),
-                }],
-            )),
+            Box::new(ProcessesComponent::new(vec![ProcessNode {
+                hostname: h.clone(),
+                address: a.clone(),
+            }])),
         ),
         (
             "containers",

@@ -1091,8 +1091,15 @@ impl KubernetesComponent {
     // ---- drawing ----
 
     fn summary_line(&self) -> Line<'static> {
+        // GitOps is the window's title already; the other lists name
+        // what they show (Problems, a kind, a search)
+        let title = if matches!(self.mode, Mode::GitOps) {
+            String::new()
+        } else {
+            format!("{}  ", self.mode.title())
+        };
         let mut spans = vec![Span::styled(
-            format!("{}  ", self.mode.title()),
+            title,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
