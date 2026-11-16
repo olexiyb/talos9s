@@ -2138,7 +2138,7 @@ mod tests {
                      "uid": "2", "controller": true},
                 ],
             },
-            "spec": {"nodeName": "bc3", "containers": []},
+            "spec": {"nodeName": "lab3", "containers": []},
             "status": {
                 "phase": "Running",
                 "conditions": [{"type": "Ready", "status": "False"}],
@@ -2152,7 +2152,7 @@ mod tests {
         }));
         let facts = pod_facts(&pod);
         assert_eq!(facts.namespace, "apps");
-        assert_eq!(facts.node.as_deref(), Some("bc3"));
+        assert_eq!(facts.node.as_deref(), Some("lab3"));
         assert!(!facts.ready);
         assert!(facts.job_owned);
         // The controller, not the first owner
@@ -2426,7 +2426,7 @@ mod tests {
             d.all_pods = Some(vec![PodFacts {
                 namespace: "apps".into(),
                 name: "web-0".into(),
-                node: Some("bc1".into()),
+                node: Some("lab1".into()),
                 phase: Some("Running".into()),
                 ready: true,
                 ..Default::default()
@@ -2510,7 +2510,7 @@ mod tests {
                 here: None,
                 pod_nodes: PodNodes::Unknown,
             }],
-            all_pods: Some(vec![pod("db-0", "bc1", true), pod("db-1", "bc3", false)]),
+            all_pods: Some(vec![pod("db-0", "lab1", true), pod("db-1", "lab3", false)]),
             ..Default::default()
         });
         let Some((lines, commands)) = c.detail() else {
@@ -2524,7 +2524,7 @@ mod tests {
         press(&mut c, KeyCode::Enter);
         let rows = c.list_rows();
         assert!(
-            matches!(rows[1], ListRow::Member(p) if p.name == "db-1" && p.node.as_deref() == Some("bc3"))
+            matches!(rows[1], ListRow::Member(p) if p.name == "db-1" && p.node.as_deref() == Some("lab3"))
         );
         assert!(matches!(rows[2], ListRow::Member(p) if p.name == "db-0"));
     }

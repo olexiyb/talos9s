@@ -1274,13 +1274,13 @@ mod tests {
              type: MachineConfigs.config.talos.dev\n    id: v1alpha1\n    version: 4\n    \
              updated: 2026-10-31T07:25:48Z\nspec: |\n{}",
             config(persistent_hostname),
-            config("bc1")
+            config("lab1")
         )
     }
 
     #[test]
     fn parses_active_machine_config_and_staged_change() {
-        let config = super::parse_machine_config_text(&machine_config_output("bc1")).unwrap();
+        let config = super::parse_machine_config_text(&machine_config_output("lab1")).unwrap();
         assert_eq!(config.version, "4");
         assert_eq!(config.updated.as_deref(), Some("2026-10-31T07:25:48Z"));
         assert!(config.active.starts_with("version: v1alpha1\n"));
@@ -1378,24 +1378,24 @@ metadata:
     type: EtcdSpecs.etcd.talos.dev
     id: etcd
 spec:
-    name: kpc3
+    name: prod-cp3
     advertisedAddresses:
         - 100.100.0.6
     listenPeerAddresses:
         - 100.100.0.6
-        - 116.202.55.89
+        - 198.51.100.50
     listenClientAddresses:
         - 127.0.0.1
         - 100.100.0.6
-        - 116.202.55.89
+        - 198.51.100.50
     image: registry.k8s.io/etcd:v3.7.2
 ";
         let spec = parse_etcd_spec_yaml(yaml).unwrap();
         assert_eq!(spec.advertised, ["100.100.0.6"]);
-        assert_eq!(spec.listen_peer, ["100.100.0.6", "116.202.55.89"]);
+        assert_eq!(spec.listen_peer, ["100.100.0.6", "198.51.100.50"]);
         assert_eq!(
             spec.listen_client,
-            ["127.0.0.1", "100.100.0.6", "116.202.55.89"]
+            ["127.0.0.1", "100.100.0.6", "198.51.100.50"]
         );
         assert!(parse_etcd_spec_yaml("").is_err());
     }
@@ -1408,12 +1408,12 @@ spec:
         let addresses = "\
 spec:\n    address: 100.64.0.14/32\n    linkName: tailscale0\n---
 spec:\n    address: fe80::89ef:d775:4055:c2da/64\n    linkName: tailscale0\n---
-spec:\n    address: 37.27.227.99/26\n    linkName: enp0s31f6\n";
+spec:\n    address: 203.0.113.10/26\n    linkName: enp0s31f6\n";
         let routes = "\
 spec:\n    dst: 100.64.0.20/32\n    outLinkName: tailscale0\n    table: \"52\"\n---
 spec:\n    dst: fd7a:115c:a1e0::14/128\n    outLinkName: tailscale0\n---
 spec:\n    dst: 10.107.0.0/16\n    outLinkName: tailscale0\n---
-spec:\n    dst: \"\"\n    gateway: 37.27.227.65\n    outLinkName: enp0s31f6\n";
+spec:\n    dst: \"\"\n    gateway: 203.0.113.1\n    outLinkName: enp0s31f6\n";
         let ts = parse_tailscale_link(link, addresses, routes).unwrap();
         assert!(ts.up);
         assert_eq!(ts.mtu, Some(1280));
@@ -1768,16 +1768,16 @@ spec:
 
     #[test]
     fn members_args_pin_endpoint_to_node() {
-        let args = members_command_args("kprod", Some("5.9.183.236"), "5.9.183.236", None);
+        let args = members_command_args("prod", Some("198.51.100.40"), "198.51.100.40", None);
         assert_eq!(
             args,
             vec![
                 "--context",
-                "kprod",
+                "prod",
                 "-e",
-                "5.9.183.236",
+                "198.51.100.40",
                 "-n",
-                "5.9.183.236",
+                "198.51.100.40",
                 "get",
                 "members",
                 "-o",
@@ -1966,7 +1966,7 @@ spec:
         );
     }
 
-    /// The pod networks of a real node: `TALOS9S_LIVE_CONTEXT=bc
+    /// The pod networks of a real node: `TALOS9S_LIVE_CONTEXT=lab
     /// TALOS9S_LIVE_NODES=<ip> cargo test live_pod_subnets -- --ignored --nocapture`.
     /// Prints only the subnets, never the config.
     #[tokio::test]

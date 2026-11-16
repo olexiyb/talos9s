@@ -361,7 +361,7 @@ mod tests {
         c.options.timeout_secs = None;
         c.options.grace_period_secs = Some(30);
         c.between = Duration::from_secs(60);
-        let back = DrainChoice::from_state(&c.to_state("bc"));
+        let back = DrainChoice::from_state(&c.to_state("lab"));
         assert!(!back.options.force);
         assert!(!back.options.delete_emptydir_data);
         assert_eq!(back.options.timeout_secs, None);

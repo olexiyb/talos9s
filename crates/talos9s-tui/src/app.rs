@@ -2586,7 +2586,7 @@ mod tests {
         assert!(matches!(app.component, Some(ViewComponent::Etcd(_))));
 
         // Streams and the network view refresh on their own
-        let network = NetworkStatsComponent::new("bc1".to_string(), "10.0.0.1".to_string());
+        let network = NetworkStatsComponent::new("lab1".to_string(), "10.0.0.1".to_string());
         assert!(
             ViewComponent::Network(Box::new(network))
                 .spawn_refresh()
@@ -2600,18 +2600,18 @@ mod tests {
         let delay = Duration::from_millis(300);
         let ms = |n| t0 + Duration::from_millis(n);
         // A new selection waits
-        let (pending, due) = follow_step(None, "bc/bc1".into(), t0, delay);
+        let (pending, due) = follow_step(None, "lab/lab1".into(), t0, delay);
         assert!(!due);
-        assert_eq!(pending, Some(("bc/bc1".to_string(), ms(300))));
+        assert_eq!(pending, Some(("lab/lab1".to_string(), ms(300))));
         // Still the same, not long enough
-        let (pending, due) = follow_step(pending, "bc/bc1".into(), ms(299), delay);
+        let (pending, due) = follow_step(pending, "lab/lab1".into(), ms(299), delay);
         assert!(!due && pending.is_some());
         // Moving on restarts the wait for the new one
-        let (pending, due) = follow_step(pending, "bc/bc2".into(), ms(299), delay);
+        let (pending, due) = follow_step(pending, "lab/lab2".into(), ms(299), delay);
         assert!(!due);
-        assert_eq!(pending, Some(("bc/bc2".to_string(), ms(599))));
+        assert_eq!(pending, Some(("lab/lab2".to_string(), ms(599))));
         // Rested: shown, nothing pending
-        let (pending, due) = follow_step(pending, "bc/bc2".into(), ms(599), delay);
+        let (pending, due) = follow_step(pending, "lab/lab2".into(), ms(599), delay);
         assert!(due && pending.is_none());
     }
 

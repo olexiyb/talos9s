@@ -32,13 +32,13 @@ cargo clippy --all --all-targets -- -D warnings      # must be clean
 cargo fmt --all -- --check                           # must be clean
 cargo build -p talos-rs --features regenerate        # only after changing crates/talos-rs/proto/ (needs protoc); commit src/generated
 cargo install --path . --locked                      # installs the `talos9s` binary
-TALOS9S_CONTEXT=bc cargo dev                         # run, rebuild and restart on every source change (cargo-watch)
+TALOS9S_CONTEXT=lab cargo dev                         # run, rebuild and restart on every source change (cargo-watch)
 lefthook install                                     # git hooks: fmt on commit, clippy + tests on push (lefthook.yml)
 cargo deny check                                     # dependency advisories, licenses, sources (deny.toml; a CI job)
 ```
 
 Live tests against real clusters are `#[ignore]`d and read
-`TALOS9S_LIVE_CONTEXT` (e.g. `TALOS9S_LIVE_CONTEXT=bc cargo test live_scan -- --ignored --nocapture`).
+`TALOS9S_LIVE_CONTEXT` (e.g. `TALOS9S_LIVE_CONTEXT=lab cargo test live_scan -- --ignored --nocapture`).
 
 ## Principles
 
@@ -62,6 +62,15 @@ Live tests against real clusters are `#[ignore]`d and read
 - **Never show secrets.** Anything that may hold them (machine config, Secret
   manifests) is masked before it is stored or drawn. Never print secrets in
   logs or tool output.
+- **No personal or infrastructure details anywhere in the repo.** The repo is
+  public. Code, tests, fixtures, comments, docs, plans, the changelog and
+  commit messages use placeholders: documentation IPs (`192.0.2.x`,
+  `198.51.100.x`, `203.0.113.x`) or private ranges, generic cluster and node
+  names (`lab`, `prod`, `lab1`, `prod-cp1`, `prod-w1`), `example.com`, `acme`.
+  Never real cluster, node or host names, public addresses, hosting
+  providers, organization or namespace names, emails, usernames or local
+  paths; describe live tests without them ("on a 4-node cluster"). Real
+  values stay in `CLAUDE.local.md`, which is not committed.
 - **COSI is not reachable on `:50000`.** A gRPC COSI client gets
   `PermissionDenied`; read resources with `talosctl get` (talos-rs `talosctl.rs`).
 - **Never use the cluster VIP for the Talos API.** Address nodes directly; the

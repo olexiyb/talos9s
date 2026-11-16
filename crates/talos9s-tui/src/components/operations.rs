@@ -71,7 +71,7 @@ enum Dialog {
 
 pub struct OperationsComponent {
     context: String,
-    /// What the target is called: a node, `bc control plane`, `bc`
+    /// What the target is called: a node, `lab control plane`, `lab`
     target: String,
     nodes: Vec<OpNode>,
     group: bool,
@@ -543,7 +543,7 @@ impl OperationsComponent {
     }
 
     /// What the run is on: the group when all its nodes are checked, else
-    /// the nodes (a run on bc1 from the cluster is "bc1", not "bc")
+    /// the nodes (a run on lab1 from the cluster is "lab1", not "lab")
     fn run_target(&self, nodes: &[OpNode]) -> String {
         if nodes.len() == self.nodes.len() {
             self.target.clone()
@@ -2124,16 +2124,16 @@ mod tests {
     fn with_history(dir: &std::path::Path) {
         std::fs::create_dir_all(dir).unwrap();
         for (i, (ctx, op, status)) in [
-            ("bc", "Drain", RunStatus::Ok),
-            ("kprod", "Reboot", RunStatus::Failed),
+            ("lab", "Drain", RunStatus::Ok),
+            ("prod", "Reboot", RunStatus::Failed),
         ]
         .into_iter()
         .enumerate()
         {
             let started =
                 chrono::Utc::now() - chrono::Duration::hours(i64::try_from(i).unwrap() + 1);
-            // The bc run was on bc1, the kprod one on another node
-            let n = if ctx == "bc" { "bc1" } else { "n1" };
+            // The lab run was on lab1, the prod one on another node
+            let n = if ctx == "lab" { "lab1" } else { "n1" };
             let h = RunHeader {
                 context: ctx.into(),
                 target: n.into(),
@@ -2154,12 +2154,12 @@ mod tests {
 
     fn component(dir: &std::path::Path, group: bool) -> OperationsComponent {
         let mut c = OperationsComponent::new(
-            "bc".into(),
-            if group { "bc".into() } else { "bc1".into() },
+            "lab".into(),
+            if group { "lab".into() } else { "lab1".into() },
             if group {
-                vec![node("bc1"), node("bc2")]
+                vec![node("lab1"), node("lab2")]
             } else {
-                vec![node("bc1")]
+                vec![node("lab1")]
             },
             group,
             Arc::default(),
@@ -2182,7 +2182,7 @@ mod tests {
         c.reload();
         assert_eq!(c.ops().len(), 5);
         // On a node: its own runs; `A` shows every run
-        assert_eq!(c.history_rows().len(), 1, "bc1's runs only");
+        assert_eq!(c.history_rows().len(), 1, "lab1's runs only");
         press(&mut c, KeyCode::Char('A'));
         assert_eq!(c.history_rows().len(), 2);
         // On a group: every run; `A` this cluster's
@@ -2207,9 +2207,9 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(screen.contains("Run on bc1"));
+        assert!(screen.contains("Run on lab1"));
         assert!(screen.contains("[ Cordon"));
-        assert!(screen.contains("[✓]bc1") || screen.contains("[✓] bc1"));
+        assert!(screen.contains("[✓]lab1") || screen.contains("[✓] lab1"));
         assert!(screen.contains("failed"));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2252,7 +2252,7 @@ mod tests {
         press(&mut c, KeyCode::Char('j'));
         press(&mut c, KeyCode::Char(' '));
         assert_eq!(c.picked, [true, false]);
-        assert_eq!(c.run_target(&c.checked_nodes()), "bc1");
+        assert_eq!(c.run_target(&c.checked_nodes()), "lab1");
         press(&mut c, KeyCode::Enter);
         let Some(Dialog::Start { kind, nodes, .. }) = &c.dialog else {
             panic!("no dialog");
@@ -2286,7 +2286,7 @@ mod tests {
         press(&mut c, KeyCode::Char('j'));
         press(&mut c, KeyCode::Char(' '));
         assert_eq!(c.picked, [true]);
-        assert_eq!(c.run_target(&c.checked_nodes()), "bc1");
+        assert_eq!(c.run_target(&c.checked_nodes()), "lab1");
         press(&mut c, KeyCode::Enter);
         assert!(matches!(c.dialog, Some(Dialog::Start { .. })));
         press(&mut c, KeyCode::Esc);
@@ -2308,9 +2308,9 @@ mod tests {
             }),
             pods: Some(7),
         };
-        c.facts.insert("bc1".into(), state(true));
-        c.facts.insert("bc2".into(), state(false));
-        // Cordon: "all nodes" checks bc2 only, Space on bc1 says why
+        c.facts.insert("lab1".into(), state(true));
+        c.facts.insert("lab2".into(), state(false));
+        // Cordon: "all nodes" checks lab2 only, Space on lab1 says why
         press(&mut c, KeyCode::Char('j'));
         press(&mut c, KeyCode::Char(' '));
         assert_eq!(c.picked, [false, true]);
@@ -2322,7 +2322,7 @@ mod tests {
                 .as_deref()
                 .is_some_and(|m| m.contains("already cordoned"))
         );
-        // Uncordon: bc2 no longer fits and is unchecked
+        // Uncordon: lab2 no longer fits and is unchecked
         c.kind = 1;
         c.drop_blocked();
         assert_eq!(c.picked, [false, false]);

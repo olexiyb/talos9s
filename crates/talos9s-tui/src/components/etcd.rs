@@ -1340,54 +1340,54 @@ mod tests {
     fn reads_addresses_from_the_etcd_command_line() {
         let flags = EtcdFlags::parse(
             "/usr/local/bin/etcd --advertise-client-urls=https://100.100.0.6:2379 \
-             --listen-client-urls=https://127.0.0.1:2379,https://100.100.0.6:2379,https://116.202.55.89:2379 \
+             --listen-client-urls=https://127.0.0.1:2379,https://100.100.0.6:2379,https://198.51.100.50:2379 \
              --listen-client-http-urls=https://127.0.0.1:2383 \
-             --listen-peer-urls=https://100.100.0.6:2380,https://[fd00::6]:2380 --name=kpc3",
+             --listen-peer-urls=https://100.100.0.6:2380,https://[fd00::6]:2380 --name=prod-cp3",
         );
         assert_eq!(flags.advertise_client, ["100.100.0.6"]);
         assert_eq!(
             flags.listen_client,
-            ["127.0.0.1", "100.100.0.6", "116.202.55.89"]
+            ["127.0.0.1", "100.100.0.6", "198.51.100.50"]
         );
         assert_eq!(flags.listen_peer, ["100.100.0.6", "fd00::6"]);
     }
 
     #[test]
     fn lists_addresses_without_loopback() {
-        let client = hosts(&["127.0.0.1", "100.100.0.6", "116.202.55.89"]);
-        assert_eq!(address_list(&client), "100.100.0.6, 116.202.55.89");
+        let client = hosts(&["127.0.0.1", "100.100.0.6", "198.51.100.50"]);
+        assert_eq!(address_list(&client), "100.100.0.6, 198.51.100.50");
         assert_eq!(address_list(&hosts(&["127.0.0.1"])), "-");
         assert_eq!(
-            first_host(&hosts(&["https://116.202.55.89:2380"])).as_deref(),
-            Some("116.202.55.89")
+            first_host(&hosts(&["https://198.51.100.50:2380"])).as_deref(),
+            Some("198.51.100.50")
         );
     }
 
     #[test]
     fn checks_addresses_against_the_config() {
-        // kpc3: config moved to the public address, peer URL already
+        // prod-cp3: config moved to the public address, peer URL already
         // updated, etcd not restarted yet
-        let mut m = member("kpc3", 6, 6, 0, 0, (1, 1));
-        m.info.peer_urls = vec!["https://116.202.55.89:2380".to_string()];
+        let mut m = member("prod-cp3", 6, 6, 0, 0, (1, 1));
+        m.info.peer_urls = vec!["https://198.51.100.50:2380".to_string()];
         m.info.client_urls = vec!["https://10.0.0.6:2379".to_string()];
-        let both = hosts(&["116.202.55.89", "10.0.0.6"]);
+        let both = hosts(&["198.51.100.50", "10.0.0.6"]);
         m.spec = Some(EtcdSpecInfo {
-            advertised: hosts(&["116.202.55.89"]),
+            advertised: hosts(&["198.51.100.50"]),
             listen_peer: both.clone(),
             listen_client: [hosts(&["127.0.0.1"]), both.clone()].concat(),
         });
         // Not fetched yet: nothing to say
-        assert_eq!(address_check(&member("kpc1", 1, 1, 0, 0, (1, 1))), None);
+        assert_eq!(address_check(&member("prod-cp1", 1, 1, 0, 0, (1, 1))), None);
 
         m.running = Some(EtcdFlags {
             advertise_client: hosts(&["10.0.0.6"]),
-            listen_peer: hosts(&["10.0.0.6", "116.202.55.89"]),
-            listen_client: hosts(&["127.0.0.1", "10.0.0.6", "116.202.55.89"]),
+            listen_peer: hosts(&["10.0.0.6", "198.51.100.50"]),
+            listen_client: hosts(&["127.0.0.1", "10.0.0.6", "198.51.100.50"]),
         });
         assert_eq!(
             address_check(&m).as_deref(),
             Some(
-                "kpc3: etcd advertises 10.0.0.6 (config: 116.202.55.89); the config \
+                "prod-cp3: etcd advertises 10.0.0.6 (config: 198.51.100.50); the config \
                  applies when etcd restarts"
             )
         );
@@ -1395,20 +1395,20 @@ mod tests {
         // Restarted with the config, but the member list kept the old
         // client URL
         m.running = Some(EtcdFlags {
-            advertise_client: hosts(&["116.202.55.89"]),
+            advertise_client: hosts(&["198.51.100.50"]),
             listen_peer: both.clone(),
             listen_client: [hosts(&["127.0.0.1"]), both].concat(),
         });
         assert_eq!(
             address_check(&m).as_deref(),
             Some(
-                "kpc3: config advertises 116.202.55.89 but the member list has client URL 10.0.0.6"
+                "prod-cp3: config advertises 198.51.100.50 but the member list has client URL 10.0.0.6"
             )
         );
         assert!(member_checks(&[m.clone()]).iter().any(|c| !c.error));
 
         // Done
-        m.info.client_urls = vec!["https://116.202.55.89:2379".to_string()];
+        m.info.client_urls = vec!["https://198.51.100.50:2379".to_string()];
         assert_eq!(address_check(&m), None);
     }
 
@@ -1493,14 +1493,14 @@ mod tests {
     #[test]
     fn lists_member_errors() {
         let mut members = vec![
-            member("bc1", 1, 1, 100, 100, (5, 5)),
-            member("bc2", 2, 1, 100, 100, (5, 5)),
+            member("lab1", 1, 1, 100, 100, (5, 5)),
+            member("lab2", 2, 1, 100, 100, (5, 5)),
         ];
         members[1].status.as_mut().unwrap().errors = vec!["NOSPACE".to_string()];
-        assert_eq!(member_errors(&members), ["bc2: NOSPACE"]);
+        assert_eq!(member_errors(&members), ["lab2: NOSPACE"]);
     }
 
-    /// `TALOS9S_LIVE_CONTEXT=bc cargo test --lib live_etcd_checks -- --ignored --nocapture`
+    /// `TALOS9S_LIVE_CONTEXT=lab cargo test --lib live_etcd_checks -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
     async fn live_etcd_checks() {
@@ -1542,7 +1542,7 @@ mod tests {
             member("cp3", 3, 1, 60 * MIB, 10 * MIB, (5_000, 5_000)),
         ];
         assert_eq!(member_checks(&members), Vec::new());
-        assert!(defrag_commands(&members, Some("bc")).is_empty());
+        assert!(defrag_commands(&members, Some("lab")).is_empty());
     }
 
     #[test]
@@ -1582,10 +1582,10 @@ mod tests {
 
         // Followers first, the leader last
         assert_eq!(
-            defrag_commands(&members, Some("bc")),
+            defrag_commands(&members, Some("lab")),
             [
-                "talosctl --context bc -n 10.0.0.2 etcd defrag",
-                "talosctl --context bc -n 10.0.0.1 etcd defrag",
+                "talosctl --context lab -n 10.0.0.2 etcd defrag",
+                "talosctl --context lab -n 10.0.0.1 etcd defrag",
             ]
         );
     }

@@ -423,7 +423,7 @@ mod tests {
         }
     }
 
-    /// The two setups Talos documents pass: kprod (tunnel) and bc (native
+    /// The two setups Talos documents pass: prod (tunnel) and lab (native
     /// routing with legacy host routing and pod networks over KubeSpan)
     #[test]
     fn documented_setups_pass() {

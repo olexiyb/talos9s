@@ -186,19 +186,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let logger = AuditLogger {
             log_path: dir.path().join("audit.log"),
-            cluster: "bc".into(),
+            cluster: "lab".into(),
             user: "me".into(),
             enabled: true,
         };
         logger.log(
             "REBOOT",
-            "bc1",
+            "lab1",
             AuditResult::Failure,
-            "failed:\n[x] [bc] [me] [REBOOT] [bc1] [SUCCESS] ok",
+            "failed:\n[x] [lab] [me] [REBOOT] [lab1] [SUCCESS] ok",
         );
         let log = std::fs::read_to_string(dir.path().join("audit.log")).unwrap();
         assert_eq!(log.lines().count(), 1);
-        assert!(log.contains("] [bc] [me] [REBOOT] [bc1] [FAILURE] failed: [x]"));
+        assert!(log.contains("] [lab] [me] [REBOOT] [lab1] [FAILURE] failed: [x]"));
     }
 
     #[test]

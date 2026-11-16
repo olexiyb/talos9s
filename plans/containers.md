@@ -48,19 +48,19 @@ Today (`components/node_info.rs`, the Containers tab):
 ## Layout
 
 ```
-┌ Containers · bc (containerd, no Kubernetes API needed) ──────────── <W> ──┐
-│ 4 nodes · 212 running · 3 exited · 1 other · bc4: timed out after 10s       │
+┌ Containers · lab (containerd, no Kubernetes API needed) ──────────── <W> ──┐
+│ 4 nodes · 212 running · 3 exited · 1 other · lab4: timed out after 10s       │
 │   NODE  NAMESPACE    POD             CONTAINER     IMAGE          PID STATUS│
-│ ● bc1   system                       apid          ghcr.io/sidero 1203 RUNN.│
-│ ● bc1   kube-system  cilium-7xk2p    cilium-agent  quay.io/cil..  2210 RUNN.│
-│ ● bc2   web          gateway-7f9c-x2 gateway       reg/gateway    3301 RUNN.│
+│ ● lab1   system                       apid          ghcr.io/sidero 1203 RUNN.│
+│ ● lab1   kube-system  cilium-7xk2p    cilium-agent  quay.io/cil..  2210 RUNN.│
+│ ● lab2   web          gateway-7f9c-x2 gateway       reg/gateway    3301 RUNN.│
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Summary line
 
 Nodes read, running / exited / other counts, and each failed node's error
-("bc4: timed out after 10s"). Kubernetes containers missing on a node
+("lab4: timed out after 10s"). Kubernetes containers missing on a node
 without kubelet only notes it. The warp hint at the right end.
 
 ### The list
@@ -155,8 +155,8 @@ Each step works on its own; 1–2 already answer "where does it run".
 
 - Unit tests: grouping (a pod with an init and a main container, a system
   service, a sandbox without containers), sort, filter, warp.
-- Live on bc (read-only): node, control plane group, cluster; compare with
-  `talosctl -n bc1 containers -k`. A node made unreachable (wrong address in
+- Live on lab (read-only): node, control plane group, cluster; compare with
+  `talosctl -n lab1 containers -k`. A node made unreachable (wrong address in
   a test talosconfig) shows its error and the others load.
 - Logs: a system service and a pod container, compared with `talosctl logs`.
 - Layout tests at 70-120 columns.

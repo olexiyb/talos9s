@@ -382,7 +382,7 @@ mod tests {
             "not a node",
             {"name": 7, "type": "SATELLITE"},
             {
-                "name": "bc1",
+                "name": "lab1",
                 "type": 5,
                 "connection_status": null,
                 "flags": ["EVICTED", 3],
@@ -394,19 +394,19 @@ mod tests {
             }
         ]);
         let pools = json!([
-            {"node_name": "bc1", "storage_pool_name": "datapool",
+            {"node_name": "lab1", "storage_pool_name": "datapool",
              "free_capacity": "300", "total_capacity": 400, "reports": "none"},
-            {"node_name": "bc1"},
+            {"node_name": "lab1"},
             42
         ]);
         let nodes = nodes_from(&json, Some(&pools));
         assert_eq!(nodes.len(), 1);
-        let bc1 = &nodes[0];
-        assert_eq!(bc1.node_type, "?");
-        assert_eq!(bc1.state, "UNKNOWN");
-        assert_eq!(bc1.flags, ["EVICTED"]);
-        assert_eq!(bc1.addresses, ["10.0.0.1"]);
-        let pools = bc1.pools.as_ref().unwrap();
+        let lab1 = &nodes[0];
+        assert_eq!(lab1.node_type, "?");
+        assert_eq!(lab1.state, "UNKNOWN");
+        assert_eq!(lab1.flags, ["EVICTED"]);
+        assert_eq!(lab1.addresses, ["10.0.0.1"]);
+        let pools = lab1.pools.as_ref().unwrap();
         assert_eq!(pools.len(), 1);
         assert_eq!(pools[0].provider, "?");
         assert_eq!((pools[0].free, pools[0].total), (None, Some(400 * 1024)));
@@ -418,24 +418,24 @@ mod tests {
 
     #[test]
     fn attaches_storage_pools_without_diskless() {
-        let nodes = json!([{"name": "bc1", "connection_status": "ONLINE"}, {"name": "bc2"}]);
+        let nodes = json!([{"name": "lab1", "connection_status": "ONLINE"}, {"name": "lab2"}]);
         let pools = json!([
-            {"node_name": "bc1", "storage_pool_name": "datapool", "provider_kind": "ZFS_THIN",
+            {"node_name": "lab1", "storage_pool_name": "datapool", "provider_kind": "ZFS_THIN",
              "free_capacity": 300, "total_capacity": 400},
-            {"node_name": "bc1", "storage_pool_name": "DfltDisklessStorPool",
+            {"node_name": "lab1", "storage_pool_name": "DfltDisklessStorPool",
              "provider_kind": "DISKLESS", "free_capacity": 9223372036854775807u64},
-            {"node_name": "bc2", "storage_pool_name": "datapool", "provider_kind": "ZFS_THIN",
+            {"node_name": "lab2", "storage_pool_name": "datapool", "provider_kind": "ZFS_THIN",
              "reports": [{"ret_code": -4611686018427387904i64, "message": "no space"}]}
         ]);
         let nodes = nodes_from(&nodes, Some(&pools));
-        let bc1 = nodes[0].pools.as_ref().unwrap();
-        assert_eq!(bc1.len(), 1);
-        assert_eq!(bc1[0].free, Some(300 * 1024));
-        assert_eq!(bc1[0].used_pct(), Some(25.0));
-        assert!(!bc1[0].has_problems);
-        let bc2 = nodes[1].pools.as_ref().unwrap();
-        assert!(bc2[0].has_problems);
-        assert_eq!(bc2[0].used_pct(), None);
+        let lab1 = nodes[0].pools.as_ref().unwrap();
+        assert_eq!(lab1.len(), 1);
+        assert_eq!(lab1[0].free, Some(300 * 1024));
+        assert_eq!(lab1[0].used_pct(), Some(25.0));
+        assert!(!lab1[0].has_problems);
+        let lab2 = nodes[1].pools.as_ref().unwrap();
+        assert!(lab2[0].has_problems);
+        assert_eq!(lab2[0].used_pct(), None);
     }
 
     #[test]

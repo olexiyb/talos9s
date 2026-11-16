@@ -126,7 +126,7 @@ What each view shows per target:
 - `/` filters lists or searches text; `r` refreshes. Views have no tab bars:
   each mode is its own menu entry, and `Tab` always moves between windows.
 - The app's window title already names the view and its target ("Network ·
-  bc1", "GitOps (all clusters)"). A view's own header line or box title
+  lab1", "GitOps (all clusters)"). A view's own header line or box title
   adds only what that title lacks (an address, counts, status), never the
   view's name or the target again.
 - No boxes inside the window: the window frames the view. A list view is

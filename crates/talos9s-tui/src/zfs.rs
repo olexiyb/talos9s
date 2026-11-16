@@ -267,7 +267,7 @@ mod tests {
     fn zfs_volume(state: &str, capacity: u64, fs: Option<(u64, u64)>) -> ZfsVolume {
         ZfsVolume {
             name: "pvc-1".to_string(),
-            node: "bc2".to_string(),
+            node: "lab2".to_string(),
             pool: "datapool/localpv".to_string(),
             capacity: Some(capacity),
             state: state.to_string(),
@@ -285,7 +285,7 @@ mod tests {
             issues[0].severity,
             crate::linstor_volumes::Severity::Warning
         );
-        assert_eq!(issues[0].text, "bc2: volume state unknown");
+        assert_eq!(issues[0].text, "lab2: volume state unknown");
         assert_eq!(
             zfs_volume_issues(&zfs_volume("Failed", 0, None))[0].severity,
             crate::linstor_volumes::Severity::Error
@@ -297,7 +297,7 @@ mod tests {
         let obj: DynamicObject = k8s_openapi::serde_json::from_value(json!({
             "apiVersion": "zfs.openebs.io/v1", "kind": "ZFSVolume",
             "metadata": {"name": "pvc-1", "namespace": "openebs"},
-            "spec": {"capacity": "1073741824", "ownerNodeID": "bc2",
+            "spec": {"capacity": "1073741824", "ownerNodeID": "lab2",
                      "poolName": "datapool/localpv", "volumeType": "DATASET"},
             "status": {"state": "Ready"}
         }))
@@ -322,13 +322,13 @@ mod tests {
         let volumes = zfs_volumes_from(vec![
             obj(json!({"poolName": "datapool"}), json!({})),
             obj(
-                json!({"ownerNodeID": "bc1", "poolName": "datapool",
+                json!({"ownerNodeID": "lab1", "poolName": "datapool",
                        "capacity": "lots", "volumeType": 1}),
                 json!("?"),
             ),
         ]);
         assert_eq!(volumes.len(), 1);
-        assert_eq!(volumes[0].node, "bc1");
+        assert_eq!(volumes[0].node, "lab1");
         assert_eq!(volumes[0].capacity, None);
         assert_eq!(volumes[0].state, "Unknown");
         assert_eq!(volumes[0].volume_type, "DATASET");
@@ -346,10 +346,10 @@ mod tests {
         assert!(zfs_volume_issues(&zfs_volume("Ready", gib, None)).is_empty());
 
         let failed = zfs_volume_issues(&zfs_volume("Failed", gib, None));
-        assert_eq!(failed[0].text, "bc2: volume Failed");
+        assert_eq!(failed[0].text, "lab2: volume Failed");
 
         let full = zfs_volume_issues(&zfs_volume("Ready", gib, Some((gib, gib * 96 / 100))));
-        assert!(full[0].text.starts_with("bc2: filesystem 96% full"));
+        assert!(full[0].text.starts_with("lab2: filesystem 96% full"));
 
         let not_resized = zfs_volume_issues(&zfs_volume("Ready", 2 * gib, Some((gib, 0))));
         assert!(not_resized[0].text.contains("resize not applied"));

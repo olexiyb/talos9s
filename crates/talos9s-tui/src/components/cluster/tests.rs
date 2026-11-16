@@ -49,7 +49,7 @@ fn names(nodes: &[(usize, &VersionInfo)]) -> Vec<String> {
 #[test]
 fn stuck_or_failed_first_load_is_an_error() {
     let connecting = || ClusterData {
-        name: "kprod".to_string(),
+        name: "prod".to_string(),
         loading: true,
         ..Default::default()
     };
@@ -72,7 +72,7 @@ fn stuck_or_failed_first_load_is_an_error() {
 #[test]
 fn stuck_refresh_keeps_shown_data() {
     let loaded = ClusterData {
-        name: "kprod".to_string(),
+        name: "prod".to_string(),
         connected: true,
         versions: vec![ver("cp1")],
         ..Default::default()
@@ -654,7 +654,7 @@ fn k8s_derived_members_populate_worker_group() {
 fn clock_offsets_are_formatted_and_colored_by_size() {
     let clock = |offset_secs| NodeClock {
         offset_secs,
-        server: "ntp1.hetzner.de".to_string(),
+        server: "time.example.com".to_string(),
     };
     let span = clock_span(&clock(0.012));
     assert_eq!(span.content, "+12ms");
@@ -809,23 +809,23 @@ fn kubespan_links_count_peers_and_name_the_ones_not_up() {
         ..Default::default()
     };
     let links = kubespan_links(&[
-        peer("kpd2", "down"),
-        peer("kpc1", "up"),
-        peer("kpc2", "unknown"),
-        peer("kpc3", "up"),
+        peer("prod-w2", "down"),
+        peer("prod-cp1", "up"),
+        peer("prod-cp2", "unknown"),
+        peer("prod-cp3", "up"),
     ]);
     assert_eq!((links.up, links.total), (2, 4));
     assert_eq!(
         links.down,
         vec![
-            ("kpc2".to_string(), "unknown".to_string()),
-            ("kpd2".to_string(), "down".to_string())
+            ("prod-cp2".to_string(), "unknown".to_string()),
+            ("prod-w2".to_string(), "down".to_string())
         ]
     );
 
     // Name column (at least the title) plus one column per node, two apart
-    let nodes = ["kpc1".to_string(), "worker-long-name".to_string()];
-    assert_eq!(kubespan_matrix_width(&nodes), 16 + (4 + 2) + (16 + 2));
+    let nodes = ["prod-cp1".to_string(), "worker-long-name".to_string()];
+    assert_eq!(kubespan_matrix_width(&nodes), 16 + (8 + 2) + (16 + 2));
 }
 
 fn line_texts(lines: &[Line<'_>]) -> Vec<String> {

@@ -864,12 +864,12 @@ mod tests {
     #[test]
     fn parses_kernel_lines() {
         let (ts, level, message) = parse_kernel_line(
-            "kern:    info: [2026-10-19T08:20:59.588932729Z]: drbd pvc-1 bc2: conn( Connecting -> Connected )",
+            "kern:    info: [2026-10-19T08:20:59.588932729Z]: drbd pvc-1 lab2: conn( Connecting -> Connected )",
         )
         .unwrap();
         assert_eq!(ts, "2026-10-19T08:20:59.588932729Z");
         assert_eq!(level, LogLevel::Info);
-        assert_eq!(message, "drbd pvc-1 bc2: conn( Connecting -> Connected )");
+        assert_eq!(message, "drbd pvc-1 lab2: conn( Connecting -> Connected )");
 
         let (_, level, message) =
             parse_kernel_line("daemon: warning: [2026-10-19T08:21:00Z]: low on entropy").unwrap();

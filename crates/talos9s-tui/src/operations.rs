@@ -377,7 +377,7 @@ pub fn commands_for(
     commands.iter().map(|c| with_context(context, c)).collect()
 }
 
-/// `kubectl cordon bc1` as `kubectl --context bc cordon bc1`: the same
+/// `kubectl cordon lab1` as `kubectl --context lab cordon lab1`: the same
 /// command typed in another cluster's context would change the wrong node
 fn with_context(context: &str, command: &str) -> String {
     match command.split_once(' ') {
@@ -412,7 +412,7 @@ fn drain_command(h: &str, options: &DrainOptions) -> String {
     drain
 }
 
-/// A step's shell equivalent in the run's output (`$ kubectl cordon bc1`):
+/// A step's shell equivalent in the run's output (`$ kubectl cordon lab1`):
 /// talos9s calls the APIs itself, the line says what that amounts to
 fn shell(rec: &Recorder, command: &str) {
     rec.line(&format!("$ {}", with_context(&rec.context, command)));
@@ -481,8 +481,8 @@ pub fn running_paths(runs: &Runs) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// One line for the header about the runs going now: `▶ Reboot bc 2/4 ·
-/// bc2: waiting for Ready`; none when nothing runs
+/// One line for the header about the runs going now: `▶ Reboot lab 2/4 ·
+/// lab2: waiting for Ready`; none when nothing runs
 pub fn header_status(runs: &Runs) -> Option<String> {
     let runs = runs.lock().ok()?;
     let mut parts: Vec<String> = runs
@@ -1339,19 +1339,19 @@ mod tests {
     /// The recorded commands follow the drain options
     #[test]
     fn commands_follow_options() {
-        let n = node("bc2", true);
+        let n = node("lab2", true);
         let options = DrainOptions::default();
         assert_eq!(
-            commands_for("bc", OpKind::Reboot, &n, &options),
+            commands_for("lab", OpKind::Reboot, &n, &options),
             [
-                "kubectl --context bc drain bc2 --ignore-daemonsets --delete-emptydir-data --timeout=5m",
-                "talosctl --context bc -n 10.0.0.3 reboot",
-                "kubectl --context bc uncordon bc2",
+                "kubectl --context lab drain lab2 --ignore-daemonsets --delete-emptydir-data --timeout=5m",
+                "talosctl --context lab -n 10.0.0.4 reboot",
+                "kubectl --context lab uncordon lab2",
             ]
         );
         assert_eq!(
-            commands_for("bc", OpKind::Cordon, &n, &options),
-            ["kubectl --context bc cordon bc2"]
+            commands_for("lab", OpKind::Cordon, &n, &options),
+            ["kubectl --context lab cordon lab2"]
         );
         let options = DrainOptions {
             ignore_daemonsets: false,
@@ -1362,10 +1362,10 @@ mod tests {
             ..DrainOptions::default()
         };
         assert_eq!(
-            commands_for("bc", OpKind::Shutdown, &n, &options),
+            commands_for("lab", OpKind::Shutdown, &n, &options),
             [
-                "kubectl --context bc drain bc2 --force --grace-period=5 --timeout=90s",
-                "talosctl --context bc -n 10.0.0.3 shutdown"
+                "kubectl --context lab drain lab2 --force --grace-period=5 --timeout=90s",
+                "talosctl --context lab -n 10.0.0.4 shutdown"
             ]
         );
     }
@@ -1385,9 +1385,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("talos9s-ops-{}", std::process::id()));
         let runs: Runs = Arc::default();
         let header = RunHeader {
-            context: "bc".into(),
-            target: "bc2".into(),
-            nodes: vec!["bc2".into()],
+            context: "lab".into(),
+            target: "lab2".into(),
+            nodes: vec!["lab2".into()],
             operation: "Reboot".into(),
             commands: Vec::new(),
             started: Utc::now(),
@@ -1400,7 +1400,7 @@ mod tests {
         }));
         let task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
         runs.lock().unwrap().insert(
-            "bc".into(),
+            "lab".into(),
             ActiveRun {
                 header,
                 path: dir.join("x.log"),
@@ -1409,14 +1409,14 @@ mod tests {
                 task,
             },
         );
-        assert!(busy(&runs, "bc").unwrap().contains("Reboot on bc2"));
-        assert!(busy(&runs, "kprod").is_none());
+        assert!(busy(&runs, "lab").unwrap().contains("Reboot on lab2"));
+        assert!(busy(&runs, "prod").is_none());
         assert_eq!(
             header_status(&runs).unwrap(),
-            "▶ Reboot bc 2/4 · waiting for Ready"
+            "▶ Reboot lab 2/4 · waiting for Ready"
         );
-        assert_eq!(running_contexts(&runs), ["bc"]);
-        runs.lock().unwrap().get("bc").unwrap().cancel();
+        assert_eq!(running_contexts(&runs), ["lab"]);
+        runs.lock().unwrap().get("lab").unwrap().cancel();
         assert!(header_status(&runs).unwrap().ends_with("cancelling"));
 
         let path = dir.join("run.log");
@@ -1441,15 +1441,15 @@ mod tests {
                 .with_timezone(&Utc)
         };
         let header = RunHeader {
-            context: "bc".into(),
-            target: "bc2".into(),
-            nodes: vec!["bc2".into()],
+            context: "lab".into(),
+            target: "lab2".into(),
+            nodes: vec!["lab2".into()],
             operation: "Drain".into(),
             commands: Vec::new(),
             started: t("2026-11-03T10:00:00Z"),
         };
         let text = format_header(&header)
-            + &format_line(t("2026-11-03T10:00:01Z"), "cordon bc2")
+            + &format_line(t("2026-11-03T10:00:01Z"), "cordon lab2")
             + &format_end(&RunEnd {
                 finished: t("2026-11-03T10:00:09Z"),
                 status: RunStatus::Ok,
@@ -1457,7 +1457,7 @@ mod tests {
             });
         assert_eq!(
             run_output(&text),
-            "2026-11-03T10:00:01.000Z cordon bc2\n2026-11-03T10:00:09.000Z ok: done"
+            "2026-11-03T10:00:01.000Z cordon lab2\n2026-11-03T10:00:09.000Z ok: done"
         );
     }
 }

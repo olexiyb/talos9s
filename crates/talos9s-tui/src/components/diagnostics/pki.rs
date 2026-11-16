@@ -359,16 +359,16 @@ mod tests {
         let yaml = "apiVersion: v1
 kind: Config
 clusters:
-- name: bc
+- name: lab
   cluster:
     server: https://10.0.0.1:6443
     certificate-authority-data: Q0EtREFUQQ==
 contexts:
-- name: admin@bc
-  context: {cluster: bc, user: admin@bc}
-current-context: admin@bc
+- name: admin@lab
+  context: {cluster: lab, user: admin@lab}
+current-context: admin@lab
 users:
-- name: admin@bc
+- name: admin@lab
   user:
     client-certificate-data: Q0VSVA==
     client-key-data: S0VZ

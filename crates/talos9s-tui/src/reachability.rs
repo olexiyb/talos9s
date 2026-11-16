@@ -79,18 +79,18 @@ mod tests {
 
     #[test]
     fn hinted_addresses_are_tried_first() {
-        // kpc2-style member: firewalled public IP listed first, etcd IP last
-        let addresses = strings(&["5.9.183.236", "10.22.1.2", "100.100.0.7"]);
+        // prod-cp2-style member: firewalled public IP listed first, etcd IP last
+        let addresses = strings(&["198.51.100.40", "10.22.1.2", "100.100.0.7"]);
         let hints = strings(&["100.100.0.8", "100.100.0.7", "100.100.0.6"]);
         assert_eq!(
             candidate_order(&addresses, &hints),
-            strings(&["100.100.0.7", "5.9.183.236", "10.22.1.2"])
+            strings(&["100.100.0.7", "198.51.100.40", "10.22.1.2"])
         );
     }
 
     #[test]
     fn original_order_kept_without_hints() {
-        let addresses = strings(&["10.22.1.4", "88.198.66.196", "100.100.0.3"]);
+        let addresses = strings(&["10.22.1.4", "198.51.100.30", "100.100.0.3"]);
         assert_eq!(candidate_order(&addresses, &[]), addresses);
     }
 }

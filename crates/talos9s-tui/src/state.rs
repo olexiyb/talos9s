@@ -239,9 +239,9 @@ mod tests {
         let path = dir.join("state.yaml");
         let state = UiState {
             selection: Some(Selection {
-                cluster: "kprod".into(),
+                cluster: "prod".into(),
                 group: None,
-                node: Some("kpw1".into()),
+                node: Some("prod-w4".into()),
             }),
             view: Some("Network".into()),
             log_levels: Some(vec!["error".into(), "warn".into()]),
@@ -254,7 +254,7 @@ mod tests {
         // A warp saved as one name (the first format) reads as a list of one
         std::fs::write(
             &path,
-            "namespaces:\n- context: bc\n  warp: kube-system\n- context: k\n  warp: [a, b*]\n",
+            "namespaces:\n- context: lab\n  warp: kube-system\n- context: k\n  warp: [a, b*]\n",
         )
         .unwrap();
         let namespaces = load(&path).namespaces;

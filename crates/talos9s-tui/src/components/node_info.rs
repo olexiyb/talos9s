@@ -1458,7 +1458,7 @@ mod tests {
     #[test]
     fn outlines_documents_sections_and_named_items() {
         let mut text = String::from(
-            "version: v1alpha1\ndebug: false\nmachine:\n    type: controlplane\n    network:\n        hostname: bc1\n    files:\n        - content: x\n          path: /var/etc/a.conf\ncluster:\n    clusterName: bc\n    inlineManifests:\n        - name: cilium\n          contents: |\n",
+            "version: v1alpha1\ndebug: false\nmachine:\n    type: controlplane\n    network:\n        hostname: lab1\n    files:\n        - content: x\n          path: /var/etc/a.conf\ncluster:\n    clusterName: lab\n    inlineManifests:\n        - name: cilium\n          contents: |\n",
         );
         for i in 0..40 {
             let _ = writeln!(text, "            line{i}: v");
@@ -1512,7 +1512,7 @@ cluster:
             -----BEGIN EC PRIVATE KEY-----
             MHcCAQEEIOK
             -----END EC PRIVATE KEY-----
-    clusterName: bc
+    clusterName: lab
 ";
         let (lines, hidden) = masked(config);
         let text = lines.join("\n");
@@ -1529,7 +1529,7 @@ cluster:
         assert!(text.contains("        key: ••••••  (3 lines hidden)"));
         assert!(text.contains("crt: LS0tPUBLIC"));
         assert!(text.contains("- 10.0.0.1"));
-        assert!(text.contains("    clusterName: bc"));
+        assert!(text.contains("    clusterName: lab"));
         assert_eq!(hidden, 4);
     }
 

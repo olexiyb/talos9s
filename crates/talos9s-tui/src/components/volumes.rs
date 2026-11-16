@@ -1087,7 +1087,7 @@ fn copies_span(row: &VolumeRow) -> Span<'static> {
     }
 }
 
-/// Nodes of a volume. LINSTOR: `bc1* bc2 bc4 bc3~` (`*` the Primary, `~`
+/// Nodes of a volume. LINSTOR: `lab1* lab2 lab4 lab3~` (`*` the Primary, `~`
 /// diskless, `?` DRBD state unread), colored by disk state; `local` when
 /// not replicated
 fn nodes_line(row: &VolumeRow) -> Line<'static> {
@@ -1369,9 +1369,9 @@ mod tests {
             place_count: Some(3),
             deleting: false,
             replicas: vec![
-                replica("bc1", true, &["bc2", "bc4"], oos),
-                replica("bc2", false, &["bc1", "bc4"], 0),
-                replica("bc4", false, &["bc1", "bc2"], 0),
+                replica("lab1", true, &["lab2", "lab4"], oos),
+                replica("lab2", false, &["lab1", "lab4"], 0),
+                replica("lab4", false, &["lab1", "lab2"], 0),
             ],
         };
         let gib = 1u64 << 30;
@@ -1379,7 +1379,7 @@ mod tests {
             name: "pvc-mongo".to_string(),
             namespace: "openebs".to_string(),
             pvc: Some("db/data-mongo-0".to_string()),
-            node: "bc2".to_string(),
+            node: "lab2".to_string(),
             pool: "datapool/localpv".to_string(),
             capacity: Some(10 * gib),
             state: "Ready".to_string(),
@@ -1393,8 +1393,8 @@ mod tests {
             .collect();
         rows.push(VolumeRow::new(Source::Zfs(zfs), None));
         let mut c = VolumesComponent::new(None);
-        let matched = KubeconfigSource::Environment(Some("bc".to_string()));
-        c.kubectl = kubectl_for(Some(&matched), Some("bc"));
+        let matched = KubeconfigSource::Environment(Some("lab".to_string()));
+        c.kubectl = kubectl_for(Some(&matched), Some("lab"));
         c.state.set_data(VolumesData {
             installed: true,
             satellites: HashMap::new(),
@@ -1432,9 +1432,9 @@ mod tests {
         assert!(screen.contains("monitoring/vmsingle"));
         assert!(screen.contains("924 KiB out of sync"));
         assert!(screen.contains("monitoring/grafana"));
-        // Bits between the Primary (bc1) and its peers: resync from bc1
+        // Bits between the Primary (lab1) and its peers: resync from lab1
         assert!(screen.contains("Suggested fix"));
-        assert!(screen.contains("drbdadm invalidate-remote pvc-vmsingle:bc2"));
+        assert!(screen.contains("drbdadm invalidate-remote pvc-vmsingle:lab2"));
         // Usage and copies columns
         assert!(screen.contains("50%"));
         assert!(screen.contains("3/3"));
@@ -1458,7 +1458,7 @@ mod tests {
         let screen = render(&mut c);
         // 95% full ZFS dataset: an error, listed with the LINSTOR volumes
         assert!(screen.contains("db/data-mongo-0"));
-        assert!(screen.contains("bc2: filesystem 95% full"));
+        assert!(screen.contains("lab2: filesystem 95% full"));
         assert!(screen.contains("1/1"));
 
         key(&mut c, KeyCode::Char('t'));
@@ -1479,7 +1479,7 @@ mod tests {
         let zfs = ZfsVolume {
             name: "pvc-gone".to_string(),
             namespace: "openebs".to_string(),
-            node: "bc2".to_string(),
+            node: "lab2".to_string(),
             pool: "datapool/localpv".to_string(),
             capacity: Some(1 << 30),
             state: "Ready".to_string(),
@@ -1488,18 +1488,23 @@ mod tests {
         let row = VolumeRow::new(Source::Zfs(zfs), Some(&pvs));
         assert_eq!(row.orphan, Some(Orphan::NoPv));
         assert_eq!(row.issues.len(), 1);
-        let remedy = orphan_remedy(&row, &Orphan::NoPv, &HashMap::new(), "kubectl --context bc");
+        let remedy = orphan_remedy(
+            &row,
+            &Orphan::NoPv,
+            &HashMap::new(),
+            "kubectl --context lab",
+        );
         assert_eq!(
             remedy.commands,
-            ["kubectl --context bc -n openebs delete zfsvolume pvc-gone"]
+            ["kubectl --context lab -n openebs delete zfsvolume pvc-gone"]
         );
-        assert!(remedy.summary.contains("datapool/localpv/pvc-gone on bc2"));
+        assert!(remedy.summary.contains("datapool/localpv/pvc-gone on lab2"));
 
         // A LINSTOR volume the CSI driver didn't make is never an orphan
         let csi = LinstorVolume {
             resource: "pvc-grafana".to_string(),
             pvc: Some("mon/grafana".to_string()),
-            replicas: vec![replica("bc1", true, &["bc2"], 0)],
+            replicas: vec![replica("lab1", true, &["lab2"], 0)],
             ..Default::default()
         };
         let mut handmade = csi.clone();
@@ -1531,16 +1536,16 @@ mod tests {
 
     #[test]
     fn kubectl_is_pinned_to_the_clusters_context() {
-        let matched = KubeconfigSource::Environment(Some("kprod".to_string()));
+        let matched = KubeconfigSource::Environment(Some("prod".to_string()));
         assert_eq!(
-            kubectl_for(Some(&matched), Some("kprod")),
-            "kubectl --context kprod"
+            kubectl_for(Some(&matched), Some("prod")),
+            "kubectl --context prod"
         );
         // From a node: no local context is known to reach this cluster
         let node = KubeconfigSource::TalosNode("10.0.0.1".to_string());
         assert_eq!(
-            kubectl_for(Some(&node), Some("kprod")),
-            "kubectl --context <context for kprod>"
+            kubectl_for(Some(&node), Some("prod")),
+            "kubectl --context <context for prod>"
         );
     }
 

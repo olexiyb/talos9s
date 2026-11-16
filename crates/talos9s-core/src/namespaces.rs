@@ -1,7 +1,7 @@
 //! Warping into namespaces (`W`): which namespaces a warp keeps, the warps
 //! used last, and the picker's entries
 //!
-//! A warp is a set of namespaces and prefixes (`kolmena-staging*`); empty
+//! A warp is a set of namespaces and prefixes (`acme-staging*`); empty
 //! is all. Namespace names are DNS labels, so a set is stored joined with
 //! commas.
 

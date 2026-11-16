@@ -475,7 +475,7 @@ impl PodNodes {
 
     /// For the NODES column, at most `width` characters: where it fails
     /// (the nodes of its pods that aren't ready, `-` for unscheduled ones)
-    /// when `failing`, else where it runs; `bc2, bc3`, or `bc2 +2` when they
+    /// when `failing`, else where it runs; `lab2, lab3`, or `lab2 +2` when they
     /// don't fit; `?` unknown
     pub fn label(&self, failing: bool, width: usize) -> String {
         let PodNodes::Known {
@@ -506,12 +506,12 @@ impl PodNodes {
 }
 
 /// `items` joined with ", " when that fits `width` characters, else the
-/// first and how many more (`bc2 +2`)
+/// first and how many more (`lab2 +2`)
 ///
 /// ```
 /// use talos9s_core::workloads::nodes_label;
-/// assert_eq!(nodes_label(&["bc2", "bc3"], 10), "bc2, bc3");
-/// assert_eq!(nodes_label(&["bc2", "bc3", "bc4"], 10), "bc2 +2");
+/// assert_eq!(nodes_label(&["lab2", "lab3"], 10), "lab2, lab3");
+/// assert_eq!(nodes_label(&["lab2", "lab3", "lab4"], 10), "lab2 +2");
 /// ```
 pub fn nodes_label(items: &[&str], width: usize) -> String {
     let full = items.join(", ");
@@ -817,7 +817,7 @@ pub fn pod_health(pod: &PodFacts, now: i64) -> WorkloadHealth {
 }
 
 /// Who runs a pod, short: `deploy/api`, `sts/db`, `ds/cilium`, else its
-/// owner reference (`Job/backup-29`, `Node/bc1` for a static pod), or `-`
+/// owner reference (`Job/backup-29`, `Node/lab1` for a static pod), or `-`
 pub fn pod_owner(pod: &PodFacts, rs_owners: Option<&ReplicaSetOwners>) -> String {
     match pod_workload(pod, rs_owners) {
         PodWorkload::Known(kind, name) => {
@@ -955,7 +955,7 @@ mod tests {
         PodFacts {
             namespace: "apps".into(),
             name: "web-1".into(),
-            node: Some("bc1".into()),
+            node: Some("lab1".into()),
             phase: Some("Running".into()),
             created: Some(NOW - 86_400),
             ready: true,
@@ -1060,7 +1060,7 @@ mod tests {
     #[test]
     fn pods_resolve_to_their_workload() {
         let owners = ReplicaSetOwners::from([(("apps".into(), "web-7d9f".into()), "web".into())]);
-        let pod = |kind, name| owned(kind, name, Some("bc1"), true);
+        let pod = |kind, name| owned(kind, name, Some("lab1"), true);
         assert_eq!(
             pod_workload(&pod("ReplicaSet", "web-7d9f"), Some(&owners)),
             PodWorkload::Known(WorkloadKind::Deployment, "web".into())
@@ -1096,14 +1096,14 @@ mod tests {
     fn placement_finds_the_nodes_of_not_ready_pods() {
         let owners = ReplicaSetOwners::from([(("apps".into(), "web-7d9f".into()), "web".into())]);
         let pods = [
-            owned("ReplicaSet", "web-7d9f", Some("bc1"), true),
-            owned("ReplicaSet", "web-7d9f", Some("bc2"), true),
-            owned("ReplicaSet", "web-7d9f", Some("bc3"), false),
+            owned("ReplicaSet", "web-7d9f", Some("lab1"), true),
+            owned("ReplicaSet", "web-7d9f", Some("lab2"), true),
+            owned("ReplicaSet", "web-7d9f", Some("lab3"), false),
             owned("ReplicaSet", "web-7d9f", None, false),
             // Done: not short of a ready pod
             PodFacts {
                 phase: Some("Succeeded".into()),
-                ..owned("ReplicaSet", "web-7d9f", Some("bc4"), false)
+                ..owned("ReplicaSet", "web-7d9f", Some("lab4"), false)
             },
         ];
         let placement = place_pods(&pods, Some(&owners));
@@ -1113,16 +1113,16 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(web.ready, 2);
         assert_eq!(web.total, 5);
-        assert_eq!(web.not_ready_nodes, BTreeSet::from(["bc3".to_string()]));
+        assert_eq!(web.not_ready_nodes, BTreeSet::from(["lab3".to_string()]));
         assert_eq!(web.unscheduled, 1);
         assert_eq!(
             web.nodes,
-            BTreeSet::from(["bc1", "bc2", "bc3", "bc4"].map(String::from))
+            BTreeSet::from(["lab1", "lab2", "lab3", "lab4"].map(String::from))
         );
         let nodes = PodNodes::from_placement(Some(&web));
-        assert_eq!(nodes.label(true, 20), "bc3, -");
-        assert_eq!(nodes.label(false, 20), "bc1, bc2, bc3, bc4");
-        assert_eq!(nodes.label(false, 10), "bc1 +3");
+        assert_eq!(nodes.label(true, 20), "lab3, -");
+        assert_eq!(nodes.label(false, 22), "lab1, lab2, lab3, lab4");
+        assert_eq!(nodes.label(false, 10), "lab1 +3");
 
         // ReplicaSets unreadable: the Deployment's pods aren't placed
         assert!(place_pods(&pods, None).is_empty());
@@ -1131,9 +1131,9 @@ mod tests {
     #[test]
     fn nodes_label_shortens_to_fit() {
         assert_eq!(nodes_label(&[], 10), "");
-        assert_eq!(nodes_label(&["bc1"], 2), "bc1");
-        assert_eq!(nodes_label(&["bc1", "bc2"], 8), "bc1, bc2");
-        assert_eq!(nodes_label(&["bc1", "bc2", "bc3"], 8), "bc1 +2");
+        assert_eq!(nodes_label(&["lab1"], 2), "lab1");
+        assert_eq!(nodes_label(&["lab1", "lab2"], 10), "lab1, lab2");
+        assert_eq!(nodes_label(&["lab1", "lab2", "lab3"], 8), "lab1 +2");
         assert_eq!(PodNodes::Unknown.label(true, 10), "?");
     }
 
@@ -1155,7 +1155,7 @@ mod tests {
         ProblemPod {
             namespace: ns.into(),
             name: name.into(),
-            node: Some("bc3".into()),
+            node: Some("lab3".into()),
             workload,
             issue,
             restarts: 0,
@@ -1222,7 +1222,7 @@ mod tests {
     fn list_filters_on_namespace_name_and_node() {
         let mut api = workload("api", WorkloadKind::Deployment, 1, 3);
         api.pod_nodes = PodNodes::Known {
-            all: BTreeSet::from(["bc2".to_string()]),
+            all: BTreeSet::from(["lab2".to_string()]),
             not_ready: BTreeSet::new(),
             unscheduled: 0,
         };
@@ -1232,7 +1232,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(names(&list_rows(&workloads, &[], &filter("DB"))), ["db"]);
-        assert_eq!(names(&list_rows(&workloads, &[], &filter("bc2"))), ["api"]);
+        assert_eq!(names(&list_rows(&workloads, &[], &filter("lab2"))), ["api"]);
         assert_eq!(list_rows(&workloads, &[], &filter("apps")).len(), 2);
         assert!(list_rows(&workloads, &[], &filter("nothing")).is_empty());
         // The warp is exact: "app" isn't "apps"
@@ -1302,13 +1302,13 @@ mod tests {
         let pods = vec![
             PodFacts {
                 name: "web-a".into(),
-                ..owned("StatefulSet", "web", Some("bc1"), true)
+                ..owned("StatefulSet", "web", Some("lab1"), true)
             },
             PodFacts {
                 name: "web-b".into(),
-                ..owned("StatefulSet", "web", Some("bc2"), false)
+                ..owned("StatefulSet", "web", Some("lab2"), false)
             },
-            owned("StatefulSet", "db", Some("bc1"), true),
+            owned("StatefulSet", "db", Some("lab1"), true),
         ];
         let key = (
             "apps".to_string(),
@@ -1355,7 +1355,7 @@ mod tests {
                 name: "pg".into(),
                 ..Default::default()
             }],
-            ..owned("StatefulSet", "db", Some("bc1"), true)
+            ..owned("StatefulSet", "db", Some("lab1"), true)
         };
         let b = PodFacts {
             name: "db-1".into(),
@@ -1371,7 +1371,7 @@ mod tests {
         let mut crashing = PodFacts {
             name: "api-1".into(),
             namespace: "web".into(),
-            ..owned("StatefulSet", "api", Some("bc2"), false)
+            ..owned("StatefulSet", "api", Some("lab2"), false)
         };
         crashing.containers[0].waiting_reason = Some("CrashLoopBackOff".into());
         crashing.containers[0].restarts = 3;
@@ -1380,11 +1380,11 @@ mod tests {
             phase: Some("Succeeded".into()),
             ready: false,
             created: Some(NOW - 60),
-            ..owned("Job", "backup", Some("bc1"), false)
+            ..owned("Job", "backup", Some("lab1"), false)
         };
         let healthy = PodFacts {
             name: "db-0".into(),
-            ..owned("StatefulSet", "db", Some("bc3"), true)
+            ..owned("StatefulSet", "db", Some("lab3"), true)
         };
         let pods = vec![healthy, job, crashing];
         let names = |rows: Vec<ListRow>| names(&rows);

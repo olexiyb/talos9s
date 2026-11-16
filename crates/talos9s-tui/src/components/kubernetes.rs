@@ -2117,7 +2117,7 @@ mod tests {
 
     fn with_rows(rows: Vec<ObjectRow>) -> KubernetesComponent {
         let mut c = KubernetesComponent::new(Mode::Problems, Vec::new());
-        let clusters = ["bc", "kprod"]
+        let clusters = ["lab", "prod"]
             .map(|n| ClusterResult {
                 name: n.into(),
                 ..Default::default()
@@ -2135,11 +2135,11 @@ mod tests {
     #[test]
     fn problems_list_only_problems_until_a() {
         let mut c = with_rows(vec![
-            row("bc", "Deployment", "web", healthy()),
-            row("kprod", "Deployment", "web", broken()),
+            row("lab", "Deployment", "web", healthy()),
+            row("prod", "Deployment", "web", broken()),
         ]);
         assert_eq!(c.shown.len(), 1);
-        assert_eq!(c.shown[0].cluster, "kprod");
+        assert_eq!(c.shown[0].cluster, "prod");
         press(&mut c, KeyCode::Char('A'));
         assert_eq!(c.shown.len(), 2);
     }
@@ -2147,10 +2147,10 @@ mod tests {
     #[test]
     fn x_cycles_through_clusters() {
         let mut c = with_rows(vec![
-            row("bc", "Deployment", "a", broken()),
-            row("kprod", "Deployment", "b", broken()),
+            row("lab", "Deployment", "a", broken()),
+            row("prod", "Deployment", "b", broken()),
         ]);
-        c.sources = ["bc", "kprod"]
+        c.sources = ["lab", "prod"]
             .map(|n| ClusterSource {
                 name: n.into(),
                 talos: None,
@@ -2159,10 +2159,10 @@ mod tests {
             })
             .to_vec();
         press(&mut c, KeyCode::Char('X'));
-        assert_eq!(c.cluster_filter.as_deref(), Some("bc"));
+        assert_eq!(c.cluster_filter.as_deref(), Some("lab"));
         assert_eq!(c.shown.len(), 1);
         press(&mut c, KeyCode::Char('X'));
-        assert_eq!(c.cluster_filter.as_deref(), Some("kprod"));
+        assert_eq!(c.cluster_filter.as_deref(), Some("prod"));
         press(&mut c, KeyCode::Char('X'));
         assert_eq!(c.cluster_filter, None);
         assert_eq!(c.shown.len(), 2);
@@ -2171,15 +2171,15 @@ mod tests {
     #[test]
     fn d_diffs_the_same_object_in_the_other_cluster() {
         let mut c = with_rows(vec![
-            row("bc", "Deployment", "web", healthy()),
-            row("kprod", "Deployment", "web", broken()),
+            row("lab", "Deployment", "web", healthy()),
+            row("prod", "Deployment", "web", broken()),
         ]);
         press(&mut c, KeyCode::Char('A'));
         press(&mut c, KeyCode::Char('d'));
         let Some(Focus::Diff { title, changed, .. }) = &c.focus else {
             panic!("no diff");
         };
-        assert!(title.contains("bc ↔ kprod"), "{title}");
+        assert!(title.contains("lab ↔ prod"), "{title}");
         assert!(*changed > 0);
         press(&mut c, KeyCode::Esc);
         assert!(c.focus.is_none());
@@ -2188,8 +2188,8 @@ mod tests {
     #[test]
     fn d_marks_when_the_other_object_is_ambiguous() {
         let mut c = with_rows(vec![
-            row("bc", "Deployment", "a", broken()),
-            row("kprod", "Deployment", "b", broken()),
+            row("lab", "Deployment", "a", broken()),
+            row("prod", "Deployment", "b", broken()),
         ]);
         press(&mut c, KeyCode::Char('d'));
         assert!(c.focus.is_none());
@@ -2204,7 +2204,7 @@ mod tests {
         let secret = json!({"metadata": {"name": "web"}, "spec": {"replicas": 2,
             "template": {"spec": {"containers": [{"name": "web", "image": "nginx:1",
             "env": [{"name": "PASSWORD", "value": "hunter2"}]}]}}}, "status": {}});
-        let mut c = with_rows(vec![row("bc", "Deployment", "web", secret)]);
+        let mut c = with_rows(vec![row("lab", "Deployment", "web", secret)]);
         press(&mut c, KeyCode::Enter);
         assert!(matches!(c.focus, Some(Focus::Detail { .. })));
         let text = draw(&mut c, 100, 60);
@@ -2265,12 +2265,12 @@ mod tests {
 
     #[test]
     fn unreachable_cluster_shows_its_error_and_the_rest() {
-        let mut c = with_rows(vec![row("kprod", "Deployment", "web", broken())]);
+        let mut c = with_rows(vec![row("prod", "Deployment", "web", broken())]);
         if let Some(d) = c.state.data_mut() {
             d.clusters[0].error = Some("Failed to connect to Kubernetes: 403\x1b[31m".into());
         }
         let text = draw(&mut c, 110, 20);
-        assert!(text.contains("bc ?"), "{text}");
+        assert!(text.contains("lab ?"), "{text}");
         assert!(text.contains("Failed to connect"));
         assert!(text.contains("web"));
         assert!(!text.contains('\x1b'));
@@ -2308,7 +2308,7 @@ mod tests {
     #[test]
     fn picker_shows_defaults_then_matches() {
         let merged = merge_kinds(&[(
-            "bc".into(),
+            "lab".into(),
             vec![
                 pod_kind(),
                 builtin("zeta.io", "v1", "Widget", "widgets", true),
@@ -2323,15 +2323,15 @@ mod tests {
     #[test]
     fn pod_sources_name_their_cluster() {
         let pod = row(
-            "kprod",
+            "prod",
             "Pod",
             "web-1",
             json!({"spec": {"containers": [{"name": "a"}, {"name": "b"}]}, "status": {}}),
         );
         let sources = pod_sources(&pod, true);
         assert_eq!(sources.len(), 2);
-        assert_eq!(sources[0].cluster.as_deref(), Some("kprod"));
-        assert_eq!(sources[0].label, "kprod/web-1/a");
+        assert_eq!(sources[0].cluster.as_deref(), Some("prod"));
+        assert_eq!(sources[0].label, "prod/web-1/a");
     }
 
     fn draw(c: &mut KubernetesComponent, w: u16, h: u16) -> String {

@@ -43,7 +43,7 @@ pub struct ContainersSettings {
 #[derive(Debug, Clone, Default)]
 pub struct ContainersData {
     pub containers: Vec<NodeContainer>,
-    /// Per node: what couldn't be read (`bc4: timed out after 10s`)
+    /// Per node: what couldn't be read (`lab4: timed out after 10s`)
     pub problems: Vec<String>,
 }
 
@@ -758,7 +758,7 @@ mod tests {
     }
 
     fn component() -> ContainersComponent {
-        let nodes = ["bc1", "bc2"]
+        let nodes = ["lab1", "lab2"]
             .map(|n| ProcessNode {
                 hostname: n.into(),
                 address: n.into(),
@@ -767,12 +767,12 @@ mod tests {
         let mut c = ContainersComponent::new(nodes);
         c.state.set_data(ContainersData {
             containers: vec![
-                ctr("bc1", "", "apid", false, "RUNNING"),
-                ctr("bc1", "web/gw-1", "gw-1", true, "SANDBOX_READY"),
-                ctr("bc1", "web/gw-1", "app", false, "CONTAINER_RUNNING"),
-                ctr("bc1", "web/gw-1", "proxy", false, "CONTAINER_RUNNING"),
+                ctr("lab1", "", "apid", false, "RUNNING"),
+                ctr("lab1", "web/gw-1", "gw-1", true, "SANDBOX_READY"),
+                ctr("lab1", "web/gw-1", "app", false, "CONTAINER_RUNNING"),
+                ctr("lab1", "web/gw-1", "proxy", false, "CONTAINER_RUNNING"),
             ],
-            problems: vec!["bc2: timed out after 10s".into()],
+            problems: vec!["lab2: timed out after 10s".into()],
         });
         c
     }
@@ -802,17 +802,17 @@ mod tests {
     fn enter_focuses_a_container() {
         let mut c = component();
         let s = screen(&mut c);
-        assert!(s.contains("bc2: timed out after 10s"), "{s}");
+        assert!(s.contains("lab2: timed out after 10s"), "{s}");
         assert!(s.contains("apid") && s.contains("proxy"), "{s}");
         assert!(!s.contains("Logs ·"), "{s}");
         press(&mut c, KeyCode::Down);
         press(&mut c, KeyCode::Enter);
         let s = screen(&mut c);
-        assert!(s.contains("Logs · gw-1 · app on bc1"), "{s}");
+        assert!(s.contains("Logs · gw-1 · app on lab1"), "{s}");
         assert!(!s.contains("proxy") && !s.contains("apid"), "{s}");
         assert_eq!(
             c.logs.command(),
-            "talosctl -n 10.0.0.3 logs --namespace cri web/gw-1:app:abc"
+            "talosctl -n 10.0.0.4 logs --namespace cri web/gw-1:app:abc"
         );
         // The digits are the logs' levels here, not the sort
         press(&mut c, KeyCode::Char('3'));

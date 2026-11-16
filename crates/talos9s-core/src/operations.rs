@@ -4,8 +4,8 @@
 //! crash keeps what happened:
 //!
 //! ```text
-//! #talos9s-run {"context":"bc","target":"bc2","nodes":["bc2"],...}
-//! 2026-11-03T10:42:07.120Z cordon bc2
+//! #talos9s-run {"context":"lab","target":"lab2","nodes":["lab2"],...}
+//! 2026-11-03T10:42:07.120Z cordon lab2
 //! 2026-11-03T10:42:09.004Z evicting web/gateway-7f9c-x2
 //! #end {"finished":"2026-11-03T10:45:19Z","status":"Ok","message":null}
 //! ```
@@ -154,7 +154,7 @@ pub fn parse_run(text: &str) -> Option<Run> {
     Some(run)
 }
 
-/// `20261103-104207-bc-reboot-bc2.log`: sorts by time, safe on any file
+/// `20261103-104207-lab-reboot-lab2.log`: sorts by time, safe on any file
 /// system
 pub fn file_name(header: &RunHeader) -> String {
     let safe = |s: &str| -> String {
@@ -233,9 +233,9 @@ mod tests {
     /// Header, lines and end round trip; a line break can't forge a line
     #[test]
     fn round_trips_a_run() {
-        let h = header("bc", "Reboot", "bc2", "2026-11-03T10:42:07Z");
+        let h = header("lab", "Reboot", "lab2", "2026-11-03T10:42:07Z");
         let mut text = format_header(&h);
-        text += &format_line(time("2026-11-03T10:42:08Z"), "cordon bc2");
+        text += &format_line(time("2026-11-03T10:42:08Z"), "cordon lab2");
         text += &format_line(time("2026-11-03T10:42:09Z"), "two\n#end {\"x\":1}");
         let end = RunEnd {
             finished: time("2026-11-03T10:45:19Z"),
@@ -257,7 +257,7 @@ mod tests {
     /// interrupted; took counts to the last line
     #[test]
     fn unfinished_runs() {
-        let h = header("bc", "Drain", "bc1", "2026-11-03T10:00:00Z");
+        let h = header("lab", "Drain", "lab1", "2026-11-03T10:00:00Z");
         let text = format_header(&h) + &format_line(time("2026-11-03T10:00:30Z"), "evicting");
         let run = parse_run(&text).unwrap();
         assert_eq!(run.status(true), RunStatus::Running);
@@ -268,14 +268,14 @@ mod tests {
     #[test]
     fn file_names_sort_and_are_safe() {
         let h = header(
-            "admin@bc",
+            "admin@lab",
             "Reboot",
             "control-plane",
             "2026-11-03T10:42:07Z",
         );
         assert_eq!(
             file_name(&h),
-            "20261103-104207-admin_bc-reboot-control-plane.log"
+            "20261103-104207-admin_lab-reboot-control-plane.log"
         );
     }
 
@@ -294,25 +294,25 @@ mod tests {
         };
         let runs = vec![
             run(
-                header("bc", "Drain", "bc1", "2026-11-01T10:00:00Z"),
+                header("lab", "Drain", "lab1", "2026-11-01T10:00:00Z"),
                 Some(RunStatus::Ok),
             ),
             run(
-                header("bc", "Reboot", "bc2", "2026-11-03T10:00:00Z"),
+                header("lab", "Reboot", "lab2", "2026-11-03T10:00:00Z"),
                 Some(RunStatus::Failed),
             ),
             run(
-                header("kprod", "Cordon", "kpw1", "2026-11-02T10:00:00Z"),
+                header("prod", "Cordon", "prod-w4", "2026-11-02T10:00:00Z"),
                 None,
             ),
         ];
         let none = |_: &Run| false;
         assert_eq!(run_rows(&runs, None, "", none), [1, 2, 0]);
-        assert_eq!(run_rows(&runs, Some("bc"), "", none), [1, 0]);
+        assert_eq!(run_rows(&runs, Some("lab"), "", none), [1, 0]);
         assert_eq!(run_rows(&runs, None, "failed", none), [1]);
         assert_eq!(run_rows(&runs, None, "interrupted", none), [2]);
         assert_eq!(run_rows(&runs, None, "running", |_| true), [2]);
-        assert_eq!(run_rows(&runs, None, "kpw1", none), [2]);
-        assert_eq!(run_rows(&runs, None, "talosctl -n bc1", none), [0]);
+        assert_eq!(run_rows(&runs, None, "prod-w4", none), [2]);
+        assert_eq!(run_rows(&runs, None, "talosctl -n lab1", none), [0]);
     }
 }

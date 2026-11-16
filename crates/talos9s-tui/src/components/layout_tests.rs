@@ -6,10 +6,10 @@ use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 
 fn views() -> Vec<(&'static str, Box<dyn Component>)> {
-    let node = || ("bc1".to_string(), "10.0.0.1".to_string());
+    let node = || ("lab1".to_string(), "10.0.0.1".to_string());
     let group_nodes = || {
         vec![GroupNode {
-            hostname: "bc1".into(),
+            hostname: "lab1".into(),
             address: "10.0.0.1".into(),
             role: "controlplane".into(),
         }]
@@ -53,7 +53,7 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
         (
             "containers",
             Box::new(ContainersComponent::new(
-                ["bc1", "bc2"]
+                ["lab1", "lab2"]
                     .map(|n| ProcessNode {
                         hostname: n.into(),
                         address: a.clone(),
@@ -64,9 +64,9 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
         (
             "operations",
             Box::new(crate::components::OperationsComponent::new(
-                "bc".into(),
-                "bc control plane".into(),
-                ["bc1", "bc2"]
+                "lab".into(),
+                "lab control plane".into(),
+                ["lab1", "lab2"]
                     .map(|n| crate::operations::OpNode {
                         hostname: n.into(),
                         address: a.clone(),
@@ -90,10 +90,10 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
         (
             "logs",
             Box::new(MultiLogsComponent::new(
-                "bc1".into(),
+                "lab1".into(),
                 String::new(),
                 // Two nodes: the longest key line (the nodes pane key too)
-                ["bc1", "bc2"]
+                ["lab1", "lab2"]
                     .map(|n| LogNode {
                         name: n.into(),
                         ip: a.clone(),
@@ -108,11 +108,11 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
         ("etcd", Box::new(EtcdComponent::new())),
         (
             "lifecycle",
-            Box::new(LifecycleComponent::new("bc".into(), None)),
+            Box::new(LifecycleComponent::new("lab".into(), None)),
         ),
         (
             "security",
-            Box::new(SecurityComponent::new("bc".into(), None)),
+            Box::new(SecurityComponent::new("lab".into(), None)),
         ),
         ("volumes", Box::new(VolumesComponent::new(None))),
         ("workloads", Box::new(WorkloadHealthComponent::new(None))),

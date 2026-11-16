@@ -18,9 +18,9 @@ was or cordoned with the rollback command shown.
 ## Why
 
 Upgrades run today through [tuppr](https://github.com/home-operations/tuppr),
-an in-cluster controller (on kprod: `kolmena-infra
-clusters/kprod/platform/32-tuppr`, the olexiyb/tuppr `integration` build with
-seven of our PRs). It works, and the 2026-10-31 kprod roll went without a
+an in-cluster controller (on prod: `acme-infra
+clusters/prod/platform/32-tuppr`, the olexiyb/tuppr `integration` build with
+seven of our PRs). It works, and the 2026-10-31 prod roll went without a
 dropped session, but:
 
 - **It needs `os:admin` from inside the cluster.** `kubernetesTalosAPIAccess`
@@ -34,7 +34,7 @@ dropped session, but:
   pre-batch hooks (#681), post hooks after a failure (#682), non-blocking
   health checks (#683).
 - **It can't see storage.** Its health checks are CEL on Kubernetes objects,
-  with no `now()`. kprod works around it: a CronJob (`27-drbd-health`)
+  with no `now()`. prod works around it: a CronJob (`27-drbd-health`)
   writes DRBD state into a ConfigMap, and the `piraeus` hook checks that the
   ConfigMap is fresh and newer than the last node Ready. talos9s reads DRBD
   and LINSTOR directly.
@@ -54,7 +54,7 @@ site logic in files the operator owns.
    failure after the node was touched leaves it cordoned with the next step
    shown, never half-done and silent.
 3. Let the user add their own logic, gates and actions, without changing
-   talos9s, and port kprod's four hooks and two health checks.
+   talos9s, and port prod's four hooks and two health checks.
 4. Resume an interrupted rollout from where it stopped.
 5. Keep each node's extensions (same schematic, new version).
 6. Show what happens: per-node step, the node's own progress messages,
@@ -86,7 +86,7 @@ carry over, with the bug each one fixed:
 | Cluster health before every node and after the last (#668): nodes Ready, `MachineStatus` running+ready, etcd members = control-plane nodes, no learners, a leader, IDs match | yes, extended | Finishing while the last node still rejoins reported success too early |
 | Upgrade path and Kubernetes support checked per node (#672, Talos machinery's `UpgradeableFrom` / `SupportedWith`) | yes | Built-in table, same rules |
 | Image: the node's `machine.install.image` with the tag replaced; refuse when it doesn't carry the running schematic; factory URL for a generic installer with extensions | yes | Reinstalling the generic installer wipes extensions; `ghcr.io/siderolabs/installer` stopped at 1.14 |
-| After success, write the new `install.image` into the machine config (apply, no reboot) | no | The config owner writes the intent first (kprod: `talos_version` in tofu, applied with no reboot); talos9s writing it would make tofu's state drift (Decided #2) |
+| After success, write the new `install.image` into the machine config (apply, no reboot) | no | The config owner writes the intent first (prod: `talos_version` in tofu, applied with no reboot); talos9s writing it would make tofu's state drift (Decided #2) |
 | Pre-pull the installer on every node before the first cordon | yes (stage) | Finds a missing image on all nodes at once, shortens each node's downtime. Warm the Image Factory first (90-155 s for a new build) |
 | Drain: skip DaemonSet, mirror and finished pods; PDB-aware; wait for VolumeAttachments to detach | yes | talos9s's drain already follows kubectl's rules |
 | A failed drain uncordons and retries later | stop instead | A person is watching: say why and stop |
@@ -149,7 +149,7 @@ changes.
 
 Order: workers first by default (a canary that hurts least), then control
 plane one at a time with the etcd leader last. The plan can be reordered;
-kprod's last run went kpw1, then kpd1-3, then the rest.
+prod's last run went prod-w4, then prod-w1-3, then the rest.
 
 The plan is shown in full: nodes, order, every gate and hook that will run
 and when, the actions hooks will take. Starting needs a `y`/`n`
@@ -190,7 +190,7 @@ messages streamed into the progress view; non-zero exit code stops. The
 node keeps running its old version.
 
 **Cordon, after-cordon, drain.** Cordon, then the `after-cordon` checks and
-hooks (kprod's sessions: wait until no session pod is left; new ones
+hooks (prod's sessions: wait until no session pod is left; new ones
 already start elsewhere), then the existing PDB-aware drain and the
 VolumeAttachment wait. A failed drain uncordons and stops.
 
@@ -207,7 +207,7 @@ satellite online and its DRBD replicas connected (resyncs may run).
 On timeout: stop, leave the node cordoned, show what didn't come up and the
 rollback command (`talosctl -n <node> rollback`), never run it.
 
-**Uncordon, post-node, settle.** Uncordon, run `post-node` hooks (kprod's
+**Uncordon, post-node, settle.** Uncordon, run `post-node` hooks (prod's
 ClickHouse cache drop and Sentinel restart), then wait until the gate's
 cluster-wide checks pass again: DRBD resyncs started by this reboot finish
 here. On storage nodes this is where a rollout spends its time.
@@ -257,7 +257,7 @@ checks:
   node being upgraded), `lastNodeReady` (the newest Ready transition of a
   node in the rollout), so "fresh since the reboot" is expressible.
 - Two shorthands for the common cases: `podsReady: {selector,
-  namespaces}` and `noPodsOnNode: {selector}` (kprod's sessions gate).
+  namespaces}` and `noPodsOnNode: {selector}` (prod's sessions gate).
 - `when`: the points it runs at; `timeout` (wait until, then stop) and
   `interval`.
 - A failing check shows its `description` and which objects failed.
@@ -302,7 +302,7 @@ hooks:
   is the reason shown. Environment: `TALOS9S_CONTEXT`, `TALOS9S_STEP`,
   `TALOS9S_NODE`, `TALOS9S_NODE_IP`, `TALOS9S_NODES` (all nodes of the
   rollout), `TALOS9S_TARGET`, `TALOS9S_DRY_RUN=1` in the plan, and
-  `TUPPR_NODES` (= the node) so kprod's script runs unchanged. Run without a
+  `TUPPR_NODES` (= the node) so prod's script runs unchanged. Run without a
   shell, from the config file's directory, with a timeout always.
 - **Kubernetes access for hooks: the operator's own kubeconfig, never
   admin.** A hook that declares `needs: [kubernetes]` gets `KUBECONFIG` and
@@ -315,7 +315,7 @@ hooks:
   talos9s. The admin kubeconfig fetched from Talos never reaches a hook:
   not as a file, not through a proxy. Decided 2026-11-07, see
   [Decided](#decided).
-- **`API_URL` hooks** (kprod's `hooks.py` reads `API_URL`, not a
+- **`API_URL` hooks** (prod's `hooks.py` reads `API_URL`, not a
   kubeconfig) run through a wrapper that starts `kubectl proxy` on the
   operator's kubeconfig for the hook's lifetime, as its laptop dry run does
   today:
@@ -347,15 +347,15 @@ hooks:
 
 `--upgrade-config <file>` (default `~/.talos9s/upgrades/<context>.yaml`).
 The file and its hooks belong in the GitOps repo next to the cluster
-(`kolmena-infra/clusters/kprod/upgrade/`), reviewed like the tuppr
+(`acme-infra/clusters/prod/upgrade/`), reviewed like the tuppr
 manifests are today. The plan and the run file record the file's path and
 SHA-256, so a run shows which logic it ran with.
 
 ```yaml
-# kolmena-infra/clusters/kprod/upgrade/talos9s.yaml
+# acme-infra/clusters/prod/upgrade/talos9s.yaml
 nodes:
-  selector: kolmena.ai/provider=hetzner-robot
-  order: [kpw1, kpd1, kpd2, kpd3, kpc1, kpc3, kpc2, kpg1]
+  selector: example.com/provider=bare-metal
+  order: [prod-w4, prod-w1, prod-w2, prod-w3, prod-cp1, prod-cp3, prod-cp2, prod-gpu1]
 timeouts: { reboot: 15m, drain: 10m, settle: 1h }
 silences:
   alertmanager: http://vmalertmanager.monitoring.svc:9093  # through the API proxy
@@ -365,7 +365,7 @@ checks: [...]
 hooks: [...]
 ```
 
-### kprod, ported
+### prod, ported
 
 | tuppr today | talos9s |
 |---|---|
@@ -377,7 +377,7 @@ hooks: [...]
 | hook `sentinels` (restart a spinning Sentinel) | `post-node` action, same script, until redis#15917 ships |
 | `silences` | `silences`, created while the run lasts, expired at the end |
 | `maintenance` window | none: a person starts the run |
-| `nodeSelector` hetzner-robot | `nodes.selector` |
+| `nodeSelector` bare-metal | `nodes.selector` |
 
 The `system-upgrade` namespace keeps only what's still needed there:
 nothing, once tuppr goes. The hooks' exec rights move to the operator's own
@@ -388,7 +388,7 @@ RBAC.
 - **Upgrade view** (TUI): one row per node with step, elapsed time and last
   message; below, the selected node's stream (Talos upgrade messages, gate
   results with reasons, hook output). A waiting gate says what it waits
-  for and until when ("sessions: 2 on kpw1, timeout in 2h41m").
+  for and until when ("sessions: 2 on prod-w4, timeout in 2h41m").
 - **Run file** (`~/.talos9s/operations/`, as for other operations): every
   step, check result and hook line, masked, flushed per line; it's what a
   resume reads.
@@ -418,7 +418,7 @@ talos9s never runs inside `tofu apply` (Decided #3). The two meet through
 the cluster:
 
 1. tofu (or any config tool) bumps the version and applies the machine
-   configs with no reboot. Quick, fits tofu's model, as kprod does today.
+   configs with no reboot. Quick, fits tofu's model, as prod does today.
 2. talos9s rolls each node to the image its config names, with gates,
    hooks and the live view. It doesn't need to know who wrote the config.
 
@@ -437,12 +437,12 @@ resume, reorder in the plan, open a node's logs.
 **Headless**, for a jump host or CI, same engine:
 
 ```
-talos9s upgrade plan   --context kprod --talos v1.14.6 [--upgrade-config F]
-talos9s upgrade run    --context kprod --talos v1.14.6 [--yes]
-talos9s upgrade resume --context kprod
-talos9s upgrade status --context kprod
-talos9s upgrade attach --context kprod
-talos9s upgrade k8s    --context kprod --to v1.37.2 [--yes]
+talos9s upgrade plan   --context prod --talos v1.14.6 [--upgrade-config F]
+talos9s upgrade run    --context prod --talos v1.14.6 [--yes]
+talos9s upgrade resume --context prod
+talos9s upgrade status --context prod
+talos9s upgrade attach --context prod
+talos9s upgrade k8s    --context prod --to v1.37.2 [--yes]
 ```
 
 Human-readable by default, `--output json` for one JSON event per line.
@@ -493,8 +493,8 @@ Recommended: 2 later; for now a person runs it. Either way, anyone can
 - Integration: QEMU clusters in `test-clusters/` (3 control plane + worker),
   between two patch releases; kill talos9s mid-reboot and resume; a hook
   that fails, one that times out, one that hangs.
-- Live: kprod's kpw1 alone first (tuppr suspended), with the ported hooks in
-  dry run, then for real; then the rest of kprod; then bc.
+- Live: prod's prod-w4 alone first (tuppr suspended), with the ported hooks in
+  dry run, then for real; then the rest of prod; then lab.
 - No false positives: a gate that fails when made to fail (start a DRBD
   resync, run a session pod) and passes again after.
 
@@ -506,9 +506,9 @@ Recommended: 2 later; for now a person runs it. Either way, anyone can
 2. **Single-node upgrade** from Operations (stage, write, drain, reboot,
    verify), protos vendored.
 3. **Rolling run:** run file, resume, Lease, settle, headless `run`.
-4. **Hooks and the config file;** port kprod's hooks; silences.
+4. **Hooks and the config file;** port prod's hooks; silences.
 5. **Kubernetes** via upgrade-k8s.
-6. Retire tuppr on kprod and bc; remove `kubernetesTalosAPIAccess`.
+6. Retire tuppr on prod and lab; remove `kubernetesTalosAPIAccess`.
 
 ## Decided
 
@@ -518,7 +518,7 @@ Recommended: 2 later; for now a person runs it. Either way, anyone can
    rights silently, log their changes under the admin certificate instead
    of the operator, open admin to any local process for the run, and need a
    reverse proxy for exec (WebSocket upgrades) inside talos9s. The operator
-   already has a matching context on bc and kprod (client certificates).
+   already has a matching context on lab and prod (client certificates).
    `API_URL` hooks use a `kubectl proxy` wrapper on the operator's
    kubeconfig.
 
@@ -530,7 +530,7 @@ Recommended: 2 later; for now a person runs it. Either way, anyone can
    field.
 3. **No tofu integration** (2026-11-07): talos9s doesn't run inside `tofu
    apply` (provider or `local-exec`). The apply would hold the state lock
-   for the whole rollout (hours per node on kprod), die with its CI runner
+   for the whole rollout (hours per node on prod), die with its CI runner
    or ssh session, and hide the plan behind `--yes`; a failure halfway
    doesn't fit "converges or errors". tofu writes the intent, talos9s
    carries it out ([Integration](#integration-with-config-tools)); `attach`

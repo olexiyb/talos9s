@@ -220,8 +220,8 @@ mod tests {
     #[test]
     fn fix_commands_target_the_cluster_and_node() {
         assert_eq!(
-            FixAction::RestartService("kubelet".into()).command(Some("bc"), "10.0.0.1:50000"),
-            "talosctl --context bc -n 10.0.0.1 service kubelet restart"
+            FixAction::RestartService("kubelet".into()).command(Some("lab"), "10.0.0.1:50000"),
+            "talosctl --context lab -n 10.0.0.1 service kubelet restart"
         );
         assert_eq!(
             FixAction::AddKernelModule("br_netfilter".into()).command(None, "[fd00::1]:50000"),
@@ -233,7 +233,7 @@ mod tests {
             description: "Load br_netfilter".into(),
         };
         assert_eq!(
-            host.command(Some("bc"), "10.0.0.1"),
+            host.command(Some("lab"), "10.0.0.1"),
             "sudo modprobe br_netfilter"
         );
     }

@@ -2220,9 +2220,9 @@ mod tests {
     /// the stream tasks would send them
     fn cluster_logs(lines: &[(usize, &str, &str)]) -> MultiLogsComponent {
         let mut logs = MultiLogsComponent::new(
-            "bc control plane".into(),
+            "lab control plane".into(),
             "3 nodes".into(),
-            vec![node("bc1"), node("bc2"), node("bc3")],
+            vec![node("lab1"), node("lab2"), node("lab3")],
             &["etcd".into(), KERNEL_SERVICE.into()],
             vec!["etcd".into(), KERNEL_SERVICE.into()],
         );
@@ -2309,13 +2309,13 @@ mod tests {
             .join("\n")
     }
 
-    /// Streams etcd and the kernel log from bc's nodes for a few seconds:
+    /// Streams etcd and the kernel log from lab's nodes for a few seconds:
     /// `cargo test --lib live_cluster_logs -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
     async fn live_cluster_logs() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let context = std::env::var("TALOS9S_LIVE_CONTEXT").unwrap_or_else(|_| "bc".to_string());
+        let context = std::env::var("TALOS9S_LIVE_CONTEXT").unwrap_or_else(|_| "lab".to_string());
         let ips: Vec<String> = std::env::var("TALOS9S_LIVE_NODES")
             .expect("set TALOS9S_LIVE_NODES=ip,ip,...")
             .split(',')
@@ -2396,7 +2396,7 @@ mod tests {
         ]);
         let screen = render(&mut logs);
         assert!(
-            !screen.contains("Cluster Logs") && !screen.contains("bc control plane"),
+            !screen.contains("Cluster Logs") && !screen.contains("lab control plane"),
             "{screen}"
         );
         assert!(screen.contains("3/3 nodes"), "{screen}");
@@ -2405,8 +2405,8 @@ mod tests {
             .map(|m| screen.find(m).unwrap())
             .collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "{screen}");
-        assert!(screen.contains("bc1 etcd"), "{screen}");
-        assert!(screen.contains("bc3 kernel"), "{screen}");
+        assert!(screen.contains("lab1 etcd"), "{screen}");
+        assert!(screen.contains("lab3 kernel"), "{screen}");
         // The node filter is offered in the key line, not drawn in the view
         let hints = logs.key_hints().unwrap().to_string();
         assert!(hints.contains("<s/o/l> svcs/nodes"), "{hints}");
@@ -2418,15 +2418,15 @@ mod tests {
             (
                 0,
                 "etcd",
-                r#"{"level":"info","ts":"2026-10-19T08:20:01.000Z","msg":"from bc1"}"#,
+                r#"{"level":"info","ts":"2026-10-19T08:20:01.000Z","msg":"from lab1"}"#,
             ),
             (
                 1,
                 "etcd",
-                r#"{"level":"info","ts":"2026-10-19T08:20:02.000Z","msg":"from bc2"}"#,
+                r#"{"level":"info","ts":"2026-10-19T08:20:02.000Z","msg":"from lab2"}"#,
             ),
         ]);
-        // bc3's stream failed
+        // lab3's stream failed
         let tx = logs.stream_tx.clone().unwrap();
         logs.streams.insert(
             (2, "etcd".to_string()),
@@ -2451,8 +2451,8 @@ mod tests {
         logs.handle_key_event(key(KeyCode::Esc, KeyModifiers::NONE))
             .unwrap();
         let screen = render(&mut logs);
-        assert!(screen.contains("from bc1"), "{screen}");
-        assert!(!screen.contains("from bc2"), "{screen}");
+        assert!(screen.contains("from lab1"), "{screen}");
+        assert!(!screen.contains("from lab2"), "{screen}");
     }
 
     #[test]

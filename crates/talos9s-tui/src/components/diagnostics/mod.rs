@@ -1082,9 +1082,13 @@ mod tests {
     }
 
     fn with_failed_service() -> DiagnosticsComponent {
-        let mut diag =
-            DiagnosticsComponent::new("bc1".into(), "10.0.0.1".into(), "controlplane".into(), None);
-        diag.set_talos_context(Some("bc".into()));
+        let mut diag = DiagnosticsComponent::new(
+            "lab1".into(),
+            "10.0.0.1".into(),
+            "controlplane".into(),
+            None,
+        );
+        diag.set_talos_context(Some("lab".into()));
         diag.state.mark_loaded();
         diag.data_mut().unwrap().system_checks = vec![DiagnosticCheck::fail(
             "svc_kubelet",
@@ -1105,7 +1109,7 @@ mod tests {
         assert!(diag.show_confirmation);
         assert_eq!(
             diag.pending_command().as_deref(),
-            Some("talosctl --context bc -n 10.0.0.1 service kubelet restart")
+            Some("talosctl --context lab -n 10.0.0.1 service kubelet restart")
         );
 
         use ratatui::{Terminal, backend::TestBackend};

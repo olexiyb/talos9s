@@ -72,7 +72,7 @@ One workspace instead of full-screen views: the cluster tree stays on the left a
 
 ### Features
 
-**Workspace.** Every view opens on the right in a titled window for the selected node, group or cluster ("Network · bc1"), and moving the selection shows the same view for the new target. The last few views come back at once and refresh. The left pane can be full, compact or hidden (`[`, `]`, `Z`), titles show a spinner while a refresh runs, and long panes and the node tree scroll, with scrollbars.
+**Workspace.** Every view opens on the right in a titled window for the selected node, group or cluster ("Network · lab1"), and moving the selection shows the same view for the new target. The last few views come back at once and refresh. The left pane can be full, compact or hidden (`[`, `]`, `Z`), titles show a spinner while a refresh runs, and long panes and the node tree scroll, with scrollbars.
 
 **Starts where you left it.** The selected cluster, group or node, the view, the window with the keyboard, the pane width, folded groups, log levels, sort orders and view toggles are kept in `~/.talos9s/state.yaml`. Text filters are not. A remembered cluster wins over the talosconfig's current context. Delete the file to start fresh.
 

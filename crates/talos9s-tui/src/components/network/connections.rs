@@ -970,7 +970,7 @@ mod tests {
         assert!(matches(&local, "lo"));
         assert!(!matches(&local, "eth0"));
         assert!(matches(&conn("::1", "::1"), "lo"));
-        assert!(!matches(&conn("65.21.130.10", "1.1.1.1"), "lo"));
+        assert!(!matches(&conn("203.0.113.20", "1.1.1.1"), "lo"));
         // Listeners on every address show on the main interface
         assert!(matches(&conn("0.0.0.0", ""), "eth0"));
     }
@@ -986,7 +986,7 @@ mod tests {
         // Talos' default range is not a pod network here
         assert!(!matches(&conn("10.244.1.5", "10.0.0.11")));
         // Cilium's devices count as pod interfaces; node traffic stays off them
-        let node = conn("37.27.227.99", "65.21.130.10");
+        let node = conn("203.0.113.10", "203.0.113.20");
         for iface in ["lxc11e671568111", "cilium_host", "cilium_vxlan"] {
             assert!(NetworkStatsComponent::connection_matches_interface(
                 &conn("10.44.2.9", "10.44.0.1"),

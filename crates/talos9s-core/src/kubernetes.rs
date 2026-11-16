@@ -315,7 +315,7 @@ pub fn is_problem(kind: &str, obj: &Value, status: &Status) -> bool {
 pub struct FluxInfo {
     /// `main@sha1:abc123`, a chart version
     pub revision: String,
-    /// `GitRepository/flux-system ./clusters/kprod`, `cilium@1.18.0 from HelmRepository/cilium`
+    /// `GitRepository/flux-system ./clusters/prod`, `cilium@1.18.0 from HelmRepository/cilium`
     pub source: String,
 }
 
@@ -905,11 +905,11 @@ mod tests {
 
     #[test]
     fn flux_details() {
-        let ks = json!({"spec": {"path": "./clusters/kprod", "sourceRef": {"kind": "GitRepository", "name": "flux-system"}},
+        let ks = json!({"spec": {"path": "./clusters/prod", "sourceRef": {"kind": "GitRepository", "name": "flux-system"}},
             "status": {"lastAppliedRevision": "main@sha1:abc"}});
         let f = flux_info("Kustomization", &ks);
         assert_eq!(f.revision, "main@sha1:abc");
-        assert_eq!(f.source, "GitRepository/flux-system ./clusters/kprod");
+        assert_eq!(f.source, "GitRepository/flux-system ./clusters/prod");
 
         let hr = json!({"spec": {"chart": {"spec": {"chart": "cilium", "version": "1.18.0",
             "sourceRef": {"kind": "HelmRepository", "name": "cilium"}}}},
@@ -1041,9 +1041,9 @@ mod tests {
             namespaced: true,
         };
         let merged = merge_kinds(&[
-            ("bc".into(), vec![k("", "Pod"), k("zeta.io", "Widget")]),
+            ("lab".into(), vec![k("", "Pod"), k("zeta.io", "Widget")]),
             (
-                "kprod".into(),
+                "prod".into(),
                 vec![k("helm.toolkit.fluxcd.io", "HelmRelease"), k("", "Pod")],
             ),
         ]);
@@ -1056,8 +1056,8 @@ mod tests {
                 "Widget.zeta.io"
             ]
         );
-        assert_eq!(merged[0].clusters, vec!["bc", "kprod"]);
-        assert_eq!(merged[2].clusters, vec!["bc"]);
+        assert_eq!(merged[0].clusters, vec!["lab", "prod"]);
+        assert_eq!(merged[2].clusters, vec!["lab"]);
         assert!(is_default_kind(&merged[1].kind));
         assert!(!is_default_kind(&merged[2].kind));
         assert_eq!(

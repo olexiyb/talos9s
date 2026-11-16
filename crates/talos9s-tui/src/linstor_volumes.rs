@@ -791,8 +791,8 @@ fn standalone(replica: &Replica, peer: &str) -> bool {
 
 /// `(resource, peer)` links a node's kernel log shows as StandAlone because
 /// of an unresolved split-brain, from Talos kernel log lines such as
-/// `kern: err: [ts]: drbd pvc-1 bc2: Split-Brain detected but unresolved,
-/// dropping connection!` and `… drbd pvc-1 bc2: conn( Disconnecting ->
+/// `kern: err: [ts]: drbd pvc-1 lab2: Split-Brain detected but unresolved,
+/// dropping connection!` and `… drbd pvc-1 lab2: conn( Disconnecting ->
 /// StandAlone ) [disconnected]`.
 ///
 /// Only the link's latest StandAlone counts, and only when no other
@@ -1524,15 +1524,15 @@ mod tests {
     #[test]
     fn groups_replicas_into_volumes() {
         let resources = json!([
-            resource("bc2", false, "UpToDate", &[("bc1", true, "Established")]),
-            resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
+            resource("lab2", false, "UpToDate", &[("lab1", true, "Established")]),
+            resource("lab1", true, "UpToDate", &[("lab2", true, "Established")]),
         ]);
         let volumes = volumes_from(&resources, &definitions());
         assert_eq!(volumes.len(), 1);
         let v = &volumes[0];
         assert_eq!(v.pvc.as_deref(), Some("monitoring/vmsingle"));
         assert_eq!(v.size_kib, Some(11 * 1024 * 1024));
-        assert_eq!(v.replicas[0].node, "bc1");
+        assert_eq!(v.replicas[0].node, "lab1");
         assert!(v.replicas[0].in_use);
         assert_eq!(v.replicas[0].minor, Some(1002));
         assert!(volume_issues(v).is_empty());
@@ -1556,27 +1556,27 @@ mod tests {
     #[test]
     fn transitional_and_unreported_disk_states_are_not_errors() {
         for (disk, text) in [
-            ("Attaching", "bc2: disk Attaching"),
-            ("Negotiating", "bc2: disk Negotiating"),
-            ("DUnknown", "bc2: disk state unknown"),
-            ("Unknown", "bc2: disk state unknown"),
+            ("Attaching", "lab2: disk Attaching"),
+            ("Negotiating", "lab2: disk Negotiating"),
+            ("DUnknown", "lab2: disk state unknown"),
+            ("Unknown", "lab2: disk state unknown"),
         ] {
             let resources = json!([
-                resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
-                resource("bc2", false, disk, &[("bc1", true, "Established")]),
+                resource("lab1", true, "UpToDate", &[("lab2", true, "Established")]),
+                resource("lab2", false, disk, &[("lab1", true, "Established")]),
             ]);
             let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
             assert_eq!(issues, [Issue::warning(text)], "{disk}");
         }
 
         // No disk_state at all is unknown too
-        let mut missing = resource("bc2", false, "UpToDate", &[("bc1", true, "Established")]);
+        let mut missing = resource("lab2", false, "UpToDate", &[("lab1", true, "Established")]);
         missing["volumes"][0]["state"]
             .as_object_mut()
             .unwrap()
             .remove("disk_state");
         let resources = json!([
-            resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
+            resource("lab1", true, "UpToDate", &[("lab2", true, "Established")]),
             missing,
         ]);
         let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
@@ -1589,12 +1589,12 @@ mod tests {
     #[test]
     fn paused_sync_counts_as_syncing() {
         let resources = json!([
-            resource("bc1", true, "UpToDate", &[("bc3", true, "PausedSyncS")]),
+            resource("lab1", true, "UpToDate", &[("lab3", true, "PausedSyncS")]),
             resource(
-                "bc3",
+                "lab3",
                 false,
                 "Inconsistent",
-                &[("bc1", true, "PausedSyncT")]
+                &[("lab1", true, "PausedSyncT")]
             ),
         ]);
         let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
@@ -1605,7 +1605,7 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|i| i.text == "bc3: Inconsistent (syncing)")
+                .any(|i| i.text == "lab3: Inconsistent (syncing)")
         );
     }
 
@@ -1615,7 +1615,7 @@ mod tests {
             {"name": "pvc-1"},
             "garbage",
             {
-                "name": "pvc-1", "node_name": "bc1",
+                "name": "pvc-1", "node_name": "lab1",
                 "state": "?",
                 "flags": [1, "DRBD_DISKLESS"],
                 "layer_object": {"drbd": null},
@@ -1626,11 +1626,11 @@ mod tests {
                 ]
             },
             {
-                "name": "pvc-1", "node_name": "bc2",
-                "layer_object": {"drbd": {"connections": {"bc1": "?", "bc3": {"connected": true}}}},
+                "name": "pvc-1", "node_name": "lab2",
+                "layer_object": {"drbd": {"connections": {"lab1": "?", "lab3": {"connected": true}}}},
                 "volumes": [{"volume_number": 0, "state": {
                     "disk_state": 9,
-                    "replication_states": {"bc1": {"replication_state": "Established"}, "bc3": 1}
+                    "replication_states": {"lab1": {"replication_state": "Established"}, "lab3": 1}
                 }}]
             }
         ]);
@@ -1651,25 +1651,25 @@ mod tests {
         assert_eq!(v.replicas.len(), 2);
 
         // `drbd: null` still means a DRBD layer; a bad layer entry no minor
-        let bc1 = &v.replicas[0];
-        assert!(bc1.drbd_layer && bc1.diskless && !bc1.in_use);
-        assert_eq!((bc1.disk_state.as_str(), bc1.minor), ("Unknown", None));
-        assert!(bc1.peers.is_empty());
+        let lab1 = &v.replicas[0];
+        assert!(lab1.drbd_layer && lab1.diskless && !lab1.in_use);
+        assert_eq!((lab1.disk_state.as_str(), lab1.minor), ("Unknown", None));
+        assert!(lab1.peers.is_empty());
 
         // A malformed connection is kept, as not connected
-        let bc2 = &v.replicas[1];
-        assert_eq!(bc2.disk_state, "Unknown");
+        let lab2 = &v.replicas[1];
+        assert_eq!(lab2.disk_state, "Unknown");
         assert_eq!(
-            bc2.peers,
+            lab2.peers,
             [
                 PeerLink {
-                    peer: "bc1".to_string(),
+                    peer: "lab1".to_string(),
                     connected: false,
                     message: String::new(),
                     replication: Some("Established".to_string()),
                 },
                 PeerLink {
-                    peer: "bc3".to_string(),
+                    peer: "lab3".to_string(),
                     connected: true,
                     message: String::new(),
                     replication: None,
@@ -1693,19 +1693,24 @@ mod tests {
     fn linstor_states_become_issues() {
         let resources = json!([
             resource(
-                "bc1",
+                "lab1",
                 true,
                 "UpToDate",
-                &[("bc2", false, "Off"), ("bc3", true, "SyncSource")]
+                &[("lab2", false, "Off"), ("lab3", true, "SyncSource")]
             ),
-            resource("bc2", false, "Outdated", &[("bc1", false, "Off")]),
-            resource("bc3", false, "Inconsistent", &[("bc1", true, "SyncTarget")]),
+            resource("lab2", false, "Outdated", &[("lab1", false, "Off")]),
+            resource(
+                "lab3",
+                false,
+                "Inconsistent",
+                &[("lab1", true, "SyncTarget")]
+            ),
         ]);
         let issues = volume_issues(&volumes_from(&resources, &definitions())[0]);
         let texts: Vec<&str> = issues.iter().map(|i| i.text.as_str()).collect();
-        assert!(texts.contains(&"bc1 ↔ bc2: Connecting"));
-        assert!(texts.contains(&"bc2: disk Outdated"));
-        assert!(texts.contains(&"bc3: Inconsistent (syncing)"));
+        assert!(texts.contains(&"lab1 ↔ lab2: Connecting"));
+        assert!(texts.contains(&"lab2: disk Outdated"));
+        assert!(texts.contains(&"lab3: Inconsistent (syncing)"));
         // The broken link is reported once, though both ends see it
         assert_eq!(texts.iter().filter(|t| t.contains("↔")).count(), 1);
         assert_eq!(issues[0].severity, Severity::Error);
@@ -1716,10 +1721,10 @@ mod tests {
     #[test]
     fn drbd_smaller_than_linstor_is_an_error() {
         let resources = json!([resource(
-            "bc1",
+            "lab1",
             true,
             "UpToDate",
-            &[("bc2", true, "Established")]
+            &[("lab2", true, "Established")]
         )]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         assert!(volume_issues(&volume).is_empty());
@@ -1730,14 +1735,14 @@ mod tests {
         let issues = volume_issues(&volume);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Error);
-        assert!(issues[0].text.starts_with("bc1: DRBD device"));
+        assert!(issues[0].text.starts_with("lab1: DRBD device"));
     }
 
     #[test]
     fn missing_replica_and_full_filesystem_are_issues() {
         let resources = json!([
-            resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
-            resource("bc2", false, "UpToDate", &[("bc1", true, "Established")]),
+            resource("lab1", true, "UpToDate", &[("lab2", true, "Established")]),
+            resource("lab2", false, "UpToDate", &[("lab1", true, "Established")]),
         ]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         let groups = json!([{"name": "sc-1", "select_filter": {"place_count": 3}}]);
@@ -1759,7 +1764,7 @@ mod tests {
         let issues = volume_issues(&volume);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Warning);
-        assert!(issues[0].text.starts_with("bc1: filesystem 90% full"));
+        assert!(issues[0].text.starts_with("lab1: filesystem 90% full"));
         assert_eq!(volume.usage_kib(), Some((9 * gib, 10 * gib)));
     }
 
@@ -1797,8 +1802,8 @@ mod tests {
     #[test]
     fn suspended_io_is_an_error() {
         let resources = json!([
-            resource("bc1", true, "UpToDate", &[("bc2", true, "Established")]),
-            resource("bc2", false, "UpToDate", &[("bc1", true, "Established")]),
+            resource("lab1", true, "UpToDate", &[("lab2", true, "Established")]),
+            resource("lab2", false, "UpToDate", &[("lab1", true, "Established")]),
         ]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         volume.replicas[0].drbd = Some(DrbdObserved {
@@ -1810,12 +1815,12 @@ mod tests {
         let issues = volume_issues(&volume);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Error);
-        assert!(issues[0].text.starts_with("bc1: I/O suspended"));
+        assert!(issues[0].text.starts_with("lab1: I/O suspended"));
     }
 
     #[test]
     fn filesystem_not_grown_is_a_warning() {
-        let resources = json!([resource("bc1", true, "UpToDate", &[])]);
+        let resources = json!([resource("lab1", true, "UpToDate", &[])]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         let gib = 1024 * 1024;
         let with_fs = |fs: u64, device: u64| DrbdObserved {
@@ -1845,15 +1850,15 @@ mod tests {
     #[test]
     fn out_of_sync_on_an_established_link_is_an_error() {
         let resources = json!([resource(
-            "bc1",
+            "lab1",
             true,
             "UpToDate",
-            &[("bc2", true, "Established")]
+            &[("lab2", true, "Established")]
         )]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         let observed = |oos, ap| DrbdObserved {
             size_kib: Some(11 * 1024 * 1024 + 8),
-            peers: HashMap::from([("bc2".to_string(), established_peer(oos, ap))]),
+            peers: HashMap::from([("lab2".to_string(), established_peer(oos, ap))]),
             ..Default::default()
         };
         volume.replicas[0].drbd = Some(observed(0, 0));
@@ -1877,15 +1882,15 @@ mod tests {
         }
     }
 
-    /// The bc aftermath: Primary bc1, bits bc1↔bc2 and bc4→bc2
+    /// The lab aftermath: Primary lab1, bits lab1↔lab2 and lab4→lab2
     fn vmsingle_with_stale_bits() -> LinstorVolume {
         let links = |peers: [&'static str; 2]| -> Vec<(&'static str, bool, &'static str)> {
             peers.iter().map(|p| (*p, true, "Established")).collect()
         };
         let resources = json!([
-            resource("bc1", true, "UpToDate", &links(["bc2", "bc4"])),
-            resource("bc2", false, "UpToDate", &links(["bc1", "bc4"])),
-            resource("bc4", false, "UpToDate", &links(["bc1", "bc2"])),
+            resource("lab1", true, "UpToDate", &links(["lab2", "lab4"])),
+            resource("lab2", false, "UpToDate", &links(["lab1", "lab4"])),
+            resource("lab4", false, "UpToDate", &links(["lab1", "lab2"])),
         ]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
         let seen = |oos: &[(&str, u64)]| DrbdObserved {
@@ -1896,9 +1901,9 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        volume.replicas[0].drbd = Some(seen(&[("bc2", 924), ("bc4", 0)]));
-        volume.replicas[1].drbd = Some(seen(&[("bc1", 924), ("bc4", 0)]));
-        volume.replicas[2].drbd = Some(seen(&[("bc1", 0), ("bc2", 48)]));
+        volume.replicas[0].drbd = Some(seen(&[("lab2", 924), ("lab4", 0)]));
+        volume.replicas[1].drbd = Some(seen(&[("lab1", 924), ("lab4", 0)]));
+        volume.replicas[2].drbd = Some(seen(&[("lab1", 0), ("lab2", 48)]));
         volume
     }
 
@@ -1907,76 +1912,76 @@ mod tests {
         let issues = volume_issues(&vmsingle_with_stale_bits());
         let texts: Vec<&str> = issues.iter().map(|i| i.text.as_str()).collect();
         assert!(texts.iter().any(|t| {
-            t.starts_with("bc2 holds 924 KiB out-of-sync bits toward Primary bc1")
+            t.starts_with("lab2 holds 924 KiB out-of-sync bits toward Primary lab1")
                 && t.contains("LINBIT/drbd#153")
         }));
-        assert!(texts.contains(&"bc1 → bc2: 924 KiB out of sync"));
-        assert!(texts.contains(&"bc4 → bc2: 48 KiB out of sync"));
+        assert!(texts.contains(&"lab1 → lab2: 924 KiB out of sync"));
+        assert!(texts.contains(&"lab4 → lab2: 48 KiB out of sync"));
     }
 
     #[test]
     fn suggests_resync_from_the_primary_and_secondary_reconnect() {
         let satellites = HashMap::from([(
-            "bc1".to_string(),
+            "lab1".to_string(),
             SatellitePod {
                 namespace: "piraeus-datastore".to_string(),
-                name: "linstor-satellite.bc1-kxfwm".to_string(),
+                name: "linstor-satellite.lab1-kxfwm".to_string(),
             },
         )]);
         let remedies = remediation(
             &vmsingle_with_stale_bits(),
             &satellites,
-            "kubectl --context bc",
+            "kubectl --context lab",
         );
         assert_eq!(remedies.len(), 2);
         assert!(
             remedies[0]
                 .summary
-                .starts_with("Resync bc2 from Primary bc1")
+                .starts_with("Resync lab2 from Primary lab1")
         );
-        let exec = "kubectl --context bc -n piraeus-datastore exec linstor-satellite.bc1-kxfwm \
+        let exec = "kubectl --context lab -n piraeus-datastore exec linstor-satellite.lab1-kxfwm \
              -c linstor-satellite --";
         assert_eq!(
             remedies[0].commands,
             [
-                format!("{exec} drbdadm verify pvc-1:bc2"),
-                format!("{exec} drbdadm invalidate-remote pvc-1:bc2"),
+                format!("{exec} drbdadm verify pvc-1:lab2"),
+                format!("{exec} drbdadm invalidate-remote pvc-1:lab2"),
             ]
         );
-        // bc2 ↔ bc4 is between Secondaries: reconnect from bc2, pod unknown
+        // lab2 ↔ lab4 is between Secondaries: reconnect from lab2, pod unknown
         assert!(
             remedies[1]
                 .summary
-                .starts_with("Reconnect Secondaries bc2 ↔ bc4")
+                .starts_with("Reconnect Secondaries lab2 ↔ lab4")
         );
-        assert!(remedies[1].commands[0].contains("<linstor-satellite pod on bc2>"));
-        assert!(remedies[1].commands[0].ends_with("drbdadm disconnect pvc-1:bc4"));
-        assert!(remedies[1].commands.iter().all(|c| !c.contains("bc1")));
+        assert!(remedies[1].commands[0].contains("<linstor-satellite pod on lab2>"));
+        assert!(remedies[1].commands[0].ends_with("drbdadm disconnect pvc-1:lab4"));
+        assert!(remedies[1].commands.iter().all(|c| !c.contains("lab1")));
     }
 
-    /// The 2026-10-31 autokuma-data case: Primary bc1 in sync with both
-    /// Secondaries, bc2 ↔ bc4 dropped by a split-brain on their histories;
-    /// bc2 already retried (`Connecting`), bc4 still StandAlone
+    /// The 2026-10-31 autokuma-data case: Primary lab1 in sync with both
+    /// Secondaries, lab2 ↔ lab4 dropped by a split-brain on their histories;
+    /// lab2 already retried (`Connecting`), lab4 still StandAlone
     fn secondaries_split_brain() -> LinstorVolume {
         let established = |p: &'static str| (p, true, "Established");
         let resources = json!([
             resource(
-                "bc1",
+                "lab1",
                 true,
                 "UpToDate",
-                &[established("bc2"), established("bc4")]
+                &[established("lab2"), established("lab4")]
             ),
             resource(
-                "bc2",
+                "lab2",
                 false,
                 "UpToDate",
-                &[established("bc1"), ("bc4", false, "Off")]
+                &[established("lab1"), ("lab4", false, "Off")]
             ),
             resource(
-                "bc4",
+                "lab4",
                 false,
                 "UpToDate",
-                &[established("bc1"), ("bc2", false, "Off")]
+                &[established("lab1"), ("lab2", false, "Off")]
             ),
         ]);
         let mut volume = volumes_from(&resources, &definitions()).remove(0);
@@ -1991,16 +1996,16 @@ mod tests {
             ..Default::default()
         };
         volume.replicas[0].drbd = Some(observed([
-            ("bc2", peer("Established", false)),
-            ("bc4", peer("Established", false)),
+            ("lab2", peer("Established", false)),
+            ("lab4", peer("Established", false)),
         ]));
         volume.replicas[1].drbd = Some(observed([
-            ("bc1", peer("Established", false)),
-            ("bc4", peer("Connecting", false)),
+            ("lab1", peer("Established", false)),
+            ("lab4", peer("Connecting", false)),
         ]));
         volume.replicas[2].drbd = Some(observed([
-            ("bc1", peer("Established", false)),
-            ("bc2", peer("StandAlone", true)),
+            ("lab1", peer("Established", false)),
+            ("lab2", peer("StandAlone", true)),
         ]));
         volume.replicas[2].peers[1].message = "StandAlone".to_string();
         volume
@@ -2009,24 +2014,24 @@ mod tests {
     #[test]
     fn finds_split_brains_behind_the_latest_standalone() {
         let log = "\
-kern:    info: [2026-10-31T08:25:01.10Z]: drbd pvc-1 bc2: conn( Unconnected -> Connecting ) [connecting]
-kern:    info: [2026-10-31T08:25:01.20Z]: drbd pvc-1/0 drbd1002 bc2: uuid_compare()=split-brain-disconnect by rule=history-both
-kern:   alert: [2026-10-31T08:25:01.21Z]: drbd pvc-1/0 drbd1002 bc2: Split-Brain detected but unresolved, dropping connection!
-kern:    info: [2026-10-31T08:25:01.22Z]: drbd pvc-1 bc2: conn( Connected -> Disconnecting ) [disconnected]
-kern:    info: [2026-10-31T08:25:01.23Z]: drbd pvc-1 bc2: conn( Disconnecting -> StandAlone ) [disconnected]
-kern:   alert: [2026-10-31T08:26:00.00Z]: drbd pvc-2 bc1: Split-Brain detected but unresolved, dropping connection!
-kern:    info: [2026-10-31T08:26:00.01Z]: drbd pvc-2 bc1: conn( Disconnecting -> StandAlone ) [disconnected]
-kern:    info: [2026-10-31T08:34:01.00Z]: drbd pvc-2 bc1: conn( StandAlone -> Unconnected ) [connect]
-kern:   alert: [2026-10-31T08:40:00.00Z]: drbd pvc-3 bc1: Split-Brain detected but unresolved, dropping connection!
-kern:    info: [2026-10-31T08:40:00.01Z]: drbd pvc-3 bc1: conn( Disconnecting -> Unconnected ) [disconnected]
-kern:    info: [2026-10-31T08:40:00.02Z]: drbd pvc-3 bc1: conn( Unconnected -> Connecting ) [connecting]
-kern:    info: [2026-10-31T08:50:00.00Z]: drbd pvc-3 bc1: conn( Connecting -> StandAlone ) [disconnect]
+kern:    info: [2026-10-31T08:25:01.10Z]: drbd pvc-1 lab2: conn( Unconnected -> Connecting ) [connecting]
+kern:    info: [2026-10-31T08:25:01.20Z]: drbd pvc-1/0 drbd1002 lab2: uuid_compare()=split-brain-disconnect by rule=history-both
+kern:   alert: [2026-10-31T08:25:01.21Z]: drbd pvc-1/0 drbd1002 lab2: Split-Brain detected but unresolved, dropping connection!
+kern:    info: [2026-10-31T08:25:01.22Z]: drbd pvc-1 lab2: conn( Connected -> Disconnecting ) [disconnected]
+kern:    info: [2026-10-31T08:25:01.23Z]: drbd pvc-1 lab2: conn( Disconnecting -> StandAlone ) [disconnected]
+kern:   alert: [2026-10-31T08:26:00.00Z]: drbd pvc-2 lab1: Split-Brain detected but unresolved, dropping connection!
+kern:    info: [2026-10-31T08:26:00.01Z]: drbd pvc-2 lab1: conn( Disconnecting -> StandAlone ) [disconnected]
+kern:    info: [2026-10-31T08:34:01.00Z]: drbd pvc-2 lab1: conn( StandAlone -> Unconnected ) [connect]
+kern:   alert: [2026-10-31T08:40:00.00Z]: drbd pvc-3 lab1: Split-Brain detected but unresolved, dropping connection!
+kern:    info: [2026-10-31T08:40:00.01Z]: drbd pvc-3 lab1: conn( Disconnecting -> Unconnected ) [disconnected]
+kern:    info: [2026-10-31T08:40:00.02Z]: drbd pvc-3 lab1: conn( Unconnected -> Connecting ) [connecting]
+kern:    info: [2026-10-31T08:50:00.00Z]: drbd pvc-3 lab1: conn( Connecting -> StandAlone ) [disconnect]
 kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate -> Outdated )
 ";
         // pvc-2 reconnected since; pvc-3's StandAlone is a later disconnect
         assert_eq!(
             split_brain_links(log),
-            [("pvc-1".to_string(), "bc2".to_string())]
+            [("pvc-1".to_string(), "lab2".to_string())]
         );
         assert!(split_brain_links("").is_empty());
     }
@@ -2040,16 +2045,16 @@ kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate 
         assert_eq!(
             texts(&volume),
             [
-                "bc2 ↔ bc4: split-brain, StandAlone on bc4, Connecting on bc2: \
+                "lab2 ↔ lab4: split-brain, StandAlone on lab4, Connecting on lab2: \
               DRBD won't reconnect by itself"
             ]
         );
         // Without the kernel log's word for it, only what the state shows
-        let bc4 = volume.replicas[2].drbd.as_mut().unwrap();
-        bc4.peers.get_mut("bc2").unwrap().split_brain = false;
+        let lab4 = volume.replicas[2].drbd.as_mut().unwrap();
+        lab4.peers.get_mut("lab2").unwrap().split_brain = false;
         assert_eq!(
             texts(&volume),
-            ["bc2 ↔ bc4: StandAlone on bc4, Connecting on bc2: DRBD won't reconnect by itself"]
+            ["lab2 ↔ lab4: StandAlone on lab4, Connecting on lab2: DRBD won't reconnect by itself"]
         );
     }
 
@@ -2060,23 +2065,23 @@ kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate 
         assert!(
             remedies[0]
                 .summary
-                .starts_with("Reconnect Secondaries bc2 ↔ bc4")
+                .starts_with("Reconnect Secondaries lab2 ↔ lab4")
         );
-        // Only the StandAlone end needs it; bc2 is already connecting
+        // Only the StandAlone end needs it; lab2 is already connecting
         assert_eq!(remedies[0].commands.len(), 1);
-        assert!(remedies[0].commands[0].contains("<linstor-satellite pod on bc4>"));
-        assert!(remedies[0].commands[0].ends_with("drbdadm connect pvc-1:bc2"));
+        assert!(remedies[0].commands[0].contains("<linstor-satellite pod on lab4>"));
+        assert!(remedies[0].commands[0].ends_with("drbdadm connect pvc-1:lab2"));
         assert!(remedies[1].summary.starts_with("Only if it drops back"));
-        assert!(remedies[1].commands[0].contains("<linstor-satellite pod on bc4>"));
-        assert!(remedies[1].commands[0].ends_with("drbdadm connect --discard-my-data pvc-1:bc2"));
-        assert!(remedies[1].commands[1].contains("<linstor-satellite pod on bc2>"));
-        assert!(remedies[1].commands[1].ends_with("drbdadm connect pvc-1:bc4"));
+        assert!(remedies[1].commands[0].contains("<linstor-satellite pod on lab4>"));
+        assert!(remedies[1].commands[0].ends_with("drbdadm connect --discard-my-data pvc-1:lab2"));
+        assert!(remedies[1].commands[1].contains("<linstor-satellite pod on lab2>"));
+        assert!(remedies[1].commands[1].ends_with("drbdadm connect pvc-1:lab4"));
         // The Primary is never touched
         assert!(
             remedies
                 .iter()
                 .flat_map(|r| &r.commands)
-                .all(|c| !c.contains("bc1"))
+                .all(|c| !c.contains("lab1"))
         );
     }
 
@@ -2087,21 +2092,21 @@ kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate 
         volume.replicas[1].in_use = true;
         let remedies = remediation(&volume, &HashMap::new(), "kubectl");
         assert_eq!(remedies.len(), 1);
-        assert!(remedies[0].summary.contains("Primary bc2 is one end"));
+        assert!(remedies[0].summary.contains("Primary lab2 is one end"));
         assert!(remedies[0].commands.is_empty());
 
         let mut volume = secondaries_split_brain();
-        let bc1 = volume.replicas[0].drbd.as_mut().unwrap();
-        bc1.peers.get_mut("bc4").unwrap().oos_kib = Some(48);
+        let lab1 = volume.replicas[0].drbd.as_mut().unwrap();
+        lab1.peers.get_mut("lab4").unwrap().oos_kib = Some(48);
         let remedies: Vec<_> = remediation(&volume, &HashMap::new(), "kubectl")
             .into_iter()
-            .filter(|r| r.summary.contains("bc2 ↔ bc4"))
+            .filter(|r| r.summary.contains("lab2 ↔ lab4"))
             .collect();
         assert_eq!(remedies.len(), 1);
         assert!(
             remedies[0]
                 .summary
-                .contains("bc4 is not UpToDate and in sync with Primary bc1")
+                .contains("lab4 is not UpToDate and in sync with Primary lab1")
         );
         assert!(remedies[0].commands.is_empty());
     }
@@ -2158,7 +2163,7 @@ kern:    info: [2026-10-31T08:50:00.01Z]: drbd pvc-3/0 drbd1003: disk( UpToDate 
 
     /// Scan a real cluster: the current KUBECONFIG context and the Talos
     /// context named by `TALOS9S_LIVE_CONTEXT`, e.g.
-    /// `TALOS9S_LIVE_CONTEXT=bc cargo test live_scan -- --ignored --nocapture`
+    /// `TALOS9S_LIVE_CONTEXT=lab cargo test live_scan -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
     async fn live_scan() {

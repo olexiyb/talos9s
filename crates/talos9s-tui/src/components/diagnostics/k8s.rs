@@ -1754,7 +1754,7 @@ mod tests {
         let pod = |name: &str, ready: bool, restarts: i32| -> Pod {
             k8s_openapi::serde_json::from_value(json!({
                 "metadata": {"name": name},
-                "spec": {"containers": [], "nodeName": "bc1"},
+                "spec": {"containers": [], "nodeName": "lab1"},
                 "status": {
                     "phase": "Running",
                     "conditions": [{"type": "Ready", "status": if ready { "True" } else { "False" }}],
@@ -1778,7 +1778,7 @@ mod tests {
         // Restarts summed over containers; readiness from the Ready condition
         assert_eq!(info.pods[0].restart_count, 3);
         assert!(info.pods[0].ready && !info.pods[1].ready);
-        assert_eq!(info.pods[0].node_name.as_deref(), Some("bc1"));
+        assert_eq!(info.pods[0].node_name.as_deref(), Some("lab1"));
 
         assert_eq!(
             cni_info_from(vec![pod("kube-flannel-ds-1", true, 0)]).cni_type,

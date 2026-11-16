@@ -3,7 +3,7 @@
 //! Lists all namespaces (`0`), the recent warps (`1`-`4` pick them), then the
 //! namespaces the view has, with how many of its items each holds. Typing
 //! filters; a filter ending in `*` is a prefix and offered as a warp
-//! (`kolmena-staging*`). `Space` marks several namespaces, Enter warps into
+//! (`acme-staging*`). `Space` marks several namespaces, Enter warps into
 //! the marked ones or the selected entry, Esc cancels. `↑`/`↓` move:
 //! letters type.
 

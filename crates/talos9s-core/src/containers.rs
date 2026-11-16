@@ -243,15 +243,15 @@ mod tests {
 
     fn all() -> Vec<NodeContainer> {
         vec![
-            ctr("bc1", "", "apid", "RUNNING"),
-            sandbox("bc1", "web/gw-1", "SANDBOX_READY"),
-            ctr("bc1", "web/gw-1", "init", "CONTAINER_EXITED"),
-            ctr("bc1", "web/gw-1", "app", "CONTAINER_RUNNING"),
-            sandbox("bc2", "web/gw-2", "SANDBOX_READY"),
-            ctr("bc2", "web/gw-2", "app", "CONTAINER_CREATED"),
+            ctr("lab1", "", "apid", "RUNNING"),
+            sandbox("lab1", "web/gw-1", "SANDBOX_READY"),
+            ctr("lab1", "web/gw-1", "init", "CONTAINER_EXITED"),
+            ctr("lab1", "web/gw-1", "app", "CONTAINER_RUNNING"),
+            sandbox("lab2", "web/gw-2", "SANDBOX_READY"),
+            ctr("lab2", "web/gw-2", "app", "CONTAINER_CREATED"),
             // A finished job: hidden without `A`
-            sandbox("bc2", "jobs/done", "SANDBOX_NOTREADY"),
-            ctr("bc2", "jobs/done", "run", "CONTAINER_EXITED"),
+            sandbox("lab2", "jobs/done", "SANDBOX_NOTREADY"),
+            ctr("lab2", "jobs/done", "run", "CONTAINER_EXITED"),
         ]
     }
 

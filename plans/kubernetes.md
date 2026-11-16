@@ -19,7 +19,7 @@ from the design below:
   not a CLUSTER column in the Workloads view. The Workloads view stays per
   cluster (focus, NODES, the pod list); Problems uses the same health
   rules on every cluster.
-- **Flux became GitOps:** bc and khive run Argo CD and kprod neither, so
+- **Flux became GitOps:** lab and staging run Argo CD and prod neither, so
   the list has Argo CD Applications (health and sync, out of sync as
   degraded) next to Flux's objects.
 - **Search is `s`;** `/` keeps its meaning everywhere, a filter of the list.
@@ -35,7 +35,7 @@ from the design below:
   this run, and is it healthy everywhere?" means visiting each cluster.
 - talos9s already holds a Kubernetes client per cluster, picked by CA, and
   the Workloads view's rules (health from status, each list stands alone).
-- With bc, kprod and khive, most questions are cross-cluster: which
+- With lab, prod and staging, most questions are cross-cluster: which
   version of a chart runs where, why one cluster differs, what's broken
   anywhere.
 
@@ -115,7 +115,7 @@ detail. Searches use server-side selectors where they can (labels), names
 match client-side over the cached lists; an image search reads pods.
 
 **Browser.** Kinds from API discovery, merged across clusters (a CRD only
-on kprod shows "kprod only"). Lists use `kube_list` with paging and a
+on prod shows "prod only"). Lists use `kube_list` with paging and a
 per-kind row cap; a kind with thousands of objects says so instead of
 fetching everything.
 
@@ -139,8 +139,8 @@ the source path or chart in the GitOps repo.
 
 - Unit: status summaries (healthy, progressing, failed, unknown kind),
   diff normalization, search matching, masking of Secrets and YAML.
-- Live (read-only): bc and kprod together; one cluster unreachable (fake
-  talosconfig endpoint) and one with a 403 (`--kubeconfig` with bc-oidc),
+- Live (read-only): lab and prod together; one cluster unreachable (fake
+  talosconfig endpoint) and one with a 403 (`--kubeconfig` with lab-oidc),
   the other keeps working.
 - No false positives: break a test Deployment in a test namespace (bad
   image), see it in the cross-cluster list, fix it, gone. Delete the
