@@ -18,8 +18,8 @@ struct Cli {
     #[arg(short = 'V', long)]
     version: bool,
 
-    /// Don't check GitHub for a newer release (done at most once a day;
-    /// DO_NOT_TRACK=1 also turns it off)
+    /// Don't check GitHub for a newer release (done at start, at most
+    /// hourly, and daily while running; DO_NOT_TRACK=1 also turns it off)
     // Boolish: the variable may be 1/0, yes/no, on/off as well as true/false
     #[arg(
         long,

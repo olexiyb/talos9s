@@ -105,9 +105,12 @@ pub struct UpdateCheck {
 }
 
 impl UpdateCheck {
-    /// No answer yet, or the last one is older than `interval`
-    pub fn due(&self, now: u64, interval: std::time::Duration) -> bool {
+    /// No answer yet, or the last one is older than `interval`, and this
+    /// run didn't try within `interval` either (`tried_at`: a failed try
+    /// leaves `checked_at` as it was)
+    pub fn due(&self, tried_at: Option<u64>, now: u64, interval: std::time::Duration) -> bool {
         talos9s_core::version::check_due(self.checked_at, now, interval)
+            && talos9s_core::version::check_due(tried_at, now, interval)
     }
 
     /// The latest release when it is newer than this build
@@ -232,6 +235,27 @@ pub fn save(path: &Path, state: &UiState) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// At start an hour-old answer is asked again, while running a day-old
+    /// one; a failed try waits the interval too
+    #[test]
+    fn update_check_due_at_start_and_while_running() {
+        use crate::update::{RUNNING_INTERVAL, START_INTERVAL};
+        let hour = 60 * 60;
+        let now = 100 * 24 * hour;
+        let answered = |ago: u64| UpdateCheck {
+            checked_at: Some(now - ago),
+            latest: Some("0.3.0".into()),
+        };
+        assert!(UpdateCheck::default().due(None, now, START_INTERVAL));
+        assert!(answered(hour).due(None, now, START_INTERVAL));
+        assert!(!answered(hour - 1).due(None, now, START_INTERVAL));
+        assert!(!answered(2 * hour).due(None, now, RUNNING_INTERVAL));
+        assert!(answered(24 * hour).due(None, now, RUNNING_INTERVAL));
+        // The answer is old, but this run tried a minute ago and failed
+        assert!(!answered(24 * hour).due(Some(now - 60), now, RUNNING_INTERVAL));
+        assert!(answered(24 * hour).due(Some(now - 24 * hour), now, RUNNING_INTERVAL));
+    }
 
     #[test]
     fn round_trips_and_tolerates_unknown_values() {

@@ -88,7 +88,8 @@ from the cluster, and anyone who can create a pod controls some of them.
   `KUBECONFIG_CONTEXT`); the admin kubeconfig fetched from Talos never
   reaches a hook, not as a file and not through a proxy.
 - **Update check** (`update.rs`): one bounded HTTPS GET to the GitHub
-  releases API, at most daily; off with `--no-update-check`,
+  releases API at start (at most hourly) and daily while
+  running; off with `--no-update-check`,
   `TALOS9S_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. It only reports a version;
   it never downloads or runs anything.
 

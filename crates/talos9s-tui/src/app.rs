@@ -126,6 +126,9 @@ pub struct App {
     update_check_enabled: bool,
     update: crate::state::UpdateCheck,
     update_job: Option<tokio::task::JoinHandle<Result<String, String>>>,
+    /// When this run last asked, answered or not: a failed check waits for
+    /// the interval too instead of being retried on every loop
+    update_tried_at: Option<u64>,
     /// Operations running in the background, one per context
     /// (`crate::operations`)
     runs: crate::operations::Runs,
@@ -202,6 +205,7 @@ impl App {
             update_check_enabled: true,
             update: Default::default(),
             update_job: None,
+            update_tried_at: None,
             runs: crate::operations::Runs::default(),
             quit_refused: None,
             tail_lines,
@@ -607,17 +611,23 @@ impl App {
         self.update_check_enabled = false;
     }
 
-    /// Ask GitHub for the latest release when the last answer is a day old
-    fn start_update_check(&mut self) {
+    /// Ask GitHub for the latest release when the last answer, and this
+    /// run's last try, are older than `interval` (`update::START_INTERVAL`
+    /// at start, `update::RUNNING_INTERVAL` from the loop)
+    fn start_update_check(&mut self, interval: std::time::Duration) {
+        let now = crate::ui_ext::unix_now_secs();
         if !self.update_check_enabled
-            || crate::update::do_not_track()
-            || !self.update.due(
-                crate::ui_ext::unix_now_secs(),
-                crate::update::CHECK_INTERVAL,
-            )
+            || self.update_job.is_some()
+            || !self.update.due(self.update_tried_at, now, interval)
         {
             return;
         }
+        // Read once: the loop calls this many times a second
+        if crate::update::do_not_track() {
+            self.update_check_enabled = false;
+            return;
+        }
+        self.update_tried_at = Some(now);
         self.update_job = Some(tokio::spawn(crate::update::fetch_latest()));
     }
 
@@ -832,7 +842,7 @@ impl App {
             }
             self.focus_after_show = false;
         }
-        self.start_update_check();
+        self.start_update_check(crate::update::START_INTERVAL);
 
         loop {
             // Draw current view
@@ -890,6 +900,7 @@ impl App {
                 self.run_viewer(terminal, &path)?;
             }
             self.poll_update_check();
+            self.start_update_check(crate::update::RUNNING_INTERVAL);
             self.persist_state();
 
             // Check async results (non-blocking)

@@ -1,6 +1,8 @@
-//! Is a newer talos9s released? Asks GitHub for the latest release, at most
-//! once a day (the answer is kept in the state file), in the background with
-//! a short time limit. It is the only connection talos9s makes outside the
+//! Is a newer talos9s released? Asks GitHub for the latest release at start
+//! (unless it did within the hour; the answer is kept in the state file) and
+//! once a day while running, in the background with a short time limit, as
+//! k9s does: an answer kept for a day hid a release made since. It is the
+//! only connection talos9s makes outside the
 //! clusters; `--no-update-check`, `TALOS9S_NO_UPDATE_CHECK` or the common
 //! `DO_NOT_TRACK=1` turn it off.
 
@@ -16,8 +18,12 @@ pub const RELEASES_URL: &str = "https://github.com/olexiyb/talos9s/releases/late
 
 const LATEST_API: &str = "https://api.github.com/repos/olexiyb/talos9s/releases/latest";
 
-/// Between two checks
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// At start, skip the check when the last answer is younger: restarting a
+/// few times in a row costs one request
+pub const START_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// While running, between two checks (sessions left open for days)
+pub const RUNNING_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Upper bound for the whole request
 const TIMEOUT: Duration = Duration::from_secs(5);

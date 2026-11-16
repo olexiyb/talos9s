@@ -323,9 +323,9 @@ node, so it is careful about what it changes:
   wizard's output directory. It has no configuration file.
 - **No in-cluster access needed.** Nothing runs in the cluster and no
   Kubernetes namespace needs Talos API rights.
-- **One connection besides your clusters:** at most once a day it asks
-  GitHub for the latest talos9s release, to show "0.3.0 available" on the
-  top line. `--no-update-check`, `TALOS9S_NO_UPDATE_CHECK=1` or
+- **One connection besides your clusters:** at start (at most once an hour)
+  and once a day while running, it asks GitHub for the latest talos9s
+  release, to show "0.4.0 available" on the top line. `--no-update-check`, `TALOS9S_NO_UPDATE_CHECK=1` or
   `DO_NOT_TRACK=1` turns it off.
 
 ## How it works
