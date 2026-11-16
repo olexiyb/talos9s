@@ -19,6 +19,8 @@ pub fn error_text(e: &kube::Error) -> String {
     match e {
         kube::Error::Api(status) if !status.message.is_empty() => status.message.clone(),
         kube::Error::Api(status) => format!("{} ({})", status.reason, status.code),
+        // Without kube-rs's "ServiceError: " in front ("no answer within 10s")
+        kube::Error::Service(e) => e.to_string(),
         other => other.to_string(),
     }
 }
@@ -36,9 +38,21 @@ pub async fn list<K>(api: &Api<K>, params: &ListParams) -> Result<ObjectList<K>,
 where
     K: Clone + DeserializeOwned + Debug,
 {
+    list_within(api, params, K8S_REQUEST_TIMEOUT).await
+}
+
+/// [`list`] with each try bounded by `limit` instead
+pub async fn list_within<K>(
+    api: &Api<K>,
+    params: &ListParams,
+    limit: Duration,
+) -> Result<ObjectList<K>, kube::Error>
+where
+    K: Clone + DeserializeOwned + Debug,
+{
     let mut waits = BACKOFF.iter();
     loop {
-        match bounded(api.list(params)).await {
+        match bounded_within(api.list(params), limit).await {
             Err(e) if is_too_many_requests(&e) => match waits.next() {
                 Some(wait) => tokio::time::sleep(*wait).await,
                 None => return Err(e),
@@ -53,9 +67,22 @@ where
 pub async fn bounded<T>(
     request: impl Future<Output = Result<T, kube::Error>>,
 ) -> Result<T, kube::Error> {
-    tokio::time::timeout(K8S_REQUEST_TIMEOUT, request)
+    bounded_within(request, K8S_REQUEST_TIMEOUT).await
+}
+
+/// [`bounded`] by `limit`; the error says how long it waited ("no answer
+/// within 10s"), not tokio's "deadline has elapsed"
+async fn bounded_within<T>(
+    request: impl Future<Output = Result<T, kube::Error>>,
+    limit: Duration,
+) -> Result<T, kube::Error> {
+    tokio::time::timeout(limit, request)
         .await
-        .map_err(|elapsed| kube::Error::Service(Box::new(elapsed)))?
+        .map_err(|_| timed_out(limit))?
+}
+
+fn timed_out(limit: Duration) -> kube::Error {
+    kube::Error::Service(format!("no answer within {}s", limit.as_secs()).into())
 }
 
 fn is_too_many_requests(e: &kube::Error) -> bool {
@@ -87,5 +114,20 @@ mod tests {
             "statefulsets.apps is forbidden: User \"viewer\" cannot list"
         );
         assert_eq!(error_text(&api_error("")), "Forbidden (403)");
+    }
+
+    /// A timeout says how long it waited, not "ServiceError: deadline has
+    /// elapsed"
+    #[tokio::test]
+    async fn timeout_says_how_long() {
+        let never = std::future::pending::<Result<(), kube::Error>>();
+        let e = bounded_within(never, Duration::from_millis(1))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, kube::Error::Service(_)), "{e:?}");
+        assert_eq!(
+            error_text(&timed_out(Duration::from_secs(30))),
+            "no answer within 30s"
+        );
     }
 }

@@ -81,6 +81,12 @@ pub const POD_LOG_FOLLOW_INTERVAL: std::time::Duration = std::time::Duration::fr
 /// kube-rs otherwise waits minutes on a dead API server
 pub const K8S_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Upper bound for one cluster's lists in the Kubernetes view, and for each
+/// request in them. It lists any kind you pick, and some API servers take
+/// about 10 s to list their Secrets (kubectl too), more than
+/// [`K8S_REQUEST_TIMEOUT`]
+pub const KUBERNETES_VIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Memory in use (percent) that is a warning / critical. One source for the
 /// dashboard's colors and the diagnostics verdicts, so they never disagree.
 pub const MEMORY_WARN_PERCENT: f64 = 80.0;

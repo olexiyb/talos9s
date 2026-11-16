@@ -535,7 +535,7 @@ impl KubernetesComponent {
                         return (result, Vec::new());
                     }
                 };
-                let timeout = talos9s_core::constants::WORKLOADS_FETCH_TIMEOUT;
+                let timeout = talos9s_core::constants::KUBERNETES_VIEW_TIMEOUT;
                 match tokio::time::timeout(timeout, list_cluster(&name, &client, &kinds, &mode))
                     .await
                 {
@@ -1656,7 +1656,8 @@ async fn list_cluster(
     let reads = kinds.iter().map(|k| {
         let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource(k));
         let params = params.clone();
-        async move { (k, crate::kube_list::list(&api, &params).await) }
+        let limit = talos9s_core::constants::KUBERNETES_VIEW_TIMEOUT;
+        async move { (k, crate::kube_list::list_within(&api, &params, limit).await) }
     });
     let now = chrono::Utc::now().timestamp();
     let mut rows = Vec::new();
