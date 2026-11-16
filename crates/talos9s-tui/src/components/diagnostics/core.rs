@@ -162,6 +162,124 @@ pub async fn run_service_checks(
     checks
 }
 
+/// Upper bound for the etcd reads of one node's diagnostics
+const ETCD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// This node's etcd member: whether it answers, then the etcd view's member
+/// checks (apply lag, behind the leader, fragmentation, quota) for it
+async fn etcd_checks(client: &TalosClient, ctx: &DiagnosticContext) -> Vec<DiagnosticCheck> {
+    let target = ctx
+        .node_endpoint
+        .clone()
+        .unwrap_or_else(|| ctx.hostname.clone());
+    let read = async {
+        let own = client
+            .etcd_status_for_nodes(std::slice::from_ref(&target))
+            .await?;
+        // The member list and the leader's status only add names and the
+        // behind-the-leader check; without them the rest still holds
+        let members = client.etcd_members().await.unwrap_or_default();
+        let leader = own
+            .first()
+            .filter(|s| !s.is_leader() && s.leader_id != 0)
+            .and_then(|s| members.iter().find(|m| m.id == s.leader_id))
+            .and_then(talos_rs::EtcdMemberInfo::ip_address);
+        let leader_status = match leader {
+            Some(ip) => client
+                .etcd_status_for_nodes(&[ip])
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Ok::<_, talos_rs::TalosError>((own, members, leader_status))
+    };
+    match tokio::time::timeout(ETCD_TIMEOUT, read).await {
+        Ok(Ok((own, members, leader_status))) => {
+            etcd_verdict(&ctx.hostname, own.first(), &members, &leader_status)
+        }
+        Ok(Err(e)) => vec![
+            DiagnosticCheck::fail("etcd", "Etcd", "Unreachable", None)
+                .with_details(&format!("Error: {e}")),
+        ],
+        Err(_) => vec![
+            DiagnosticCheck::unknown("etcd", "Etcd").with_details(&format!(
+                "No answer from etcd within {}s",
+                ETCD_TIMEOUT.as_secs()
+            )),
+        ],
+    }
+}
+
+/// The etcd checks of the node `hostname` from its own status, the member
+/// list and the leader's status (both may be empty)
+fn etcd_verdict(
+    hostname: &str,
+    own: Option<&talos_rs::EtcdMemberStatus>,
+    members: &[talos_rs::EtcdMemberInfo],
+    leader_status: &[talos_rs::EtcdMemberStatus],
+) -> Vec<DiagnosticCheck> {
+    use crate::components::etcd::{EtcdMember, member_checks};
+    let Some(own) = own else {
+        return vec![DiagnosticCheck::warn("etcd", "Etcd", "No status returned")];
+    };
+    let info_of = |status: &talos_rs::EtcdMemberStatus, fallback: &str| {
+        members
+            .iter()
+            .find(|m| m.id == status.member_id)
+            .cloned()
+            .unwrap_or_else(|| talos_rs::EtcdMemberInfo {
+                id: status.member_id,
+                hostname: fallback.to_string(),
+                peer_urls: Vec::new(),
+                client_urls: Vec::new(),
+                is_learner: status.is_learner,
+            })
+    };
+    let member = |status: &talos_rs::EtcdMemberStatus, fallback: &str| EtcdMember {
+        info: info_of(status, fallback),
+        status: Some(status.clone()),
+        spec: None,
+        running: None,
+    };
+    let this = member(own, hostname);
+    let name = this.info.hostname.clone();
+    let mut all = vec![this];
+    all.extend(
+        leader_status
+            .iter()
+            .filter(|s| s.is_leader() && s.member_id != own.member_id)
+            .map(|s| member(s, "leader")),
+    );
+    let flagged: Vec<DiagnosticCheck> = member_checks(&all)
+        .into_iter()
+        .filter(|c| c.member == name)
+        .map(|c| {
+            if c.error {
+                DiagnosticCheck::fail("etcd", "Etcd", &c.text, None)
+            } else if c.defrag {
+                DiagnosticCheck::warn("etcd", "Etcd", &c.text).with_fix(DiagnosticFix {
+                    description: "Defragment etcd on this node".to_string(),
+                    action: FixAction::EtcdDefrag,
+                })
+            } else {
+                DiagnosticCheck::warn("etcd", "Etcd", &c.text)
+            }
+        })
+        .collect();
+    if !flagged.is_empty() {
+        return flagged;
+    }
+    let msg = if own.is_leader() {
+        "Leader, healthy".to_string()
+    } else {
+        match members.iter().find(|m| m.id == own.leader_id) {
+            Some(leader) => format!("Follower (leader: {})", leader.hostname),
+            None => format!("Follower (leader: {:x})", own.leader_id),
+        }
+    };
+    vec![DiagnosticCheck::pass("etcd", "Etcd", &msg)]
+}
+
 /// Run core Kubernetes component checks
 pub async fn run_kubernetes_checks(
     client: &TalosClient,
@@ -171,32 +289,7 @@ pub async fn run_kubernetes_checks(
 
     // Etcd check (for control plane nodes)
     if ctx.node_role.contains("controlplane") || ctx.node_role.contains("control") {
-        // Target this specific node for etcd status
-        let target_node = ctx
-            .node_endpoint
-            .clone()
-            .unwrap_or_else(|| ctx.hostname.clone());
-        match client.etcd_status_for_nodes(&[target_node]).await {
-            Ok(status_list) => {
-                if let Some(status) = status_list.first() {
-                    let is_leader = status.is_leader();
-                    let msg = if is_leader {
-                        "Leader, healthy".to_string()
-                    } else {
-                        format!("Follower (leader: {:x})", status.leader_id)
-                    };
-                    checks.push(DiagnosticCheck::pass("etcd", "Etcd", &msg));
-                } else {
-                    checks.push(DiagnosticCheck::warn("etcd", "Etcd", "No status returned"));
-                }
-            }
-            Err(e) => {
-                checks.push(
-                    DiagnosticCheck::fail("etcd", "Etcd", "Unreachable", None)
-                        .with_details(&format!("Error: {e}")),
-                );
-            }
-        }
+        checks.extend(etcd_checks(client, ctx).await);
     }
 
     // Pod health check - use K8s API if available, otherwise skip
@@ -454,5 +547,110 @@ fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> Dia
             }
             check
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::types::CheckStatus;
+    use super::*;
+    use talos_rs::{EtcdMemberInfo, EtcdMemberStatus};
+
+    const MIB: i64 = 1 << 20;
+
+    fn info(id: u64) -> EtcdMemberInfo {
+        EtcdMemberInfo {
+            id,
+            hostname: format!("lab{id}"),
+            peer_urls: vec![format!("https://10.0.0.{id}:2380")],
+            client_urls: Vec::new(),
+            is_learner: false,
+        }
+    }
+
+    fn status(id: u64, leader: u64, db: i64, in_use: i64, raft: (u64, u64)) -> EtcdMemberStatus {
+        EtcdMemberStatus {
+            node: format!("lab{id}"),
+            member_id: id,
+            protocol_version: "3.5".to_string(),
+            db_size: db,
+            db_size_in_use: in_use,
+            leader_id: leader,
+            raft_index: raft.0,
+            raft_term: 7,
+            raft_applied_index: raft.1,
+            errors: Vec::new(),
+            is_learner: false,
+        }
+    }
+
+    fn messages(checks: &[DiagnosticCheck]) -> Vec<(CheckStatus, String)> {
+        checks
+            .iter()
+            .map(|c| (c.status.clone(), c.message.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn healthy_member_passes_with_the_leader_named() {
+        let members = [info(1), info(2)];
+        let leader = status(1, 1, 100 * MIB, 90 * MIB, (5_000, 5_000));
+        let own = status(2, 1, 100 * MIB, 90 * MIB, (4_990, 4_990));
+        assert_eq!(
+            messages(&etcd_verdict(
+                "lab2",
+                Some(&own),
+                &members,
+                std::slice::from_ref(&leader)
+            )),
+            [(CheckStatus::Pass, "Follower (leader: lab1)".to_string())]
+        );
+        assert_eq!(
+            messages(&etcd_verdict("lab1", Some(&leader), &members, &[])),
+            [(CheckStatus::Pass, "Leader, healthy".to_string())]
+        );
+        // No status for this member: a warning, not a failure
+        assert_eq!(
+            messages(&etcd_verdict("lab1", None, &members, &[]))[0].0,
+            CheckStatus::Warn
+        );
+    }
+
+    /// The etcd view's member checks, for this node only
+    #[test]
+    fn flags_lag_behind_leader_and_defrag_of_this_member() {
+        let members = [info(1), info(2)];
+        // The leader is fragmented too, but that's its own node's check
+        let leader = status(1, 1, 900 * MIB, 300 * MIB, (100_000, 100_000));
+        let own = status(2, 1, 900 * MIB, 300 * MIB, (85_000, 78_000));
+        let checks = etcd_verdict("lab2", Some(&own), &members, &[leader]);
+        let found = messages(&checks);
+        assert_eq!(
+            found[0],
+            (
+                CheckStatus::Fail,
+                "7000 entries committed but not applied (slow disk?)".to_string()
+            )
+        );
+        assert!(found.contains(&(
+            CheckStatus::Warn,
+            "15000 entries behind the leader".to_string()
+        )));
+        let defrag: Vec<&DiagnosticCheck> = checks.iter().filter(|c| c.fix.is_some()).collect();
+        assert_eq!(defrag.len(), 1, "{found:?}");
+        assert!(defrag[0].message.starts_with("defrag would reclaim 600"));
+        assert_eq!(
+            defrag[0]
+                .fix
+                .as_ref()
+                .unwrap()
+                .action
+                .command(Some("lab"), "10.0.0.2:50000"),
+            "talosctl --context lab -n 10.0.0.2 etcd defrag"
+        );
+
+        // Without the leader's status there is nothing to compare against
+        let alone = messages(&etcd_verdict("lab2", Some(&own), &members, &[]));
+        assert!(!alone.iter().any(|(_, m)| m.contains("behind")));
     }
 }

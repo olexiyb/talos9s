@@ -121,7 +121,6 @@ fn same_set(a: &[String], b: &[String]) -> bool {
 /// its config no longer asks for (they apply when etcd restarts), or else a
 /// member list that doesn't show the address the config advertises
 fn address_check(member: &EtcdMember) -> Option<String> {
-    let name = &member.info.hostname;
     let spec = member.spec.as_ref()?;
     if let Some(running) = &member.running {
         let mut differences = Vec::new();
@@ -145,7 +144,7 @@ fn address_check(member: &EtcdMember) -> Option<String> {
         }
         if !differences.is_empty() {
             return Some(format!(
-                "{name}: etcd {}; the config applies when etcd restarts",
+                "etcd {}; the config applies when etcd restarts",
                 differences.join(", ")
             ));
         }
@@ -162,7 +161,7 @@ fn address_check(member: &EtcdMember) -> Option<String> {
     .collect();
     (!spec.advertised.is_empty() && !stale.is_empty()).then(|| {
         format!(
-            "{name}: config advertises {} but the member list has {}",
+            "config advertises {} but the member list has {}",
             spec.advertised.join(", "),
             stale.join(" and ")
         )
@@ -181,7 +180,28 @@ use talos9s_core::constants::etcd::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct EtcdCheck {
     pub error: bool,
+    /// The member's hostname
+    pub member: String,
+    /// What is off, without the member's name
     pub text: String,
+    /// `talosctl etcd defrag` would fix it
+    pub defrag: bool,
+}
+
+impl EtcdCheck {
+    fn new(member: &EtcdMember, error: bool, text: String) -> Self {
+        Self {
+            error,
+            member: member.info.hostname.clone(),
+            text,
+            defrag: false,
+        }
+    }
+
+    /// "lab1: 7000 entries committed but not applied"
+    pub fn line(&self) -> String {
+        format!("{}: {}", self.member, self.text)
+    }
 }
 
 impl talos9s_core::HasHealth for EtcdCheck {
@@ -206,48 +226,53 @@ pub fn member_checks(members: &[EtcdMember]) -> Vec<EtcdCheck> {
         .map(|(_, s)| s.raft_index);
     let mut checks: Vec<EtcdCheck> = members
         .iter()
-        .filter_map(address_check)
-        .map(|text| EtcdCheck { error: false, text })
+        .filter_map(|m| Some(EtcdCheck::new(m, false, address_check(m)?)))
         .collect();
-    for (member, status) in &statuses {
-        let name = &member.info.hostname;
+    for &(member, status) in &statuses {
         let lag = status.raft_index.saturating_sub(status.raft_applied_index);
         if lag >= APPLY_LAG_WARN {
-            checks.push(EtcdCheck {
-                error: lag >= APPLY_LAG_ERROR,
-                text: format!("{name}: {lag} entries committed but not applied (slow disk?)"),
-            });
+            checks.push(EtcdCheck::new(
+                member,
+                lag >= APPLY_LAG_ERROR,
+                format!("{lag} entries committed but not applied (slow disk?)"),
+            ));
         }
         if let Some(leader) = leader_index {
             let behind = leader.saturating_sub(status.raft_index);
             if behind >= BEHIND_LEADER_WARN {
-                checks.push(EtcdCheck {
-                    error: false,
-                    text: format!("{name}: {behind} entries behind the leader"),
-                });
+                checks.push(EtcdCheck::new(
+                    member,
+                    false,
+                    format!("{behind} entries behind the leader"),
+                ));
             }
         }
         if let Some(free) = defrag_reclaims(status) {
             checks.push(EtcdCheck {
-                error: false,
-                text: format!(
-                    "{name}: defrag would reclaim {} of {} ({}% of the file unused)",
-                    format_bytes_signed(free),
-                    format_bytes_signed(status.db_size),
-                    free * 100 / status.db_size
-                ),
+                defrag: true,
+                ..EtcdCheck::new(
+                    member,
+                    false,
+                    format!(
+                        "defrag would reclaim {} of {} ({}% of the file unused)",
+                        format_bytes_signed(free),
+                        format_bytes_signed(status.db_size),
+                        free * 100 / status.db_size
+                    ),
+                )
             });
         }
         if status.db_size * 100 >= DEFAULT_QUOTA_BYTES * QUOTA_WARN_PCT {
-            checks.push(EtcdCheck {
-                error: false,
-                text: format!(
-                    "{name}: DB {} is {}% of etcd's default 2 GiB quota (unless \
+            checks.push(EtcdCheck::new(
+                member,
+                false,
+                format!(
+                    "DB {} is {}% of etcd's default 2 GiB quota (unless \
                      quota-backend-bytes is raised)",
                     format_bytes_signed(status.db_size),
                     status.db_size * 100 / DEFAULT_QUOTA_BYTES
                 ),
-            });
+            ));
         }
     }
     checks.sort_by_key(|c| !c.error);
@@ -1134,7 +1159,7 @@ impl EtcdComponent {
             let (symbol, color) = check.health().symbol_and_color();
             lines.push(Line::from(vec![
                 Span::styled(format!("{symbol} "), Style::default().fg(color)),
-                Span::styled(check.text, Style::default().fg(color)),
+                Span::styled(check.line(), Style::default().fg(color)),
             ]));
         }
 
@@ -1387,7 +1412,7 @@ mod tests {
         assert_eq!(
             address_check(&m).as_deref(),
             Some(
-                "prod-cp3: etcd advertises 10.0.0.6 (config: 198.51.100.50); the config \
+                "etcd advertises 10.0.0.6 (config: 198.51.100.50); the config \
                  applies when etcd restarts"
             )
         );
@@ -1401,9 +1426,7 @@ mod tests {
         });
         assert_eq!(
             address_check(&m).as_deref(),
-            Some(
-                "prod-cp3: config advertises 198.51.100.50 but the member list has client URL 10.0.0.6"
-            )
+            Some("config advertises 198.51.100.50 but the member list has client URL 10.0.0.6")
         );
         assert!(member_checks(&[m.clone()]).iter().any(|c| !c.error));
 
@@ -1526,7 +1549,7 @@ mod tests {
             }
         }
         for c in member_checks(data.members.items()) {
-            println!("check (error={}): {}", c.error, c.text);
+            println!("check (error={}): {}", c.error, c.line());
         }
         for cmd in defrag_commands(data.members.items(), Some(&context)) {
             println!("cmd: {cmd}");
@@ -1554,7 +1577,7 @@ mod tests {
         ];
         let texts: Vec<(bool, String)> = member_checks(&members)
             .into_iter()
-            .map(|c| (c.error, c.text))
+            .map(|c| (c.error, c.line()))
             .collect();
         assert_eq!(
             texts[0],

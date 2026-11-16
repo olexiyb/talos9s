@@ -16,6 +16,8 @@ pub enum FixAction {
     AddKernelModule(String),
     /// Restart a service
     RestartService(String),
+    /// Defragment the node's etcd member (blocks it while it runs)
+    EtcdDefrag,
     /// Run a command on the host (for Docker environments)
     HostCommand {
         command: String,
@@ -29,6 +31,7 @@ impl FixAction {
         match self {
             FixAction::AddKernelModule(name) => format!("Add {name} kernel module"),
             FixAction::RestartService(name) => format!("Restart {name} service"),
+            FixAction::EtcdDefrag => "Defragment etcd on this node".to_string(),
             FixAction::HostCommand { description, .. } => description.clone(),
         }
     }
@@ -57,6 +60,7 @@ impl FixAction {
                  '{{\"machine\":{{\"kernel\":{{\"modules\":[{{\"name\":\"{name}\"}}]}}}}}}'"
             ),
             FixAction::RestartService(service) => format!("{talosctl} service {service} restart"),
+            FixAction::EtcdDefrag => format!("{talosctl} etcd defrag"),
             FixAction::HostCommand { command, .. } => command.clone(),
         }
     }

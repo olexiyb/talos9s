@@ -161,7 +161,7 @@ The Dashboard shows:
 | Containers | Every container on a node, a group or the cluster, read from containerd through the Talos API, so it works when the Kubernetes API doesn't: one row per container, Talos services included, exited ones hidden until `A`, sort by any column (`1`-`7` or a header click), `W` namespace warp. `Enter` shows one container with its logs, as in Workloads (levels, search, wrap, `V` to select and copy lines, `v` opens them in `hl`); `y` copies the `talosctl logs` command |
 | Machine config | The config in effect, read-only, searchable, secrets masked; flags a staged change waiting for a reboot; the outline shows each part's size in bytes, `#` switches to lines |
 | Extensions | Installed system extensions |
-| Diagnostics | Health checks with suggested fixes, CNI checks (Flannel, Cilium, Calico) and addon checks (cert-manager and more) |
+| Diagnostics | Health checks with suggested fixes, etcd member checks on control plane nodes (apply lag, behind the leader, fragmentation with the defrag command, quota), CNI checks (Flannel, Cilium, Calico) and addon checks (cert-manager and more) |
 
 On a cluster, control plane or workers row, network, storage and diagnostics
 show every node at once; diagnostics as a node × category grid with each
