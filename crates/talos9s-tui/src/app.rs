@@ -942,6 +942,7 @@ impl App {
             tracing::warn!("log viewer: {problem}");
             match &mut self.component {
                 Some(ViewComponent::Workloads(w)) => w.viewer_failed(problem),
+                Some(ViewComponent::Kubernetes(k)) => k.viewer_failed(problem),
                 Some(ViewComponent::Containers(c)) => c.viewer_failed(problem),
                 Some(ViewComponent::Operations(o)) => o.viewer_failed(problem),
                 _ => {}
@@ -1424,6 +1425,8 @@ impl App {
             NavMenuItem::Etcd | NavMenuItem::Certs | NavMenuItem::Lifecycle => {
                 self.cluster.cluster_key()
             }
+            // Every cluster whatever is selected: moving doesn't reload
+            item if item.is_all_clusters() => "all-clusters".to_string(),
             _ => self.cluster.target_key(),
         }
     }
@@ -1479,11 +1482,16 @@ impl App {
             item,
             NavMenuItem::Etcd | NavMenuItem::Certs | NavMenuItem::Lifecycle
         );
-        self.pane_title = format!(
-            "{} · {}",
-            item.label(),
-            self.cluster.target_title(cluster_wide)
-        );
+        // Views of every cluster name no target: the label says it
+        self.pane_title = if item.is_all_clusters() {
+            format!("{} (all clusters)", item.label())
+        } else {
+            format!(
+                "{} · {}",
+                item.label(),
+                self.cluster.target_title(cluster_wide)
+            )
+        };
         self.apply_warp();
         self.applied_target = self.scope_key(item);
         self.pending_target = None;
@@ -1784,6 +1792,10 @@ impl App {
                                     group.set_client(client.clone());
                                 }
                             }
+                            // Clusters connected since get read too
+                            ViewComponent::Kubernetes(k) => {
+                                k.set_sources(self.cluster.cluster_sources());
+                            }
                             ViewComponent::Processes(processes) => {
                                 let cluster = &self.cluster;
                                 processes.set_node_basics(|n| cluster.node_basics(n));
@@ -2065,6 +2077,18 @@ impl App {
                     ViewComponent::Workloads(Box::new(workloads)),
                     load,
                 );
+            }
+            Action::ShowKubernetes(mode) => {
+                self.leave_view();
+                tracing::info!("ShowKubernetes: {:?}", mode);
+                let item = mode.menu_item();
+                let mut view = crate::components::KubernetesComponent::new(
+                    mode,
+                    self.cluster.cluster_sources(),
+                );
+                view.set_log_wrap(self.settings.log_wrap);
+                view.start_loading();
+                self.show_component(item, ViewComponent::Kubernetes(Box::new(view)), true);
             }
             Action::ShowVolumes(title, nodes) => {
                 self.leave_view();

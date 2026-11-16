@@ -119,6 +119,13 @@ fn views() -> Vec<(&'static str, Box<dyn Component>)> {
         ),
         ("volumes", Box::new(VolumesComponent::new(None))),
         ("workloads", Box::new(WorkloadHealthComponent::new(None))),
+        (
+            "kubernetes",
+            Box::new(KubernetesComponent::new(
+                kubernetes::Mode::Problems,
+                Vec::new(),
+            )),
+        ),
         ("group diagnostics", group(GroupKind::Diagnostics)),
         ("group storage", group(GroupKind::Storage)),
         ("group partitions", group(GroupKind::Partitions)),

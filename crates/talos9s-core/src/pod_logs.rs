@@ -21,6 +21,9 @@ pub struct LogSource {
     pub talos: Option<TalosLog>,
     /// An operation run's file instead (the Operations view): its output
     pub file: Option<std::path::PathBuf>,
+    /// The cluster to read it from, when the pane reads several (the
+    /// Kubernetes view); `None` for the pane's one client
+    pub cluster: Option<String>,
 }
 
 /// A container whose logs are read through the Talos API, from its node
@@ -128,6 +131,7 @@ pub fn log_sources(pods: &[&PodFacts], container: Option<&str>) -> Vec<LogSource
                 has_previous: c.last_terminated.is_some(),
                 talos: None,
                 file: None,
+                cluster: None,
             });
         }
     }

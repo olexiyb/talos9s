@@ -55,7 +55,7 @@ Don't use `c` for copy: it's packet capture in the network views.
   `D`, `K` and `C` are uppercase only because the
   lowercase letter was taken; don't add more like that.
 - Keys reserved in the tree, not for menu entries: `q r j k l a Space Z [ ]`
-  (checked in `cluster/tests.rs`). Free lowercase letters: `f g h i u z`.
+  (checked in `cluster/tests.rs`). Free lowercase letters: `f h u z`.
 - `q` never quits at once: from a view it returns to the Dashboard, in the
   Dashboard's services list it hands the keyboard back, and on the Dashboard
   it asks "Quit talos9s?" (`App::confirm_quit`; `y`/`Enter` quits, any other

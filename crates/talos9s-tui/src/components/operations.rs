@@ -569,6 +569,7 @@ impl OperationsComponent {
             has_previous: false,
             talos: None,
             file: Some(path.clone()),
+            cluster: None,
         };
         let command = self
             .history

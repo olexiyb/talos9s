@@ -134,6 +134,8 @@ pub struct LogPane {
     talos: Option<talos_rs::TalosClient>,
     /// Where the pane was last drawn, for the mouse wheel
     area: Rect,
+    /// Clients by cluster, for sources that name one (`LogSource::cluster`)
+    clients: std::collections::HashMap<String, Client>,
 }
 
 impl LogPane {
@@ -276,6 +278,11 @@ impl LogPane {
             && mouse.row < a.bottom()
     }
 
+    /// Clients for sources of several clusters
+    pub fn set_clients(&mut self, clients: std::collections::HashMap<String, Client>) {
+        self.clients = clients;
+    }
+
     /// The Talos client for sources read through the Talos API
     pub fn set_talos_client(&mut self, client: talos_rs::TalosClient) {
         self.talos = Some(client);
@@ -337,7 +344,7 @@ impl LogPane {
         let needs_kube = self
             .sources
             .iter()
-            .any(|s| s.talos.is_none() && s.file.is_none());
+            .any(|s| s.talos.is_none() && s.file.is_none() && s.cluster.is_none());
         if needs_kube && kube.is_none() {
             self.read = Some(Read {
                 lines: Vec::new(),
@@ -355,11 +362,15 @@ impl LogPane {
         let skipped = self.sources.len().saturating_sub(sources.len());
         let tail = tail_per_source(sources.len(), POD_LOG_TOTAL_LINES);
         let previous = self.previous;
+        let clients = self.clients.clone();
         let slot = Arc::clone(&self.slot);
         let generation = self.generation;
         tokio::spawn(async move {
             let reads = sources.iter().map(|s| {
-                let kube = kube.clone();
+                let kube = match &s.cluster {
+                    Some(cluster) => clients.get(cluster).cloned(),
+                    None => kube.clone(),
+                };
                 let talos = talos.clone();
                 async move {
                     if let Some(path) = &s.file {
@@ -1051,6 +1062,7 @@ mod tests {
             has_previous: true,
             talos: None,
             file: None,
+            cluster: None,
         }
     }
 

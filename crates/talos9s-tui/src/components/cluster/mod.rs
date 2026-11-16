@@ -104,6 +104,8 @@ pub enum NavMenuItem {
     Certs,
     Lifecycle,
     Workloads,
+    Kubernetes,
+    GitOps,
     Volumes,
     Containers,
     Config,
@@ -146,6 +148,8 @@ impl NavMenuItem {
             &[
                 NavMenuItem::Etcd,
                 NavMenuItem::Workloads,
+                NavMenuItem::Kubernetes,
+                NavMenuItem::GitOps,
                 NavMenuItem::Lifecycle,
                 NavMenuItem::Certs,
                 NavMenuItem::Operations,
@@ -153,7 +157,7 @@ impl NavMenuItem {
         ),
     ];
 
-    pub const ALL: [NavMenuItem; 17] = [
+    pub const ALL: [NavMenuItem; 19] = [
         NavMenuItem::Dashboard,
         NavMenuItem::Diagnostics,
         NavMenuItem::Logs,
@@ -168,6 +172,8 @@ impl NavMenuItem {
         NavMenuItem::Volumes,
         NavMenuItem::Etcd,
         NavMenuItem::Workloads,
+        NavMenuItem::Kubernetes,
+        NavMenuItem::GitOps,
         NavMenuItem::Lifecycle,
         NavMenuItem::Certs,
         NavMenuItem::Operations,
@@ -200,6 +206,12 @@ impl NavMenuItem {
         matches!(self, NavMenuItem::Config | NavMenuItem::Extensions)
     }
 
+    /// Shows every cluster whatever is selected: no target in the title,
+    /// and moving in the tree doesn't reload it
+    pub fn is_all_clusters(&self) -> bool {
+        matches!(self, NavMenuItem::Kubernetes | NavMenuItem::GitOps)
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             NavMenuItem::Dashboard => "Dashboard",
@@ -214,6 +226,8 @@ impl NavMenuItem {
             NavMenuItem::Certs => "Certificates",
             NavMenuItem::Lifecycle => "Lifecycle",
             NavMenuItem::Workloads => "Workloads",
+            NavMenuItem::Kubernetes => "Kubernetes",
+            NavMenuItem::GitOps => "GitOps",
             NavMenuItem::Volumes => "Volumes",
             NavMenuItem::Containers => "Containers",
             NavMenuItem::Config => "Machine config",
@@ -236,6 +250,8 @@ impl NavMenuItem {
             NavMenuItem::Certs => "c",
             NavMenuItem::Lifecycle => "b",
             NavMenuItem::Workloads => "w",
+            NavMenuItem::Kubernetes => "i",
+            NavMenuItem::GitOps => "g",
             NavMenuItem::Volumes => "v",
             NavMenuItem::Containers => "C",
             NavMenuItem::Config => "m",

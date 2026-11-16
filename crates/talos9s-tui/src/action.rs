@@ -39,6 +39,8 @@ pub enum Action {
     /// Show workload health view: (title, nodes to limit it to, or `None`
     /// for the whole cluster)
     ShowWorkloads(String, Option<Vec<String>>),
+    /// Kubernetes objects across every cluster, read-only
+    ShowKubernetes(crate::components::kubernetes::Mode),
     /// Show volumes view (LINSTOR, ZFS LocalPV): (title, nodes to limit it to, or `None`
     /// for the whole cluster)
     ShowVolumes(String, Option<Vec<String>>),

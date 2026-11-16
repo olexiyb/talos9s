@@ -26,6 +26,7 @@ helpers).
 | `stats` | `most_common`, `used_of_total`, `used_pct`, `gib` |
 | `version` | `is_newer`, `check_due` (update check) |
 | `pod_logs` | which containers' logs to read for a workload, pod or container (`log_sources`), merging timestamped lines (`merge_logs`) |
+| `kubernetes` | any object's status (`status`, `is_problem`), Flux and Argo CD details (`flux_info`), search (`Query`), redaction (`redact`), the cross-cluster YAML diff (`for_compare`, `diff_lines`), `printable`, kinds across clusters (`merge_kinds`) |
 | `workloads` | workload and pod health (`PodFacts::issue`, `pod_health`), pod → workload (`pod_workload`, `place_pods`, `pod_owner`), the nodes of failures, the Workloads rows (`list_rows`, `pod_rows` + `PodSort`, `focus_rows`) and summary; detail pane helpers (`workload_pods`, `state_text`, `latest_event`, copied commands) |
 
 If logic in the TUI can be tested without a terminal or a cluster, it belongs

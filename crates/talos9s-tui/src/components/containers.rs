@@ -248,6 +248,7 @@ impl ContainersComponent {
                 id: c.info.id.clone(),
             }),
             file: None,
+            cluster: None,
         };
         self.logs.set_sources(title, vec![source], logs_command(&c));
         self.selected_id = c.key();

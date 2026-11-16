@@ -9,6 +9,26 @@ comparison between clusters, and logs by selector across clusters. All of
 it read-only. Changes go through GitOps; talos9s shows state and copies
 commands.
 
+## Status
+
+Built (2026-11-07), all phases, as the Kubernetes (`i`) and GitOps (`g`)
+views; the rules are in `.claude/rules/kubernetes.md`. Where it differs
+from the design below:
+
+- **Workloads across clusters** is the Kubernetes view's Problems list,
+  not a CLUSTER column in the Workloads view. The Workloads view stays per
+  cluster (focus, NODES, the pod list); Problems uses the same health
+  rules on every cluster.
+- **Flux became GitOps:** bc and khive run Argo CD and kprod neither, so
+  the list has Argo CD Applications (health and sync, out of sync as
+  degraded) next to Flux's objects.
+- **Search is `s`;** `/` keeps its meaning everywhere, a filter of the list.
+- **ConfigMap data** is hidden in YAML and diffs (`mask_config` hides
+  everything under `data:`).
+- Open questions, as built: every cluster refreshes at the same rate
+  (`VERY_SLOW`); the kind picker shows a curated list until you type;
+  the GitOps source is shown, no local checkout is read.
+
 ## Why
 
 - k9s is one context at a time, switched with `x`; finding "where does

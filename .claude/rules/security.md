@@ -11,6 +11,7 @@ paths:
   - "crates/talos9s-tui/src/components/pod_logs.rs"
   - "crates/talos9s-tui/src/components/network/capture.rs"
   - "crates/talos9s-tui/src/components/diagnostics/k8s.rs"
+  - "crates/talos9s-tui/src/components/kubernetes.rs"
   - "crates/talos9s-core/src/logparse.rs"
   - "deny.toml"
   - ".github/workflows/**"
@@ -33,6 +34,9 @@ are the boundaries to check.
 - **Never in logs:** the tracing log, the audit log and run files never get
   a machine config, kubeconfig, token or key, not even at debug level.
   Kubeconfig contents are never logged; a path and a context name are fine.
+- **Objects read across clusters** (the Kubernetes view) are redacted
+  as soon as they arrive (`kubernetes::redact`): Secret values, secret-named
+  `value`s (container env), the last-applied annotation.
 - **Copied text** follows the same rule: a copied command or line never
   carries a secret.
 
@@ -101,5 +105,7 @@ from the cluster, and anyone who can create a pod controls some of them.
 Not verified when this was written; worth a look in the next review:
 
 - Control characters in cluster text outside the log views (event
-  messages, annotations, API errors) reaching the terminal.
+  messages, annotations, API errors) reaching the terminal. The
+  Kubernetes view passes all of it through `kubernetes::printable`; the
+  other views don't yet.
 - Copied commands that embed a label, annotation or path without quoting.

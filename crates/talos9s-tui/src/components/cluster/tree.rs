@@ -263,6 +263,21 @@ impl ClusterComponent {
         self.clusters.get(self.active_cluster)?.control_plane_ip()
     }
 
+    /// Every cluster of the talosconfig: its name, Talos client (none
+    /// while it isn't connected) and a control plane node to fetch the
+    /// kubeconfig from, for views that read all clusters at once
+    pub fn cluster_sources(&self) -> Vec<crate::components::kubernetes::ClusterSource> {
+        self.clusters
+            .iter()
+            .map(|c| crate::components::kubernetes::ClusterSource {
+                name: c.name.clone(),
+                talos: c.client.clone(),
+                cp_ip: c.control_plane_ip(),
+                error: c.error.clone(),
+            })
+            .collect()
+    }
+
     /// Get context name for active cluster
     pub fn current_context_name(&self) -> Option<&str> {
         self.clusters

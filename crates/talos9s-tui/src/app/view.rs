@@ -8,9 +8,9 @@ use crate::components::volumes::VolumesViewState;
 use crate::components::workloads;
 use crate::components::{
     BackgroundRefresh, Component, ContainersComponent, DiagnosticsComponent, EtcdComponent,
-    GroupComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent,
-    NodeInfoComponent, OperationsComponent, ProcessesComponent, SecurityComponent,
-    StorageComponent, VolumesComponent, WorkloadHealthComponent,
+    GroupComponent, KubernetesComponent, LifecycleComponent, MultiLogsComponent,
+    NetworkStatsComponent, NodeInfoComponent, OperationsComponent, ProcessesComponent,
+    SecurityComponent, StorageComponent, VolumesComponent, WorkloadHealthComponent,
 };
 use tokio::task::JoinHandle;
 
@@ -28,6 +28,7 @@ pub(super) enum View {
     Security,
     Lifecycle,
     Workloads,
+    Kubernetes,
     Volumes,
     Storage,
     NodeInfo,
@@ -52,6 +53,7 @@ pub(super) enum ViewComponent {
     Security(Box<SecurityComponent>),
     Lifecycle(Box<LifecycleComponent>),
     Workloads(Box<WorkloadHealthComponent>),
+    Kubernetes(Box<KubernetesComponent>),
     Volumes(Box<VolumesComponent>),
     Storage(Box<StorageComponent>),
     NodeInfo(Box<NodeInfoComponent>),
@@ -72,6 +74,7 @@ macro_rules! each {
             ViewComponent::Security($c) => $body,
             ViewComponent::Lifecycle($c) => $body,
             ViewComponent::Workloads($c) => $body,
+            ViewComponent::Kubernetes($c) => $body,
             ViewComponent::Volumes($c) => $body,
             ViewComponent::Storage($c) => $body,
             ViewComponent::NodeInfo($c) => $body,
@@ -155,6 +158,7 @@ impl ViewComponent {
                 settings.workloads = w.settings();
                 settings.log_wrap = w.log_wrap();
             }
+            ViewComponent::Kubernetes(k) => settings.log_wrap = k.log_wrap(),
             ViewComponent::Group(g) => {
                 if let Some(show_all) = g.storage_show_all() {
                     settings.storage_show_all = show_all;
@@ -175,6 +179,7 @@ impl ViewComponent {
             ViewComponent::Security(_) => View::Security,
             ViewComponent::Lifecycle(_) => View::Lifecycle,
             ViewComponent::Workloads(_) => View::Workloads,
+            ViewComponent::Kubernetes(_) => View::Kubernetes,
             ViewComponent::Volumes(_) => View::Volumes,
             ViewComponent::Storage(_) => View::Storage,
             ViewComponent::NodeInfo(_) => View::NodeInfo,
@@ -211,6 +216,7 @@ impl ViewComponent {
             ViewComponent::Security(c) => spawn_refresh!(c, ViewComponent::Security),
             ViewComponent::Lifecycle(c) => spawn_refresh!(c, ViewComponent::Lifecycle),
             ViewComponent::Workloads(c) => spawn_refresh!(c, ViewComponent::Workloads),
+            ViewComponent::Kubernetes(c) => spawn_refresh!(c, ViewComponent::Kubernetes),
             ViewComponent::Volumes(c) => spawn_refresh!(c, ViewComponent::Volumes),
             ViewComponent::Storage(c) => spawn_refresh!(c, ViewComponent::Storage),
             ViewComponent::NodeInfo(c) => spawn_refresh!(c, ViewComponent::NodeInfo),
@@ -230,6 +236,7 @@ impl ViewComponent {
             (V::Security(c), V::Security(r)) => c.adopt_refresh(*r),
             (V::Lifecycle(c), V::Lifecycle(r)) => c.adopt_refresh(*r),
             (V::Workloads(c), V::Workloads(r)) => c.adopt_refresh(*r),
+            (V::Kubernetes(c), V::Kubernetes(r)) => c.adopt_refresh(*r),
             (V::Volumes(c), V::Volumes(r)) => c.adopt_refresh(*r),
             (V::Storage(c), V::Storage(r)) => c.adopt_refresh(*r),
             (V::NodeInfo(c), V::NodeInfo(r)) => c.adopt_refresh(*r),

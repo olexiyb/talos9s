@@ -31,6 +31,7 @@ pub mod errors;
 pub mod etcd;
 pub mod formatting;
 pub mod indicators;
+pub mod kubernetes;
 pub mod logparse;
 pub mod namespaces;
 pub mod network;

@@ -96,6 +96,7 @@ What each view shows per target:
 | Machine config, Extensions | the node | "Select a node" hint | same hint |
 | Volumes, Workloads | on this node | on those nodes | whole cluster |
 | etcd, Lifecycle, Security | the target's cluster | same | same |
+| Kubernetes, GitOps | every cluster, whatever is selected | same | same |
 
 ## Wiring a new view (all of these, or it silently does nothing)
 

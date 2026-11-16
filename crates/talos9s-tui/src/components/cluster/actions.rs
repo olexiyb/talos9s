@@ -327,6 +327,12 @@ impl ClusterComponent {
             NavMenuItem::Certs => Some(Action::ShowSecurity),
             NavMenuItem::Lifecycle => Some(Action::ShowLifecycle),
             NavMenuItem::Workloads => Some(self.workloads_action()),
+            NavMenuItem::Kubernetes => Some(Action::ShowKubernetes(
+                crate::components::kubernetes::Mode::Problems,
+            )),
+            NavMenuItem::GitOps => Some(Action::ShowKubernetes(
+                crate::components::kubernetes::Mode::GitOps,
+            )),
             NavMenuItem::Volumes => Some(self.volumes_action()),
             NavMenuItem::Containers => self.containers_action(),
             NavMenuItem::Operations => self.operations_action(),
