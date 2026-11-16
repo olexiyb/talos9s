@@ -1053,9 +1053,9 @@ impl App {
             self.view_has_focus = false;
             return Ok(None);
         }
-        // Tab is the next window (Nodes → menu → view → Nodes) unless the
-        // view has a tab bar of its own
-        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && !self.view_uses_tab_key() {
+        // Tab is always the next window (Nodes → menu → view → Nodes):
+        // views have no tabs of their own
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
             self.view_has_focus = false;
             self.cluster.set_focused_pane(if key.code == KeyCode::Tab {
                 FocusedPane::Nodes
@@ -1113,11 +1113,6 @@ impl App {
     fn view_modal(&self) -> bool {
         self.shown()
             .is_some_and(super::components::Component::modal)
-    }
-
-    fn view_uses_tab_key(&self) -> bool {
-        self.shown()
-            .is_some_and(super::components::Component::uses_tab_key)
     }
 
     fn view_uses_horizontal_keys(&self) -> bool {

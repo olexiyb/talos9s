@@ -25,7 +25,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 use std::time::{Duration, Instant};
 use talos_rs::TalosClient;
@@ -73,8 +73,10 @@ pub struct DiagnosticsComponent {
     selected_check: usize,
     /// Table state for rendering
     table_state: TableState,
-    /// Where each category's checks were drawn, for clicks
-    category_rows: [crate::ui_ext::RowHits; 5],
+    /// Where the list was drawn, and what each drawn row shows (a check as
+    /// (category, index); `None` for a heading or blank line), for clicks
+    rows: crate::ui_ext::RowHits,
+    row_map: Vec<Option<(usize, usize)>>,
 
     /// The fix shown in the dialog
     pending_action: Option<PendingAction>,
@@ -189,7 +191,8 @@ impl DiagnosticsComponent {
             selected_category: 0,
             selected_check: 0,
             table_state,
-            category_rows: Default::default(),
+            rows: crate::ui_ext::RowHits::default(),
+            row_map: Vec::new(),
             pending_action: None,
             show_confirmation: false,
             confirmation_selection: 1,
@@ -272,12 +275,12 @@ impl DiagnosticsComponent {
         self.state.set_error(error);
     }
 
-    /// Get all checks in the current category
-    fn current_checks(&self) -> &[DiagnosticCheck] {
+    /// The checks of one category
+    fn checks_of(&self, category: usize) -> &[DiagnosticCheck] {
         let Some(data) = self.data() else {
             return &[];
         };
-        match self.selected_category {
+        match category {
             0 => &data.system_checks,
             1 => &data.kubernetes_checks,
             2 => &data.cni_checks,
@@ -289,63 +292,58 @@ impl DiagnosticsComponent {
 
     /// Get the currently selected check
     fn selected_check(&self) -> Option<&DiagnosticCheck> {
-        self.current_checks().get(self.selected_check)
+        self.checks_of(self.selected_category)
+            .get(self.selected_check)
     }
 
-    /// Get total number of categories
-    fn category_count(&self) -> usize {
-        5 // System, Kubernetes, CNI, Services, Addons
+    /// The categories drawn, in order: Addons only when one is detected
+    fn shown_categories(&self) -> Vec<usize> {
+        let addons = self
+            .data()
+            .is_some_and(|d| d.detected_addons.any_detected());
+        (0..5).filter(|&c| c < 4 || addons).collect()
     }
 
-    /// Select next category
-    fn next_category(&mut self) {
-        self.selected_category = (self.selected_category + 1) % self.category_count();
-        self.selected_check = 0;
-        self.update_table_state();
+    /// Every check in the order drawn, as (category, index)
+    fn positions(&self) -> Vec<(usize, usize)> {
+        self.shown_categories()
+            .into_iter()
+            .flat_map(|c| {
+                let n = self.checks_of(c).len();
+                (0..n).map(move |i| (c, i))
+            })
+            .collect()
     }
 
-    /// Select previous category
-    fn prev_category(&mut self) {
-        self.selected_category = if self.selected_category == 0 {
-            self.category_count() - 1
-        } else {
-            self.selected_category - 1
-        };
-        self.selected_check = 0;
-        self.update_table_state();
-    }
-
-    /// Select next check in current category (clamps at end, no wrapping)
-    fn next_check(&mut self) {
-        let count = self.current_checks().len();
-        if count > 0 && self.selected_check < count - 1 {
-            self.selected_check += 1;
-            self.update_table_state();
+    /// Move through every section's checks as one list, skipping headings;
+    /// stops at the ends
+    fn move_selection(&mut self, step: crate::ui_ext::Move) {
+        let positions = self.positions();
+        let at = positions
+            .iter()
+            .position(|&p| p == (self.selected_category, self.selected_check))
+            .unwrap_or(0);
+        if let Some(&next) =
+            crate::ui_ext::moved(at, positions.len(), step).and_then(|i| positions.get(i))
+        {
+            (self.selected_category, self.selected_check) = next;
         }
     }
 
-    /// Select previous check in current category (clamps at start, no wrapping)
-    fn prev_check(&mut self) {
-        if self.selected_check > 0 {
-            self.selected_check -= 1;
-            self.update_table_state();
-        }
-    }
-
-    /// Update table state to match selection
-    fn update_table_state(&mut self) {
-        self.table_state.select(Some(self.selected_check));
-    }
-
-    /// Ensure selected_check is within bounds for current category
+    /// Keep the selection on a check that exists after a refresh: the same
+    /// one, else the last of its category, else the first check
     fn ensure_valid_selection(&mut self) {
-        let count = self.current_checks().len();
-        if count == 0 {
-            self.selected_check = 0;
-        } else if self.selected_check >= count {
-            self.selected_check = count - 1;
+        let positions = self.positions();
+        if positions.contains(&(self.selected_category, self.selected_check)) {
+            return;
         }
-        self.update_table_state();
+        let in_category = positions
+            .iter()
+            .rfind(|p| p.0 == self.selected_category)
+            .copied();
+        (self.selected_category, self.selected_check) = in_category
+            .or_else(|| positions.first().copied())
+            .unwrap_or((0, 0));
     }
 
     /// Initiate a fix action or show details for the currently selected check
@@ -636,87 +634,76 @@ impl DiagnosticsComponent {
         }
     }
 
-    /// Render a category section
-    fn render_category(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        category_idx: usize,
-        checks: &[DiagnosticCheck],
-        is_selected: bool,
-    ) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(self.category_title(category_idx))
-            .border_style(if is_selected {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            });
-
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        if checks.is_empty() {
-            // Empty after a refresh means nothing to check here (e.g. no
-            // addons, or no Kubernetes client), not still loading
-            let text = if self.state.is_loading() {
-                "Loading..."
-            } else {
-                "Nothing to check"
-            };
-            let empty = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(empty, inner);
-            return;
-        }
-
-        let rows: Vec<Row> = checks
-            .iter()
-            .enumerate()
-            .map(|(i, check)| {
-                let (indicator, color) = check.status.indicator();
-                let is_current = is_selected && i == self.selected_check;
-
-                let style = if is_current {
-                    Style::default().bg(Color::DarkGray)
+    /// Every category in one list: a heading line, its checks under it and
+    /// a blank line between sections, scrolled to keep the selection shown
+    fn render_checks(&mut self, frame: &mut Frame, area: Rect) {
+        let heading = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(Color::DarkGray);
+        let mut rows: Vec<Row<'static>> = Vec::new();
+        let mut map = Vec::new();
+        let mut selected_row = None;
+        for category in self.shown_categories() {
+            if !rows.is_empty() {
+                rows.push(Row::new(vec![Cell::from("")]));
+                map.push(None);
+            }
+            rows.push(Row::new(vec![Cell::from(Span::styled(
+                self.category_title(category),
+                heading,
+            ))]));
+            map.push(None);
+            let checks = self.checks_of(category);
+            if checks.is_empty() {
+                // Empty after a refresh means nothing to check here (e.g.
+                // no Kubernetes client), not still loading
+                let text = if self.state.is_loading() {
+                    "  Loading..."
                 } else {
-                    Style::default()
+                    "  Nothing to check"
                 };
-
-                Row::new(vec![
-                    ratatui::widgets::Cell::from(Span::styled(
-                        indicator,
-                        Style::default().fg(color),
-                    )),
-                    ratatui::widgets::Cell::from(check.name.clone()),
-                    ratatui::widgets::Cell::from(Span::styled(
+                rows.push(Row::new(vec![Cell::from(Span::styled(text, dim))]));
+                map.push(None);
+                continue;
+            }
+            for (i, check) in checks.iter().enumerate() {
+                let (indicator, color) = check.status.indicator();
+                let current = (category, i) == (self.selected_category, self.selected_check);
+                if current {
+                    selected_row = Some(rows.len());
+                }
+                let message_color = match check.status {
+                    CheckStatus::Pass => Color::Green,
+                    CheckStatus::Fail => Color::Red,
+                    CheckStatus::Warn => Color::Yellow,
+                    _ => Color::DarkGray,
+                };
+                let row = Row::new(vec![
+                    Cell::from(Line::from(vec![
+                        Span::styled(format!("  {indicator} "), Style::default().fg(color)),
+                        Span::raw(check.name.clone()),
+                    ])),
+                    Cell::from(Span::styled(
                         check.message.clone(),
-                        Style::default().fg(if check.status == CheckStatus::Pass {
-                            Color::Green
-                        } else if check.status == CheckStatus::Fail {
-                            Color::Red
-                        } else if check.status == CheckStatus::Warn {
-                            Color::Yellow
-                        } else {
-                            Color::DarkGray
-                        }),
+                        Style::default().fg(message_color),
                     )),
-                ])
-                .style(style)
-            })
-            .collect();
-
-        let widths = [
-            Constraint::Length(2),
-            Constraint::Length(20),
-            Constraint::Fill(1),
-        ];
-
-        if let Some(hits) = self.category_rows.get_mut(category_idx) {
-            *hits = crate::ui_ext::RowHits::new(inner, false, 0, 0, checks.len());
+                ]);
+                rows.push(if current {
+                    row.style(Style::default().bg(Color::DarkGray))
+                } else {
+                    row
+                });
+                map.push(Some((category, i)));
+            }
         }
-        let table = Table::new(rows, widths);
-        frame.render_widget(table, inner);
+
+        let widths = [Constraint::Length(26), Constraint::Fill(1)];
+        let count = rows.len();
+        self.table_state.select(selected_row);
+        frame.render_stateful_widget(Table::new(rows, widths), area, &mut self.table_state);
+        self.rows = crate::ui_ext::RowHits::new(area, false, 0, self.table_state.offset(), count);
+        self.row_map = map;
     }
 
     /// Render the confirmation dialog
@@ -910,14 +897,12 @@ impl Component for DiagnosticsComponent {
             return Ok(None);
         }
         let hit = self
-            .category_rows
-            .iter()
-            .enumerate()
-            .find_map(|(category, rows)| rows.clicked(&mouse).map(|i| (category, i)));
+            .rows
+            .clicked(&mouse)
+            .and_then(|row| self.row_map.get(row).copied().flatten());
         if let Some((category, check)) = hit {
             self.selected_category = category;
             self.selected_check = check;
-            self.update_table_state();
         }
         Ok(None)
     }
@@ -939,8 +924,6 @@ impl Component for DiagnosticsComponent {
             vec![
                 key("<j/k>"),
                 Span::raw(" navigate  "),
-                key("<Tab>"),
-                Span::raw(" section  "),
                 key("<Enter>"),
                 Span::raw(" details/fix  "),
                 key("<r>"),
@@ -948,10 +931,6 @@ impl Component for DiagnosticsComponent {
             ]
         };
         Some(Line::from(spans))
-    }
-
-    fn uses_tab_key(&self) -> bool {
-        true
     }
 
     fn uses_horizontal_keys(&self) -> bool {
@@ -1016,17 +995,8 @@ impl Component for DiagnosticsComponent {
             KeyCode::Char('r') => {
                 return Ok(Some(Action::Refresh));
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.next_check();
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.prev_check();
-            }
-            KeyCode::Tab => {
-                self.next_category();
-            }
-            KeyCode::BackTab => {
-                self.prev_category();
+            _ if let Some(step) = crate::ui_ext::Move::from_key(&key) => {
+                self.move_selection(step);
             }
             KeyCode::Enter => {
                 self.initiate_fix();
@@ -1047,8 +1017,9 @@ impl Component for DiagnosticsComponent {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        // Only what this frame draws is clickable (e.g. no hidden Addons)
-        self.category_rows = Default::default();
+        // Only what this frame draws is clickable
+        self.rows = crate::ui_ext::RowHits::default();
+        self.row_map.clear();
         let [header_area, body] =
             Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
@@ -1083,70 +1054,8 @@ impl Component for DiagnosticsComponent {
             let loading = Paragraph::new("Running diagnostics...")
                 .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, body);
-        } else if let Some(data) = self.data() {
-            // Dynamically size Addons section based on whether addons are detected
-            let addons_height = if data.detected_addons.any_detected() {
-                Constraint::Length(5)
-            } else {
-                Constraint::Length(0)
-            };
-
-            let [
-                system_area,
-                kubernetes_area,
-                cni_area,
-                services_area,
-                addons_area,
-            ] = Layout::vertical([
-                Constraint::Length(7), // System Health (Memory, CPU, 3 certs = 5 items + 2 border)
-                Constraint::Length(4), // Kubernetes Components (etcd, pod_health = 2 items + 2 border)
-                Constraint::Length(5), // CNI
-                Constraint::Fill(1),   // Services
-                addons_height,         // Addons (if any)
-            ])
-            .areas(body);
-
-            // Clone checks for rendering to avoid borrow issues
-            let system_checks = data.system_checks.clone();
-            let kubernetes_checks = data.kubernetes_checks.clone();
-            let cni_checks = data.cni_checks.clone();
-            let service_checks = data.service_checks.clone();
-            let addon_checks = data.addon_checks.clone();
-            let any_addons = data.detected_addons.any_detected();
-
-            self.render_category(
-                frame,
-                system_area,
-                0,
-                &system_checks,
-                self.selected_category == 0,
-            );
-            self.render_category(
-                frame,
-                kubernetes_area,
-                1,
-                &kubernetes_checks,
-                self.selected_category == 1,
-            );
-            self.render_category(frame, cni_area, 2, &cni_checks, self.selected_category == 2);
-            self.render_category(
-                frame,
-                services_area,
-                3,
-                &service_checks,
-                self.selected_category == 3,
-            );
-
-            // Only render Addons section if addons are detected
-            if any_addons {
-                self.render_category(
-                    frame,
-                    addons_area,
-                    4,
-                    &addon_checks,
-                    self.selected_category == 4,
-                );
-            }
+        } else if self.data().is_some() {
+            self.render_checks(frame, body);
         }
 
         if self.show_confirmation {
@@ -1225,5 +1134,67 @@ mod tests {
         assert!(press(&mut diag, KeyCode::Right).is_none());
         assert!(press(&mut diag, KeyCode::Enter).is_none());
         assert!(!diag.show_confirmation);
+    }
+
+    /// One list with section headings: j/k move across sections and skip
+    /// the headings, Tab is left to the app (it moves between windows)
+    #[test]
+    fn sections_are_one_list_without_tab() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut diag = with_failed_service();
+        diag.data_mut().unwrap().kubernetes_checks =
+            vec![DiagnosticCheck::pass("etcd", "etcd", "healthy")];
+        // Tab means nothing here: the app moves between windows with it
+        assert!(press(&mut diag, KeyCode::Tab).is_none());
+        assert_eq!((diag.selected_category, diag.selected_check), (0, 0));
+
+        press(&mut diag, KeyCode::Char('j'));
+        assert_eq!((diag.selected_category, diag.selected_check), (1, 0));
+        // The last check: j stays, g goes back to the first
+        press(&mut diag, KeyCode::Char('j'));
+        assert_eq!((diag.selected_category, diag.selected_check), (1, 0));
+        press(&mut diag, KeyCode::Char('g'));
+        assert_eq!((diag.selected_category, diag.selected_check), (0, 0));
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| diag.draw(f, f.area()).unwrap()).unwrap();
+        let lines: Vec<String> = (0..30)
+            .map(|y| {
+                (0..100)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        let row_of = |text: &str| {
+            lines
+                .iter()
+                .position(|l| l.contains(text))
+                .and_then(|y| u16::try_from(y).ok())
+                .unwrap()
+        };
+        // Headings are lines, not boxes
+        assert!(
+            lines[usize::from(row_of("System Health"))]
+                .trim_start()
+                .starts_with("System Health")
+        );
+        assert!(lines.iter().all(|l| !l.contains('┌')));
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: row_of("healthy"),
+            modifiers: KeyModifiers::NONE,
+        };
+        diag.handle_mouse_event(click).unwrap();
+        assert_eq!((diag.selected_category, diag.selected_check), (1, 0));
+        // A click on a heading selects nothing new
+        let click = MouseEvent {
+            row: row_of("System Health"),
+            ..click
+        };
+        diag.handle_mouse_event(click).unwrap();
+        assert_eq!((diag.selected_category, diag.selected_check), (1, 0));
     }
 }

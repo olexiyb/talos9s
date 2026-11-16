@@ -87,12 +87,6 @@ pub trait Component {
         false
     }
 
-    /// Whether the component switches its own tabs with Tab (a visible tab
-    /// bar); otherwise Tab moves to the next window
-    fn uses_tab_key(&self) -> bool {
-        false
-    }
-
     /// The keys that act in the component right now, shown on the screen's
     /// bottom line while the component has the keyboard. Views draw no key
     /// line of their own.
