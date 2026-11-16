@@ -26,6 +26,10 @@ install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = true
 
+# dist 0.30.3 defaults to macos-14 for Apple Silicon, which GitHub retired
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+
 [dist.dependencies.homebrew]
 protobuf = "*"
 
