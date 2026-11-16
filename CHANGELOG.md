@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.0
+
+Kubernetes across every cluster, an Operations view for drains and reboots that keep running in the background, and Workloads and Containers views rebuilt around what is broken. Everything Kubernetes stays read-only; operations still ask before they act.
+
+### Behavior changes
+
+- **Operations replace the popups.** `o` opens the Operations view for the selected node, group or cluster; the node and rolling operation popups and `O` are gone.
+- **Service restart removed** (`R` in Network → Connections). It reached only kubelet, apid and trustd, and Talos restarts its services itself.
+- **`Tab` always moves between windows.** Diagnostics used it to jump between its sections; they are now headings in one list that `j`/`k`, `g`/`G` and the page keys move through.
+- **`--kubeconfig` is your identity.** With it, talos9s uses only the context whose CA matches the cluster. When there is none, or your user may not read something, the view shows the error instead of falling back to the admin kubeconfig from a control plane node.
+- **New directory:** `~/.talos9s/operations/` holds one private file (0600) per operation run.
+
+### Features
+
+**Kubernetes (`i`)** lists the unhealthy Deployments, StatefulSets, DaemonSets and pods of every cluster in your talosconfig, with a CLUSTER column (`A` shows everything). Any kind from API discovery, CRDs included (`:`); search by name, label selector or image (`s`); `X` one cluster at a time. Enter shows an object's status, conditions, events and YAML with secrets masked; `d` diffs it with the same object in another cluster; `l` / `L` read its pods' logs, or those of the same selector in every cluster. A cluster that can't be reached or answers 403 shows `?` with its error; the others are listed.
+
+**GitOps (`g`)**: Flux Kustomizations, HelmReleases and sources and Argo CD Applications across clusters, worst first.
+
+**Operations (`o`)**: cordon, uncordon, drain, reboot, and shutdown on one node.
+- Pick the operation from a drop list (`1`-`5`) and the nodes as check boxes. Each node shows Talos state and uptime, Ready, cordoned, the pods a drain evicts and its last run; a node the operation can't run on says why.
+- Drain, reboot and shutdown confirm in a window with the drain options (ignore DaemonSets, delete emptyDir data, force, grace period, timeout, wait between nodes, kept per cluster; force never) and a table of every pod and what happens to it: stops the drain, waits for a PDB, lost for good, emptyDir data lost, evicted, stays. It refreshes every 10 s.
+- Drains follow kubectl's rules: pods without a controller and DaemonSet pods stop the drain unless allowed, blockers are checked before cordoning (a refused drain changes nothing), never a force delete past a PDB. CloudNativePG primaries with replicas don't block (the operator switches over). "Wait to finish" lets CI and Job pods end by themselves first.
+- Runs go on in the background: the header shows progress on every view, and quitting waits for a run (a second `Ctrl+C` within 2 s quits). Every run's output, with each step's shell command naming the `--context`, is kept in a history you can filter and delete; on a node it lists only the runs that included it (`A` all).
+
+**Workloads.**
+- One list of what's broken, worst first, with each workload's problem pods under it and the nodes they run on. `A` adds healthy ones, `S` groups by namespace, `/` filters.
+- Enter focuses a workload: its pods, and their logs merged by time, for all pods, one pod or one container. Init containers have logs too; `p` shows the previous run where there is one.
+- `P` lists every pod, sortable by any column with `1`-`8` or a header click.
+- A list the API refuses (RBAC) shows its error; the rest works. When the Kubernetes API is down the view points to Containers.
+
+**Containers (`C`)** on a node, group or cluster: every container, read through the Talos API (no Kubernetes API needed). Exited ones are hidden until `A`; sort by any column. Enter focuses one with its logs.
+
+**Namespace warp (`W`)** in Workloads, Containers and Volumes: a picker with the last four used (`1`-`4`) and every namespace with its count. `Space` marks several and a filter ending in `*` matches a prefix (`staging*`); `0` returns to all namespaces. Kept per context in `state.yaml`.
+
+**Logs.**
+- JSON and logfmt lines read as level, time and message, with the other fields dimmed (zap, logrus, slog, Bunyan, Pino, klog), in the Logs view and in the Kubernetes and container logs.
+- In Workloads and Containers logs: level filters (`1`-`5`, `0`) and search (`/`, `n`/`N`) as in the Logs view, a date when lines span days, colour codes removed, `V` to select lines and `y` to copy them.
+- `v` opens them in `hl`, or the viewer named in `TALOS9S_LOG_VIEWER`.
+
+**Help (`?`)** shows every key that works now: the view's, the view letters, the tree's and the shared ones.
+
+**Smaller things.**
+- The menu is grouped under headings (Overview, Node, Network, Storage, Cluster), and node-only entries dim on a cluster or group.
+- `#` switches the machine config outline between bytes and lines.
+- Views no longer repeat the window title in their own header or draw boxes inside the window: a summary line, the table, and details under a rule.
+
+### Fixes
+
+- **Temp files for the log viewer** get a random name and are created exclusively (0600). The fixed name in a shared `/tmp` let another user plant a symlink the write would follow.
+- Kubernetes errors show the API server's message instead of kube-rs's Status dump, in every view.
+- A view picked while the cluster is unreachable shows the error instead of loading for good.
+- Finished pods read Completed, dimmed, and sort last by READY.
+- Tables no longer leave a blank line under their header.
+
 ## 0.3.0
 
 One workspace instead of full-screen views: the cluster tree stays on the left and the chosen view opens on the right, following the selection. talos9s also starts where you left it, works with the mouse throughout, is much faster on larger clusters, and is safer: reboots check etcd properly and diagnostics no longer change anything.
